@@ -408,7 +408,7 @@ func TestReclassifyFlavorFromGroundbaitClass(t *testing.T) {
 		t.Errorf("f14 dnmfciolgep = %d，期望 1", got)
 	}
 
-	// 对照：添加剂同样要迁（剂量=0 不豁免——cilmgoaoofg 对整个 19 类都有毒）。
+	// 对照：同为 cat 19 的 feedadds_* 条目也必须迁离窝料类。
 	addDef, err := db.GetItemDefByItemID(ctx, "feedadds_biscuit")
 	if err != nil || addDef == nil {
 		t.Skip("静态库缺 feedadds_biscuit 定义: ", err)
@@ -438,8 +438,8 @@ func TestReclassifyFlavorFromGroundbaitClass(t *testing.T) {
 	}
 }
 
-// TestPrepareNewFlavorUsesFlavorClass 新购香精直接落在 ifgjaajoofo 实例类上，
-// 添加剂仍落窝料类。
+// TestPrepareNewFlavorUsesFlavorClass 新购 cat 19 香精直接落在 ifgjaajoofo 实例类上；
+// cat 20 添加剂由独立测试覆盖，应落 kgjoemjjadb。
 func TestPrepareNewFlavorUsesFlavorClass(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
@@ -482,8 +482,7 @@ func TestPrepareNewFlavorUsesFlavorClass(t *testing.T) {
 	if fields[fieldIdxByCS("deckldefiap", csGUID)].Hex != box.GUID {
 		t.Errorf("guid 未写入实例 guid 槽: %s", fields[fieldIdxByCS("deckldefiap", csGUID)].Hex)
 	}
-	// 对照：添加剂新购同落 deckldefiap（2026-11-05 实证 cilmgoaoofg 对整个
-	// 19 类都有毒，剂量=0 不豁免）。
+	// 对照：同为 cat 19 的 feedadds_* 条目也不能落窝料类。
 	if _, err := db.GetItemDefByItemID(ctx, "feedadds_biscuit"); err != nil {
 		t.Skip("静态库缺 feedadds_biscuit 定义: ", err)
 	}
@@ -690,10 +689,15 @@ func assertDipQtyFields(t *testing.T, it *store.Item, want int64) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f13 := u64Of(fields[fieldIdxByCS(it.WireClass, "dnmfciolgep")].Num)
-	f0 := u64Of(fields[fieldIdxByCS(it.WireClass, "miecmmbpolk")].Num)
-	if it.Qty != want || f13 != uint64(want) || f0 != uint64(want) {
-		t.Fatalf("qty=%d f13=%d f0=%d, want %d", it.Qty, f13, f0, want)
+	qtyIdx := itemQtyFieldIdx(it.WireClass)
+	mirrorIdx := qtyMirrorIdx(it.WireClass)
+	if qtyIdx < 0 || qtyIdx >= len(fields) || mirrorIdx < 0 || mirrorIdx >= len(fields) {
+		t.Fatalf("%s 缺少数量字段: qty=%d mirror=%d fields=%d", it.WireClass, qtyIdx, mirrorIdx, len(fields))
+	}
+	qty := u64Of(fields[qtyIdx].Num)
+	mirror := u64Of(fields[mirrorIdx].Num)
+	if it.Qty != want || qty != uint64(want) || mirror != uint64(want) {
+		t.Fatalf("qty=%d field[%d]=%d mirror[%d]=%d, want %d", it.Qty, qtyIdx, qty, mirrorIdx, mirror, want)
 	}
 }
 
