@@ -196,9 +196,7 @@ func setTreeQty(tree *proto.Value, qty int64) {
 	if tree == nil || tree.Kind != proto.KindObj {
 		return
 	}
-	if q := fieldIdxByCS(tree.Class, csQty); q >= 0 && q < len(tree.Fields) {
-		tree.Fields[q].Num = ptrU64(uint64(qty))
-	}
+	setItemQty(tree.Class, tree.Fields, uint64(qty))
 }
 
 const mailItemSnapshotVersion int64 = 1
@@ -223,8 +221,7 @@ func mailItemSnapshotFromRow(row *store.Item, qty int64, countable bool) (store.
 		if err != nil {
 			return store.MailItem{}, err
 		}
-		if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
-			fields[q].Num = ptrU64(uint64(qty))
+		if setItemQty(row.WireClass, fields, uint64(qty)) {
 			fieldsJSON, err = FieldsToJSON(fields)
 			if err != nil {
 				return store.MailItem{}, err
@@ -292,9 +289,7 @@ func (s *Server) prepareMailSnapshotItem(ctx context.Context, uid int64, att sto
 		qty = 1
 	}
 	if countable {
-		if q := fieldIdxByCS(att.WireClass, csQty); q >= 0 && q < len(fields) {
-			fields[q].Num = ptrU64(uint64(qty))
-		}
+		setItemQty(att.WireClass, fields, uint64(qty))
 	}
 	fieldsJSON, err := FieldsToJSON(fields)
 	if err != nil {
@@ -518,12 +513,9 @@ func (s *Server) acceptMails(ctx *Ctx, ids []int64) (int, []*store.Item) {
 					}
 					if countableCategories[def.Category] {
 						it.Qty = qty
-						if fields, ferr := FieldsFromJSON(it.FieldsJSON); ferr == nil {
-							if q := fieldIdxByCS(it.WireClass, csQty); q >= 0 && q < len(fields) {
-								fields[q].Num = ptrU64(uint64(qty))
-								if fj, jerr := FieldsToJSON(fields); jerr == nil {
-									it.FieldsJSON = fj
-								}
+						if fields, ferr := FieldsFromJSON(it.FieldsJSON); ferr == nil && setItemQty(it.WireClass, fields, uint64(qty)) {
+							if fj, jerr := FieldsToJSON(fields); jerr == nil {
+								it.FieldsJSON = fj
 							}
 						}
 					}

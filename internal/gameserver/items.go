@@ -120,19 +120,34 @@ func itemQtyFieldIdx(class string) int {
 	return -1
 }
 
-// writeItemQty 把可堆叠数量写进实例数量槽；abmokghdbhf 家族的 UI 计数
-// 另读 f0 miecmmbpolk（lillemolakn.medpgjlibog），两处一起写。
-func writeItemQty(class string, obj *proto.Value, qty uint64) {
+// itemQtyValue 读取实例数量槽；没有数量字段时返回 false。
+func itemQtyValue(class string, fields []proto.Field) (uint64, bool) {
 	idx := itemQtyFieldIdx(class)
-	if idx < 0 || idx >= len(obj.Fields) {
-		return
+	if idx < 0 || idx >= len(fields) || fields[idx].Num == nil {
+		return 0, false
 	}
-	obj.Fields[idx].Num = ptrU64(qty)
+	return u64Of(fields[idx].Num), true
+}
+
+// setItemQty 写入实例数量槽；abmokghdbhf 家族的 UI 计数另读
+// f0 miecmmbpolk（lillemolakn.medpgjlibog），两处一起写。
+func setItemQty(class string, fields []proto.Field, qty uint64) bool {
+	idx := itemQtyFieldIdx(class)
+	if idx < 0 || idx >= len(fields) {
+		return false
+	}
+	fields[idx].Num = ptrU64(qty)
 	if class == "abmokghdbhf" {
-		if f0 := fieldIdxByCS(class, "miecmmbpolk"); f0 >= 0 && f0 < len(obj.Fields) {
-			obj.Fields[f0].Num = ptrU64(qty)
+		if f0 := fieldIdxByCS(class, "miecmmbpolk"); f0 >= 0 && f0 < len(fields) {
+			fields[f0].Num = ptrU64(qty)
 		}
 	}
+	return true
+}
+
+// writeItemQty 写入新构造实例的数量字段。
+func writeItemQty(class string, obj *proto.Value, qty uint64) {
+	_ = setItemQty(class, obj.Fields, qty)
 }
 
 // fieldIsFloat 该位置的 op 是否浮点。
@@ -1083,13 +1098,13 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 	// 数量 ljnnpokapig：计件 = 定义单位量×units，item.qty 必须与字段同值；
 	// 线(11)/前导(15) 是长度，不在此分支。
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
+		if idx := itemQtyFieldIdx(cls.Class); idx >= 0 {
 			defQty := u64Of(obj.Fields[idx].Num)
 			if defQty == 0 {
 				defQty = 1
 			}
 			fieldQty := defQty * uint64(units)
-			obj.Fields[idx].Num = ptrU64(fieldQty)
+			writeItemQty(cls.Class, obj, fieldQty)
 			rowQty = int64(fieldQty)
 		}
 	}
@@ -1154,8 +1169,7 @@ func (s *Server) prepareNewItemWithCount(ctx context.Context, uid int64, itemID,
 	if err != nil {
 		return nil, err
 	}
-	if idx := fieldIdxByCS(it.WireClass, csQty); idx >= 0 && idx < len(fields) {
-		fields[idx].Num = ptrU64(uint64(count))
+	if setItemQty(it.WireClass, fields, uint64(count)) {
 		fj, ferr := FieldsToJSON(fields)
 		if ferr != nil {
 			return nil, ferr
@@ -1176,8 +1190,6 @@ func (s *Server) AddToStack(ctx context.Context, uid int64, itemID, container st
 		it, err := s.CreateItem(ctx, uid, itemID, container, units)
 		return it, false, err
 	}
-	cls := wireClassOf(def.Category)
-	qtyIdx := fieldIdxByCS(cls, "ljnnpokapig")
 	defQty := int64(1)
 	if v, ok := defAttrU64(def, csQty); ok && v > 0 {
 		defQty = int64(v)
@@ -1191,13 +1203,12 @@ func (s *Server) AddToStack(ctx context.Context, uid int64, itemID, container st
 			continue
 		}
 		fields, _ := FieldsFromJSON(row.FieldsJSON)
-		if qtyIdx >= 0 && qtyIdx < len(fields) {
+		if cur, ok := itemQtyValue(row.WireClass, fields); ok {
 			// 若 row.qty 与字段值不一致，以字段值为基准修正后再累加。
-			cur := int64(u64Of(fields[qtyIdx].Num))
 			if cur > 0 {
-				row.Qty = cur
+				row.Qty = int64(cur)
 			}
-			fields[qtyIdx].Num = ptrU64(uint64(cur + addQty))
+			setItemQty(row.WireClass, fields, cur+uint64(addQty))
 		}
 		fj, _ := FieldsToJSON(fields)
 		newQty := row.Qty + addQty

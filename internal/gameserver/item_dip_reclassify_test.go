@@ -178,3 +178,51 @@ func TestPrepareNewDipUsesFamilyClass(t *testing.T) {
 		t.Errorf("f0 miecmmbpolk = %d，期望 100", got)
 	}
 }
+
+func assertDipQtyFields(t *testing.T, it *store.Item, want int64) {
+	t.Helper()
+	if it == nil {
+		t.Fatal("物品为空")
+	}
+	fields, err := FieldsFromJSON(it.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f13 := u64Of(fields[fieldIdxByCS(it.WireClass, "dnmfciolgep")].Num)
+	f0 := u64Of(fields[fieldIdxByCS(it.WireClass, "miecmmbpolk")].Num)
+	if it.Qty != want || f13 != uint64(want) || f0 != uint64(want) {
+		t.Fatalf("qty=%d f13=%d f0=%d, want %d", it.Qty, f13, f0, want)
+	}
+}
+
+func TestDipFactoryAndStackKeepQuantityFields(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	it, err := srv.CreateItem(ctx, 1000004, "dip_hvz_se", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDipQtyFields(t, it, 100)
+
+	stacked, merged, err := srv.AddToStack(ctx, 1000004, "dip_hvz_se", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !merged || stacked.GUID != it.GUID {
+		t.Fatalf("应并入原堆，merged=%v got=%s want=%s", merged, stacked.GUID, it.GUID)
+	}
+	fresh, err := db.GetItemByGUID(ctx, it.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDipQtyFields(t, fresh, 200)
+}
+
+func TestDipExactCountKeepsQuantityFields(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	it, err := srv.prepareNewItemWithCount(context.Background(), 1000004, "dip_hvz_se", "backpack", 7, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertDipQtyFields(t, it, 7)
+}
