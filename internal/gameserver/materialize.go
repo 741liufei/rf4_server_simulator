@@ -226,14 +226,6 @@ func strengthBitsFor(def *store.ItemDef, durability float64) (float64, bool) {
 		}
 		return strength, true
 	}
-	// 前导总强度来自嵌套线材/连接件中的最弱值，顶层没有 kngaaefkpka。
-	if def != nil && def.Category == gearCatLeader {
-		strength := leaderStrengthKg(def) * durability
-		if strength <= 0 {
-			return 0, false
-		}
-		return strength, true
-	}
 	attrs := defAttrs(def)
 	if attrs == nil {
 		return 0, false

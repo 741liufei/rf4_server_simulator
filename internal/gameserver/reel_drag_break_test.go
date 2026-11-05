@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"math"
 	"testing"
 )
 
@@ -74,5 +75,47 @@ func TestReelDragSettingGatesRodBreak(t *testing.T) {
 	}
 	if decision, derr := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID); derr != nil || decision.Part != "rod" {
 		t.Fatalf("锁轮应判断竿: %+v err=%v", decision, derr)
+	}
+}
+
+func TestReelDragWorkmanshipAppliedOnce(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	reel, err := srv.CreateItem(ctx, 1000001, "spin_5820", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reel.Workmanship = 0.8
+	if err := db.UpdateItemFields(ctx, reel.GUID, reel.FieldsJSON, reel.Qty, reel.Durability, reel.Workmanship, reel.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+	reel, err = db.GetItemByGUID(ctx, reel.GUID)
+	if err != nil || reel == nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(reel.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.canonicalizeItemPhysicalFields(ctx, reel, fields)
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.UpdateItemFields(ctx, reel.GUID, fj, reel.Qty, reel.Durability, reel.Workmanship, reel.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+	reel, err = db.GetItemByGUID(ctx, reel.GUID)
+	if err != nil || reel == nil {
+		t.Fatal(err)
+	}
+	def, err := srv.itemDefForRow(ctx, reel)
+	if err != nil || def == nil {
+		t.Fatal(err)
+	}
+	want := reelDragMaxKg(def) * reel.Workmanship
+	got := srv.reelBaseDragFromRow(ctx, reel)
+	if math.Abs(got-want) > 0.01 {
+		t.Fatalf("制动力=%f，期望只乘一次母轮成色后的 %f", got, want)
 	}
 }
