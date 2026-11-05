@@ -241,11 +241,9 @@ func (s *Server) EnsurePlayer(ctx context.Context, uid int64) error {
 			if err != nil {
 				return fmt.Errorf("解析 starter %s 字段: %w", si.ItemID, err)
 			}
-			idx := fieldIdxByCS(it.WireClass, csQty)
-			if idx < 0 || idx >= len(fields) {
+			if !setItemQty(it.WireClass, fields, uint64(si.Qty)) {
 				return fmt.Errorf("starter %s 不支持数量 %d", si.ItemID, si.Qty)
 			}
-			fields[idx].Num = ptrU64(uint64(si.Qty))
 			fj, err := FieldsToJSON(fields)
 			if err != nil {
 				return fmt.Errorf("编码 starter %s 字段: %w", si.ItemID, err)
