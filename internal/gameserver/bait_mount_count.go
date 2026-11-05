@@ -20,12 +20,12 @@ import (
 type baitMountKind int
 
 const (
-	baitKindBoil baitMountKind = iota // 下沉煮饵/天然饵（fopbhlmkcpe=1）
-	baitKindInsect                    // 蛆虫族（fopbhlmkcpe=2/7）
-	baitKindPopup                     // 浮性 Pop-up 煮饵（fopbhlmkcpe=8）
-	baitKindPellets                   // 颗粒（fopbhlmkcpe=9）
-	baitKindCorn                      // 玉米浮（fopbhlmkcpe=10）
-	baitKindFoam                      // 泡沫（hm_foamr*，无 fopbhlmkcpe）
+	baitKindBoil    baitMountKind = iota // 下沉煮饵/天然饵（fopbhlmkcpe=1）
+	baitKindInsect                       // 蛆虫族（fopbhlmkcpe=2/7）
+	baitKindPopup                        // 浮性 Pop-up 煮饵（fopbhlmkcpe=8）
+	baitKindPellets                      // 颗粒（fopbhlmkcpe=9）
+	baitKindCorn                         // 玉米浮（fopbhlmkcpe=10）
+	baitKindFoam                         // 泡沫（hm_foamr*，无 fopbhlmkcpe）
 	baitKindOther
 )
 
@@ -33,13 +33,13 @@ const (
 // 未列出的挂法（含未选择 f8=0）一律一份；组合挂法只写多份的那一族
 // （玉米浮+蛆15 里玉米浮仍是一颗），单份族不进表。
 var baitMountHookCounts = map[int64]map[baitMountKind]int64{
-	1024:    {baitKindCorn: 2},   // 玉米浮×2
-	2048:    {baitKindCorn: 4},   // 玉米浮×4
-	8192:    {baitKindCorn: 2},   // Pop-up 煮饵+玉米浮×2
+	1024:    {baitKindCorn: 2},    // 玉米浮×2
+	2048:    {baitKindCorn: 4},    // 玉米浮×4
+	8192:    {baitKindCorn: 2},    // Pop-up 煮饵+玉米浮×2
 	65536:   {baitKindInsect: 5},  // 玉米浮+蛆5
 	131072:  {baitKindInsect: 10}, // 玉米浮+蛆10
 	262144:  {baitKindInsect: 15}, // 玉米浮+蛆15
-	1048576: {baitKindFoam: 2},   // 泡沫×2
+	1048576: {baitKindFoam: 2},    // 泡沫×2
 }
 
 // baitMountKindOf 从饵实例的 item_def 判别组件族。
@@ -95,4 +95,14 @@ func (s *Server) baitHookCount(ctx context.Context, rodGUID string, row *store.I
 		}
 	}
 	return n
+}
+
+// baitMountComponentLimit 返回单钩可挂载的同类组件数。
+// 泡沫饵是非计件拟饵，每个实例固定代表一枚，因此“泡沫×2”通过两个
+// 独立的 lure 组件表达，而不是把单个实例的 Qty 改成 2。
+func (s *Server) baitMountComponentLimit(ctx context.Context, rodGUID string, row *store.Item) int64 {
+	if row == nil || s.baitMountKindOf(ctx, row) != baitKindFoam {
+		return 1
+	}
+	return s.baitHookCount(ctx, rodGUID, row)
 }

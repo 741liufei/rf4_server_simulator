@@ -332,3 +332,90 @@ func TestBaitMountKindOfScopesToBaitCategory(t *testing.T) {
 		t.Fatalf("泡沫应判 foam 族，实得 %d", got)
 	}
 }
+
+func TestFoamMountX2UsesTwoLureComponents(t *testing.T) {
+	s, db := newRigTestServer(t)
+	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 泡沫饵属于 Zig 钓组（34）。
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 34) {
+		t.Fatal("rigSetType 失败")
+	}
+	saveMountTypeForTest(t, s, rod.GUID, 1048576) // 泡沫×2
+	hook, err := s.CreateItem(t.Context(), 1000001, "c_hook_20819", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := s.rigSetComponent(t.Context(), 1000001, rod.GUID, 0, hook.GUID, 0,
+		rigSetOpts{ParentType: familyRod, EnforceCategory: true, SplitStack: true}); r.Rejected {
+		t.Fatalf("挂钩失败: %+v", r)
+	}
+	first, err := s.CreateItem(t.Context(), 1000001, "hm_foamr_80black_hq", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateItem(t.Context(), 1000001, "hm_foamr_80black_hq", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, guid := range []string{first.GUID, second.GUID} {
+		r := s.rigSetComponent(t.Context(), 1000001, rod.GUID, 0, guid, 0,
+			rigSetOpts{ParentType: familyRod, EnforceCategory: true, SplitStack: true})
+		if r.Rejected || r.MountedGUID != guid {
+			t.Fatalf("泡沫挂载失败 guid=%s result=%+v", shortGUID(guid), r)
+		}
+	}
+	fresh, err := db.GetItemByGUID(t.Context(), rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comps := rigTestCategoryComps(t, rigStoredF5(t, fresh), catLure)
+	if len(comps) != 2 || comps[0].GUID != first.GUID || comps[1].GUID != second.GUID {
+		t.Fatalf("泡沫×2 应保留两个 lure 组件，实得 %+v", comps)
+	}
+	sets := s.baitedHookSets(t.Context(), rod.GUID)
+	if len(sets) != 1 || len(sets[0].baits) != 2 {
+		t.Fatalf("客户端应收到同一钩上的两枚泡沫: %+v", sets)
+	}
+}
+
+func TestFoamSingleMountStillReplaces(t *testing.T) {
+	s, db := newRigTestServer(t)
+	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 34) {
+		t.Fatal("rigSetType 失败")
+	}
+	saveMountTypeForTest(t, s, rod.GUID, 524288) // 泡沫×1
+	first, err := s.CreateItem(t.Context(), 1000001, "hm_foamr_80black_hq", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.CreateItem(t.Context(), 1000001, "hm_foamr_80red_hq", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, guid := range []string{first.GUID, second.GUID} {
+		r := s.rigSetComponent(t.Context(), 1000001, rod.GUID, 0, guid, 0,
+			rigSetOpts{ParentType: familyRod, EnforceCategory: true, SplitStack: true})
+		if r.Rejected {
+			t.Fatalf("泡沫挂载失败: %+v", r)
+		}
+	}
+	fresh, err := db.GetItemByGUID(t.Context(), rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	comps := rigTestCategoryComps(t, rigStoredF5(t, fresh), catLure)
+	if len(comps) != 1 || comps[0].GUID != second.GUID {
+		t.Fatalf("泡沫×1 应替换为第二枚，实得 %+v", comps)
+	}
+	back, err := db.GetItemByGUID(t.Context(), first.GUID)
+	if err != nil || back == nil || back.Container != "backpack" || back.RigGUID != "" {
+		t.Fatalf("被替换泡沫未退回背包: %+v err=%v", back, err)
+	}
+}

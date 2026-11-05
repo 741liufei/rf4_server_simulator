@@ -1320,6 +1320,14 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 		return ordinal, comps[rigCompKey(slot, ordinal)].GUID
 	}
 	idxs := uniqueIndices(slotIndicesFor(s.rigTypeForWrite(ctx, parentGUID), slot))
+	limit := len(idxs)
+	if slot == catLure && limit < 2 {
+		if row, err := s.DB.GetItemByGUID(ctx, itemGUID); err == nil && row != nil {
+			if n := s.baitMountComponentLimit(ctx, parentGUID, row); n > int64(limit) {
+				limit = int(n)
+			}
+		}
+	}
 	if extra != 0 {
 		matched := make([]int, 0, len(idxs))
 		for pos, idx := range idxs {
@@ -1332,12 +1340,11 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 				return int64(pos), ""
 			}
 		}
-		if len(matched) > 0 {
+		if len(matched) > 0 && limit <= len(idxs) {
 			pos := matched[0]
 			return int64(pos), comps[rigCompKey(slot, int64(pos))].GUID
 		}
 	}
-	limit := len(idxs)
 	if limit < 1 {
 		limit = 1
 	}
