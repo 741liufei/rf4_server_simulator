@@ -835,6 +835,10 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		fields[i].Op = "OPTGUID"
 		fields[i].Hex = ""
 	}
+	if i := fieldIdxByCS(rod.WireClass, csReel); i >= 0 && i < len(fields) {
+		fields[i].Op = "OPTGUID"
+		fields[i].Hex = ""
+	}
 	if err := updateItemFieldsTx(ctx, s.DB, tx, rod, fields); err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"rf4server/internal/logging"
@@ -946,5 +947,52 @@ func TestBrokenRodRejectsComponentMount(t *testing.T) {
 	sess := newProbeSess(srv)
 	if res := mountGearForTest(t, srv, sess, rod.GUID, line.GUID); res == nil {
 		t.Fatal("修理后应恢复装配")
+	}
+}
+
+func TestRodBreakDetachesReelAndClearsRodReference(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "spin_5820", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := srv.CreateItem(ctx, uid, "mono_15249", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+
+	outcome, err := srv.breakRodTx(ctx, uid, rod.GUID, rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(outcome.RemovedGUIDs, reel.GUID) {
+		t.Fatalf("断竿移除列表缺少渔轮: %+v", outcome.RemovedGUIDs)
+	}
+	fresh, err := db.GetItemByGUID(ctx, rod.GUID)
+	if err != nil || fresh == nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(fresh.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx := fieldIdxByCS(fresh.WireClass, csReel); idx >= 0 && idx < len(fields) && fields[idx].Hex != "" {
+		t.Fatalf("断竿后竿实例仍引用渔轮 %s", fields[idx].Hex)
+	}
+	returned, err := db.GetItemByGUID(ctx, reel.GUID)
+	if err != nil || returned == nil {
+		t.Fatal(err)
+	}
+	if returned.Container != "backpack" || returned.RigGUID != "" {
+		t.Fatalf("渔轮未正确退回背包: %+v", returned)
 	}
 }
