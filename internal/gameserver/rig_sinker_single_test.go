@@ -69,3 +69,80 @@ func TestSinkerKeepsSingleInstance(t *testing.T) {
 		t.Fatalf("第一枚应退回背包，实得 container=%q rig=%q", prev.Container, prev.RigGUID)
 	}
 }
+
+func TestLegacyDuplicateSinkersAreReturnedByProjection(t *testing.T) {
+	srv, db := newDetachTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	rod, err := srv.CreateItem(ctx, uid, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !srv.rigSetType(ctx, uid, rod.GUID, 26) {
+		t.Fatal("rigSetType 失败")
+	}
+	kept, err := srv.CreateItem(ctx, uid, "flpsinker_30149", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra, err := srv.CreateItem(ctx, uid, "flpsinker_30149", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.rigSetComponent(ctx, uid, rod.GUID, 0, kept.GUID, 200,
+		rigSetOpts{ParentType: familyRod, EnforceCategory: true})
+
+	// 构造旧版本留下的第二个同索引沉子。
+	row, err := db.GetItemByGUID(ctx, rod.GUID)
+	if err != nil || row == nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := fieldIdxByCS(row.WireClass, csRigObject)
+	name, rigType, ok := rigIdentity(fields[idx].Val)
+	if !ok {
+		t.Fatal("缺少钓组身份")
+	}
+	comps := rigCompsOf(fields[idx].Val)
+	comps[rigCompKey(29, 1)] = rigComp{Category: 29, Ordinal: 1, GUID: extra.GUID, Extra: 200}
+	fields[idx].Val = buildRig153Like(fields[idx].Val, name, rigType, comps, 100, 0)
+	srv.saveItemFields(ctx, row, fields)
+	if err := db.SetItemRigLink(ctx, extra.GUID, rod.GUID, 29); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := srv.reconcileRigProjection(ctx, rod.GUID); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := db.GetItemByGUID(ctx, rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := rigTestCategoryComps(t, rigStoredF5(t, fresh), 29)
+	if len(got) != 1 || got[0].GUID != kept.GUID || got[0].Ordinal != 0 {
+		t.Fatalf("历史重复沉子未清理: %+v", got)
+	}
+	returned, err := db.GetItemByGUID(ctx, extra.GUID)
+	if err != nil || returned == nil {
+		t.Fatal(err)
+	}
+	if returned.Container != "backpack" || returned.RigGUID != "" {
+		t.Fatalf("多余沉子未退回背包: %+v", returned)
+	}
+	rows, err := db.ListRigComponents(ctx, rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, rc := range rows {
+		if rc.Slot == 29 {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("派生表仍保留 %d 条沉子", count)
+	}
+}

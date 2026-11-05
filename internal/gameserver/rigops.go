@@ -111,7 +111,7 @@ func fitsSlot(itemCat int64, hasItemCat bool, slot int64) bool {
 //
 // 规范索引由 (钓组类型, 品类) 决定。例如前导 13 使用 150 或 175，
 // 钩 12 使用 250/251/252，拟饵 17 使用 325/326/327。
-// 同品类多槽时索引可以重复，客户端按数组顺序区分。
+// 同品类多槽位的规范索引必须唯一；客户端按索引渲染，重复索引会折叠成同一槽位。
 
 type rigSlotTemplate struct {
 	Cats []int64
@@ -229,6 +229,72 @@ func uniqueIndices(idxs []int64) []int64 {
 		out = append(out, idx)
 	}
 	return out
+}
+
+// dedupeRigComponents 清理旧版本留下的重复规范索引，保留低序号的组件，
+// 其余组件退回背包或来源堆。
+func (s *Server) dedupeRigComponents(ctx context.Context, uid int64, parentGUID string, rigType int64, comps map[int64]rigComp) bool {
+	keys := make([]int64, 0, len(comps))
+	for key := range comps {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		ci, cj := rigCompCategory(keys[i]), rigCompCategory(keys[j])
+		if ci != cj {
+			return ci < cj
+		}
+		return rigCompOrdinal(keys[i]) < rigCompOrdinal(keys[j])
+	})
+	type slotKey struct {
+		category int64
+		index    int64
+	}
+	seen := map[slotKey]string{}
+	changed := false
+	for _, key := range keys {
+		comp := comps[key]
+		category, ordinal := rigCompCategory(key), rigCompOrdinal(key)
+		index := canonicalIndexForOrdinal(category, comp.Extra, rigType, ordinal)
+		indexCount := 0
+		for _, candidate := range slotIndicesFor(rigType, category) {
+			if candidate == index {
+				indexCount++
+			}
+		}
+		if indexCount < 2 {
+			continue
+		}
+		identity := slotKey{category: category, index: index}
+		if keptGUID, exists := seen[identity]; exists {
+			delete(comps, key)
+			changed = true
+			if comp.GUID == "" || comp.GUID == keptGUID {
+				continue
+			}
+			row, err := s.DB.GetItemByGUID(ctx, comp.GUID)
+			if err == nil && row != nil && row.UID == uid && row.Container == "rig" && row.RigGUID == parentGUID {
+				s.releaseRigComponentItem(ctx, row)
+			}
+			continue
+		}
+		seen[identity] = comp.GUID
+	}
+	return changed
+}
+
+// releaseRigComponentItem 将一个被清理的组件实例退回背包或来源堆。
+func (s *Server) releaseRigComponentItem(ctx context.Context, row *store.Item) {
+	if s.refundableSplitChild(ctx, row) {
+		srcGUID := splitSourceGUID(row)
+		_ = s.DB.DeleteItems(ctx, []string{row.GUID})
+		if srcGUID != "" {
+			if src, err := s.DB.GetItemByGUID(ctx, srcGUID); err == nil && src != nil {
+				s.setStackCount(ctx, src, s.stackCountOf(ctx, src)+1)
+			}
+		}
+		return
+	}
+	s.returnToBackpack(ctx, row)
 }
 
 // canonicalIndex 返回品类在 f5 组件中的规范索引。
@@ -542,13 +608,14 @@ func (s *Server) reconcileRigProjection(ctx context.Context, rodGUID string) err
 	if idx < 0 || idx >= len(fields) {
 		return nil // 非竿容器：由调用方走各自旧投影逻辑
 	}
-	rigType := int64(0)
-	if f5 := fields[idx].Val; f5 != nil {
-		if _, rt, ok := rigIdentity(f5); ok {
-			rigType = rt
-		}
+	stored := fields[idx].Val
+	name, rigType, _ := rigIdentity(stored)
+	comps := rigCompsOf(stored)
+	if s.dedupeRigComponents(ctx, row.UID, rodGUID, rigType, comps) {
+		depth := rigDepthOf(stored, defaultDepthFor(name, rigType))
+		fields[idx].Val = buildRig153Like(stored, name, rigType, comps, depth, rigClipOf(stored))
+		s.saveItemFields(ctx, row, fields)
 	}
-	comps := rigCompsOf(fields[idx].Val)
 	out := make([]store.RigComponent, 0, len(comps)+2)
 	keys := make([]int64, 0, len(comps))
 	for key := range comps {
