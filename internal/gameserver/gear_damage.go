@@ -7,6 +7,7 @@ import (
 	"errors"
 	"math"
 	"math/rand"
+	"sort"
 	"strings"
 
 	"rf4server/internal/proto"
@@ -21,15 +22,15 @@ const (
 
 // gearDamageEvent 是 item_damage_log.event 的稳定取值。
 const (
-	damageEventWear            = "wear"
-	damageEventLineBreak       = "line_break"
-	damageEventLineExhausted   = "line_exhausted"
-	damageEventLostOnLineBreak = "lost_on_line_break"
-	damageEventLostOnRodBreak  = "lost_on_rod_break"
-	damageEventRodBreak        = "rod_break"
-	damageEventReelOverload    = "reel_overload"
-	damageEventComponentBreak  = "component_break"
-	damageEventRepair          = "repair"
+	damageEventWear               = "wear"
+	damageEventLineBreak          = "line_break"
+	damageEventLineExhausted      = "line_exhausted"
+	damageEventLostOnLineBreak    = "lost_on_line_break"
+	damageEventDetachedOnRodBreak = "detached_on_rod_break"
+	damageEventRodBreak           = "rod_break"
+	damageEventReelOverload       = "reel_overload"
+	damageEventComponentBreak     = "component_break"
+	damageEventRepair             = "repair"
 )
 
 type gearBreakOutcome struct {
@@ -750,10 +751,10 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		return nil, err
 	}
 
-	// 官方断竿表现：整组钓组随竿报废（线组消失、竿折、战斗结束）。
-	// 删除全部已装组件与主线，进 11028 的移除列表让客户端清掉 UI 状态；
-	// 竿本体保留（耐久 0）可修理。缺少移除列表时客户端不清线组、鱼仍挂
-	// 钩，整轮卡死在搏鱼状态，只能换竿逃生。
+	// 断竿只报废竿本体：耐久归零、不能取竿也不能抛投，竿上配件与主线全部
+	// 摘回背包且耐久不变，可以拆下来装到别的竿上。
+	// 离开的组件仍进 11028 的移除列表让客户端清掉 UI 状态；缺少移除列表时
+	// 客户端不清线组、鱼仍挂钩，整轮卡死在搏鱼状态，只能换竿逃生。
 	var removed []string
 	stored := protoFieldAt(fields, rod.WireClass, csRigObject)
 	compGUIDs := map[string]bool{}
@@ -776,21 +777,39 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 	if lineGUID, lerr := s.storedRigItemGUID(ctx, rod, csLine); lerr == nil && lineGUID != "" {
 		compGUIDs[lineGUID] = true
 	}
+	guids := make([]string, 0, len(compGUIDs))
 	for g := range compGUIDs {
+		guids = append(guids, g)
+	}
+	sort.Strings(guids)
+	for _, g := range guids {
 		row, gerr := s.DB.GetItemByGUIDTx(ctx, tx, g)
 		if gerr != nil || row == nil {
 			continue
 		}
-		if err := s.DB.DeleteItemCascadeTx(ctx, tx, g); err != nil {
+		// 组件不销毁：清掉 wire 父引用与槽位后摘回背包，耐久保持原值。
+		compFields, ferr := FieldsFromJSON(row.FieldsJSON)
+		if ferr != nil {
+			return nil, ferr
+		}
+		row.Container = "backpack"
+		row.Slot = 0
+		row.RigGUID = ""
+		clearRigFieldsForBackpack(compFields, row.WireClass)
+		if err := updateItemFieldsTx(ctx, s.DB, tx, row, compFields); err != nil {
+			return nil, err
+		}
+		if err := s.DB.DetachReturnToBackpackTx(ctx, tx, g); err != nil {
 			return nil, err
 		}
 		removed = append(removed, g)
-		lostLog := store.ItemDamageLog{
-			UID: uid, ItemGUID: g, ItemID: row.ItemID, Event: damageEventLostOnRodBreak,
-			BeforeDurability: ptrFloat64(row.Durability), BrokenGUID: brokenGUID,
+		detachLog := store.ItemDamageLog{
+			UID: uid, ItemGUID: g, ItemID: row.ItemID, Event: damageEventDetachedOnRodBreak,
+			BeforeDurability: ptrFloat64(row.Durability), AfterDurability: ptrFloat64(row.Durability),
+			BrokenGUID: brokenGUID,
 			DetailJSON: damageDetailJSON(map[string]any{"rod_guid": rodGUID, "reason": "rod_break"}),
 		}
-		if err := store.AddItemDamageLog(ctx, tx, lostLog); err != nil {
+		if err := store.AddItemDamageLog(ctx, tx, detachLog); err != nil {
 			return nil, err
 		}
 	}

@@ -340,6 +340,32 @@ func (s *Session) Push4_21(guids []string) {
 	s.Push(4, 21, proto.Args524(proto.GuidArr(guids)))
 }
 
+// Push4_22Items 搏鱼全量同步并附上指定物品的树。
+// 断竿会把配件摘回背包，而 11028 的移除清单会让客户端删掉这些本地物品，
+// 必须靠这条推送把它们按背包状态重新装回来。
+func (s *Session) Push4_22Items(extraGUIDs []string) {
+	pctx := s.pushCtx()
+	items, err := s.Srv.buildFightItems(pctx, s.Userid, true)
+	if err != nil {
+		return
+	}
+	for _, g := range extraGUIDs {
+		row, gerr := s.Srv.DB.GetItemByGUID(pctx, g)
+		if gerr != nil || row == nil || row.UID != s.Userid {
+			continue
+		}
+		tree, terr := s.Srv.ItemToTree(pctx, row)
+		if terr != nil || tree == nil {
+			continue
+		}
+		items = append(items, tree)
+	}
+	if len(items) == 0 {
+		return
+	}
+	s.Push(4, 22, proto.Args(proto.S("61"), items...))
+}
+
 // Push4_22Full 搏鱼全量同步：args("61")[157竿, 140线]。
 func (s *Session) Push4_22Full() {
 	items, err := s.Srv.buildFightItems(s.pushCtx(), s.Userid, true)
