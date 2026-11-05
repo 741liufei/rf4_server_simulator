@@ -352,7 +352,7 @@ func (s *Session) Push4_22Items(extraGUIDs []string) {
 	seen := map[string]bool{}
 	for _, item := range items {
 		if idx := fieldIdxByCS(item.Class, csGUID); idx >= 0 && idx < len(item.Fields) {
-			seen[fieldGuidHex(item, idx)] = true
+			seen[item.Fields[idx].GuidHex()] = true
 		}
 	}
 	for _, g := range extraGUIDs {
