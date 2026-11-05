@@ -210,6 +210,27 @@ func slotIndicesFor(rigType, category int64) []int64 {
 	return out
 }
 
+// uniqueIndices 去掉重复的规范索引。
+// 鲤鱼钓组（24-29、34）的模板里有两个 {29,200} 沉子位，索引完全一致。
+// 客户端按索引而非数组位置渲染组件，第二个实例会叠在同一个槽位上：
+// 重量按两份计（甩线时误判超重、播炸线音效），收起一次也只卸掉其中一个。
+// 去重后沉子退回单实例，第二次安装按替换处理。
+func uniqueIndices(idxs []int64) []int64 {
+	if len(idxs) < 2 {
+		return idxs
+	}
+	seen := make(map[int64]struct{}, len(idxs))
+	out := make([]int64, 0, len(idxs))
+	for _, idx := range idxs {
+		if _, ok := seen[idx]; ok {
+			continue
+		}
+		seen[idx] = struct{}{}
+		out = append(out, idx)
+	}
+	return out
+}
+
 // canonicalIndex 返回品类在 f5 组件中的规范索引。
 // 客户端给出的合法槽位索引会保留；其余情况使用模板规范值。
 func canonicalIndex(category, clientIndex int64, rigType int64) int64 {
@@ -1215,7 +1236,7 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 		}
 		return ordinal, comps[rigCompKey(slot, ordinal)].GUID
 	}
-	idxs := slotIndicesFor(s.rigTypeForWrite(ctx, parentGUID), slot)
+	idxs := uniqueIndices(slotIndicesFor(s.rigTypeForWrite(ctx, parentGUID), slot))
 	if extra != 0 {
 		matched := make([]int, 0, len(idxs))
 		for pos, idx := range idxs {
