@@ -513,22 +513,7 @@ func (s *Session) pushBaitChange(change baitChange) {
 	if len(change.Removed) > 0 {
 		s.Push4_21(change.Removed)
 	}
-	var trees []*proto.Value
-	seen := map[string]bool{}
-	for _, guid := range change.Updated {
-		if seen[guid] {
-			continue
-		}
-		seen[guid] = true
-		if row, err := s.Srv.DB.GetItemByGUID(s.pushCtx(), guid); err == nil && row != nil {
-			if tree, err := s.Srv.itemTree(s.pushCtx(), row); err == nil {
-				trees = append(trees, tree)
-			}
-		}
-	}
-	if len(trees) > 0 {
-		s.Push(4, 22, proto.Args(proto.S("61"), trees...))
-	}
+	s.Push4_22ItemGUIDs(change.Updated)
 }
 
 func (s *Server) pushBaitedFish(sess *Session, f *RolledFish, rod string) bool {
