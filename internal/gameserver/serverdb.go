@@ -29,6 +29,11 @@ func (s *Server) attachDB(db *store.DB, log *slog.Logger) {
 		return
 	}
 	s.loadFightCurves()
+	if n, err := s.ensureFishEcology(context.Background()); err != nil {
+		s.log.Warn("鱼种生态档案初始化失败", "err", err)
+	} else if n > 0 {
+		s.log.Info("鱼种生态档案初始化", "inserted", n)
+	}
 }
 
 // loadFightCurves 解析搏鱼曲线池，把 f0==100 的基础行放在首位。

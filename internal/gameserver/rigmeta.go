@@ -66,6 +66,11 @@ var bottomRigTypes = map[int64]bool{
 	32: true, 34: true,
 }
 
+// floatRigTypes 是可调漂、允许饵在下沉行程中被接口的浮钓族。
+var floatRigTypes = map[int64]bool{
+	1: true, 2: true, 3: true, 4: true, 21: true, 30: true, 31: true,
+}
+
 // rigTypeLureFamily 收索拟饵族：鱼在收线中攻击拟饵，咬钩节奏与"就位"守门单独走。
 var rigTypeLureFamily = map[int64]bool{
 	5: true, 6: true, 7: true, 8: true, 9: true, 10: true, 11: true,

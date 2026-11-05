@@ -939,6 +939,11 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 			}
 			changed := anim != st.LastAnim
 			st.LastAnim = anim
+			st.LureMotionMask = anim
+			st.LureAction = classifyLureMotion(anim)
+			if rigTypeLureFamily[st.RigType] {
+				st.LureLayer = lureLayerFromMotion(anim, st.LureLayer)
+			}
 			// 0x200/0x400/0x800/0x1000 是不同水层与姿态的“在水中”位族；岸上不会出现。
 			enterWater := false
 			needBite := false

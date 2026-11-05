@@ -26,6 +26,7 @@ type FishState struct {
 	Loc            string
 	Spot           uint64
 	DepthCM        int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
+	ReelSetting    int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
 	CastActive     bool
 	InWater        bool
 	NeedBite       bool
@@ -40,8 +41,11 @@ type FishState struct {
 	FallSeen       bool
 	RigSettled     bool
 	TickSeen       bool
-	TickSeq        uint64 // 14/7 f14 客户端 tick 序号（诊断/恢复）
-	LastAnim       uint32 // 14/7 f5 上一次的动画位（仅在变更时打日志）
+	TickSeq        uint64  // 14/7 f14 客户端 tick 序号（诊断/恢复）
+	LastAnim       uint32  // 14/7 f5 上一次的动画位（仅在变更时打日志）
+	LureMotionMask uint32  // 14/7 f5 原始拟饵运动位，保留给完整状态映射
+	LureAction     string  // 已识别的运动状态；未知时为空
+	LureLayer      float64 // 0=水面，1=水底；路亚实时水层
 	PushSent       bool
 	pushing        *RolledFish // 仅进程内：防止同一尾鱼并发重推
 	Hooked         bool
@@ -59,6 +63,40 @@ type FishState struct {
 	Armed          *RolledFish // GM 武装"下一杆必上"（唯一绕过重量上限的路径）
 	Bonus          fishingSkillBonus
 	persist        fishPersistMeta
+}
+
+// effectiveBaitDepthCMLocked 返回当前有效饵深。手杆从落水开始按固定
+// 下沉速度接近调漂深度，到底后保持；底层杆由 rigType 直接锁定底层。
+func (st *FishState) effectiveBaitDepthCMLocked(now time.Time) int64 {
+	if st == nil {
+		return 0
+	}
+	if rigTypeLureFamily[st.RigType] {
+		return int64(math.Round(normalizeWaterLayer(st.LureLayer) * 500))
+	}
+	target := st.DepthCM
+	if target <= 0 {
+		target = 300
+	}
+	start := st.FallTs
+	if start.IsZero() {
+		start = st.CastTs
+	}
+	if start.IsZero() {
+		return target
+	}
+	elapsed := now.Sub(start).Seconds()
+	if elapsed <= 0 {
+		return 0
+	}
+	depth := int64(math.Round(elapsed * 25)) // 约 0.25 m/s
+	if depth > target {
+		depth = target
+	}
+	if depth < 0 {
+		depth = 0
+	}
+	return depth
 }
 
 type fishingTimerTicket struct{ generation, sequence uint64 }
@@ -602,6 +640,12 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			return nil
 		}
 	}
+	for i, key := range keys {
+		wts[i] *= s.fishBiteEnvironmentWeight(cctx, key, c)
+	}
+	if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
+		return nil
+	}
 	// companion 周纪录饵效（config bait_pref_scale / bait_pref_weight_shift；
 	// 缺表=空，运行中性）。tier：top5=3 / top20=2 / 在列=1 → ×8/×4/×2；
 	// 未在列 ×(0.9 - 0.6×覆盖度)（覆盖度 = total_evidence/200，封顶 1）。
@@ -913,31 +957,36 @@ func (s *Server) rollFishPoolsWithRules(loc string, gearCapKg float64, bonus fis
 			}
 		}
 	}
-	e := pool[rand.Intn(len(pool))]
+	keys := make([]string, len(pool))
+	wts := make([]float64, len(pool))
+	for i, p := range pool {
+		keys[i] = p.species
+		wts[i] = s.fishBiteEnvironmentWeight(s.dbCtx(), p.species, c)
+	}
+	if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
+		return nil
+	}
 	interest := 1.0
 	if strict && c.baits != nil {
-		keys := make([]string, len(pool))
-		wts := make([]float64, len(pool))
-		for i, p := range pool {
-			keys[i] = p.species
-			wts[i] = 1
-		}
 		keys, wts = s.filterFishBaitSet("", c.baits, keys, wts, c.now, c)
 		if len(keys) == 0 {
 			return nil
 		}
-		key := weightedChoice(keys, wts)
-		for i, k := range keys {
-			if k == key {
+	}
+	key := weightedChoice(keys, wts)
+	if strict {
+		for i := range keys {
+			if keys[i] == key {
 				interest = math.Min(1, wts[i]/maxBaitPreference)
 				break
 			}
 		}
-		for _, p := range pool {
-			if p.species == key {
-				e = p
-				break
-			}
+	}
+	e := pool[0]
+	for _, p := range pool {
+		if p.species == key {
+			e = p
+			break
 		}
 	}
 	if c.forRig && !c.acceptHappyHourBite(fishingBaitInterest(interest, bonus), s.weatherFishActivity(e.species, c)) {
@@ -1439,10 +1488,13 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		st.mu.Unlock()
 		return
 	}
+	// 浮钓允许在饵仍下沉时接口；目标深度尚未到达就是“行程”窗口。
+	onTheDrop := floatRigTypes[st.RigType] && !st.FallTs.IsZero() &&
+		st.effectiveBaitDepthCMLocked(now) < st.DepthCM
 	// 钓组就位守门（Motionless 位族）——**路亚跳过**：收线动画族
 	// StreamMoving/Twitch/StopAndGo 永远没有 Motionless 位，守门会把每杆
 	// 路亚都顺延到 +12s（14/14 全部错过收线窗口）。
-	if !lure && now.Sub(st.CastTs) < 12*time.Second && st.TickSeen && !st.RigSettled {
+	if !lure && !onTheDrop && now.Sub(st.CastTs) < 12*time.Second && st.TickSeen && !st.RigSettled {
 		// 顺延 1s 轮询（12s 兜底）
 		s.armBiteTimerLocked(uid, st, now.Add(time.Second))
 		st.mu.Unlock()
@@ -1480,7 +1532,15 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 	if !hasPos {
 		x, z, hasPos = st.PosX, st.PosZ, st.HasPos
 	}
-	f := s.rollFishForRig(s.dbCtx(), uid, st.GearGuid, st.Loc, st.Bait, st.Bonus, fishRollContext{x: x, z: z, hasPos: hasPos, spot: st.Spot, depthCM: st.DepthCM, now: now, weather: sess.weatherAt(st.Loc, now), happyBite: sess.currentHappyHour().BiteBonus})
+	baitDepthCM := st.effectiveBaitDepthCMLocked(now)
+	rigType := st.RigType
+	lureLayer, lureAction, lureMask := st.LureLayer, st.LureAction, st.LureMotionMask
+	lureSpeed := st.ReelSetting
+	f := s.rollFishForRig(s.dbCtx(), uid, st.GearGuid, st.Loc, st.Bait, st.Bonus, fishRollContext{
+		x: x, z: z, hasPos: hasPos, spot: st.Spot, depthCM: baitDepthCM,
+		lureLayer: lureLayer, lureAction: lureAction, lureMask: lureMask, lureSpeed: lureSpeed, rigType: rigType,
+		now: now, weather: sess.weatherAt(st.Loc, now), happyBite: sess.currentHappyHour().BiteBonus,
+	})
 	if f == nil {
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()

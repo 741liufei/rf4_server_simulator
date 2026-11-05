@@ -1633,6 +1633,10 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	ctx.Log.Info("17/14 设置摩擦/转速", "竿", shortGUID(rodGUID), "值", value)
+	st := srv.stateFor(ctx.Sess.Userid)
+	st.mu.Lock()
+	st.ReelSetting = value
+	st.mu.Unlock()
 	if srv.DB != nil {
 		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelDragSettingKey,
 			strconv.FormatInt(value, 10))
