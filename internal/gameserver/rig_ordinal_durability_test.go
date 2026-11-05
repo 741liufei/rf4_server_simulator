@@ -37,14 +37,14 @@ func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !srv.rigSetType(ctx, uid, rod.GUID, 24) { // BottomHair 有双沉子槽
-		t.Fatal("设置双沉子钓组类型失败")
+	if !srv.rigSetType(ctx, uid, rod.GUID, 59) { // 海竿三钩位：250/251/252，索引各不相同
+		t.Fatal("设置多钩钓组类型失败")
 	}
-	sinkA, err := srv.CreateItem(ctx, uid, "arsinker_30076", "backpack", 1)
+	sinkA, err := srv.CreateItem(ctx, uid, "c_hook_20819", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sinkB, err := srv.CreateItem(ctx, uid, "arsinker_30077", "backpack", 1)
+	sinkB, err := srv.CreateItem(ctx, uid, "c_hook_20821", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,9 +60,9 @@ func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
 	if err != nil || rodRow == nil {
 		t.Fatal(err)
 	}
-	f5comps := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 29)
+	f5comps := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 12)
 	if len(f5comps) != 2 || f5comps[0].GUID != sinkA.GUID || f5comps[1].GUID != sinkB.GUID {
-		t.Fatalf("f5 应保留两件同品类沉子，实得 %+v", f5comps)
+		t.Fatalf("f5 应保留两件同品类鱼钩，实得 %+v", f5comps)
 	}
 	if f5comps[0].Ordinal != 0 || f5comps[1].Ordinal != 1 {
 		t.Fatalf("f5 ordinal 应为 0/1，实得 %+v", f5comps)
@@ -73,9 +73,9 @@ func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
 	}
 	var sinkRows []int64
 	for _, row := range rows {
-		if row.Slot == 29 {
-			if row.Extra != 200 {
-				t.Fatalf("沉子 canonical extra 应 200，实得 %d", row.Extra)
+		if row.Slot == 12 {
+			if row.Extra != 250 && row.Extra != 251 {
+				t.Fatalf("钩位 canonical extra 应 250/251，实得 %d", row.Extra)
 			}
 			sinkRows = append(sinkRows, row.Ordinal)
 		}
@@ -93,34 +93,34 @@ func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
 		t.Fatalf("应按 GUID 精确拆下第二件沉子，实得 %+v", res)
 	}
 	rodRow, _ = db.GetItemByGUID(ctx, rod.GUID)
-	remaining := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 29)
+	remaining := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 12)
 	if len(remaining) != 1 || remaining[0].GUID != sinkA.GUID {
 		t.Fatalf("拆第二件不得影响第一件，实得 %+v", remaining)
 	}
 	rowB, _ := db.GetItemByGUID(ctx, sinkB.GUID)
 	if rowB == nil || rowB.Container != "backpack" || rowB.RigGUID != "" {
-		t.Fatalf("第二件沉子应退回背包，实得 %+v", rowB)
+		t.Fatalf("第二件鱼钩应退回背包，实得 %+v", rowB)
 	}
 	rowA, _ := db.GetItemByGUID(ctx, sinkA.GUID)
 	if rowA == nil || rowA.Container != "rig" || rowA.RigGUID != rod.GUID {
-		t.Fatalf("第一件沉子应保持挂载，实得 %+v", rowA)
+		t.Fatalf("第一件鱼钩应保持挂载，实得 %+v", rowA)
 	}
 	rows, _ = db.ListRigComponents(ctx, rod.GUID)
-	rows = slices.DeleteFunc(rows, func(row *store.RigComponent) bool { return row.Slot != 29 })
+	rows = slices.DeleteFunc(rows, func(row *store.RigComponent) bool { return row.Slot != 12 })
 	if len(rows) != 1 || rows[0].GUID != sinkA.GUID || rows[0].Ordinal != 0 {
 		t.Fatalf("派生表回算后只应剩第一件，实得 %+v", rows)
 	}
 
 	// 装回第二件后执行 remove_all；ordinal 重排时仍必须拆掉两件。
-	srv.rigSetComponent(ctx, uid, rod.GUID, 0, sinkB.GUID, 200,
+	srv.rigSetComponent(ctx, uid, rod.GUID, 0, sinkB.GUID, 251,
 		rigSetOpts{ParentType: familyRod, EnforceCategory: true})
 	results := srv.rigRemoveAll(ctx, uid, rod.GUID)
 	if len(results) < 2 {
-		t.Fatalf("remove_all 应返回两件沉子，实得 %+v", results)
+		t.Fatalf("remove_all 应返回两件鱼钩，实得 %+v", results)
 	}
 	rodRow, _ = db.GetItemByGUID(ctx, rod.GUID)
-	if got := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 29); len(got) != 0 {
-		t.Fatalf("remove_all 后 f5 不应剩沉子，实得 %+v", got)
+	if got := rigTestCategoryComps(t, rigStoredF5(t, rodRow), 12); len(got) != 0 {
+		t.Fatalf("remove_all 后 f5 不应剩鱼钩，实得 %+v", got)
 	}
 	for _, guid := range []string{sinkA.GUID, sinkB.GUID} {
 		row, _ := db.GetItemByGUID(ctx, guid)
