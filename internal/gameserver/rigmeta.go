@@ -72,20 +72,6 @@ var rigTypeLureFamily = map[int64]bool{
 	19: true, 20: true, 22: true,
 }
 
-// baitFullStackRigTypes 钩饵整包装填的适用钓组。浮钓族与沉底族都是天然饵
-// 配饵：挂载背包里的一整包饵（qty>1），咬口逐份扣减，避免每口试探就吃光
-// 单份饵、逼玩家反复重挂。路亚族假饵非计件不走整包；海钓族钓组多配非计件
-// 死饵，暂不纳入。多钩水底钓组（钩组件 >1）在 baitFullStackRod 里按钩数
-// 降级回逐份拆分，保持一钩一份的配饵习惯。
-var baitFullStackRigTypes = map[int64]bool{
-	// 浮钓族
-	1: true, 2: true, 3: true, 4: true, 21: true, 30: true, 31: true,
-	// 沉底族（同 bottomRigTypes）
-	12: true, 13: true, 14: true, 15: true, 16: true, 17: true, 18: true,
-	23: true, 24: true, 25: true, 26: true, 27: true, 28: true, 29: true,
-	32: true, 34: true,
-}
-
 // defaultRigTypeForRod 按竿型选择第一个有资源名映射的允许钓组。
 func (s *Server) defaultRigTypeForRod(ctx context.Context, rodItemID string) int64 {
 	def, err := s.DB.GetItemDefByItemID(ctx, rodItemID)

@@ -35,8 +35,8 @@ func baitTestRod(t *testing.T, s *Server) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// 钉在路亚族 SimpleJig：钩槽与沉底族一致（idx 250），但不在整包
-	// 门卫家族里，保持本文件验证的逐份拆分配饵路径。
+	// 钉在路亚族 SimpleJig：钩槽与沉底族一致（idx 250），
+	// 保持本文件验证的逐份拆分配饵路径。
 	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 6) {
 		t.Fatal("rigSetType 失败")
 	}

@@ -115,8 +115,7 @@ func TestDetachReturnsToBackpack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("造竿失败: %v", err)
 	}
-	// 钉在路亚族 SimpleJig：本用例验证计件拆分子实例的拆卸回退，
-	// 不在整包门卫家族内才能拆出子实例。
+	// 钉在路亚族 SimpleJig：本用例验证计件拆分子实例的拆卸回退。
 	if !srv.rigSetType(ctx, uid, rod.GUID, 6) {
 		t.Fatal("rigSetType 失败")
 	}

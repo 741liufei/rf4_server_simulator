@@ -827,49 +827,62 @@ func splitSourceGUID(row *store.Item) string {
 }
 
 // isSplitChild 判断实例是否为计件物品拆分出的挂载子实例：
-// 计件品类、数量为 1，且来源堆 GUID 非空。
+// 计件品类且携带来源堆 GUID（数量可为挂饵方式拆出的多份）。
 func (s *Server) isSplitChild(ctx context.Context, row *store.Item) bool {
 	if row == nil || !s.stackableItem(ctx, row) {
-		return false
-	}
-	if s.stackCountOf(ctx, row) != 1 {
 		return false
 	}
 	return len(splitSourceGUID(row)) == 32
 }
 
-// splitMountableChild 将计件物品拆出一个数量为 1 的挂载子实例，
-// 返回应写入钓组的 GUID，并把来源堆数量减一。
-// 子实例保存来源堆 GUID；其自身 GUID 字段必须改成新 GUID，否则客户端索引冲突。
-func (s *Server) splitMountableChild(ctx context.Context, uid int64, parentGUID, itemGUID string) string {
+// splitMountableChild 将计件物品拆出 n 份挂载子实例（n=挂饵方式的一钩份数，
+// 见 baitHookCount），返回 (子实例 GUID, 已删除来源堆 GUID)。
+//   - 来源堆仍有剩余：保留在背包、数量减 n，子实例携带来源堆引用（f2），
+//     同种饵还能挂到其他竿上；
+//   - 整堆上钩：删除来源堆并清掉子实例的来源堆引用（与 materializeHanditemChild
+//     同款语义，避免客户端移除来源堆时级联删除钩上子实例）。
+//
+// 子实例自身 GUID 字段必须改成新 GUID，否则客户端索引冲突。
+func (s *Server) splitMountableChild(ctx context.Context, uid int64, parentGUID, itemGUID string, n int64) (string, string) {
 	row, err := s.DB.GetItemByGUID(ctx, itemGUID)
 	if err != nil || row == nil {
-		return itemGUID
+		return itemGUID, ""
 	}
 	if !s.stackableItem(ctx, row) {
-		return itemGUID // 非计件物品（钓线的同名字段是"米数"）不拆，整件挂装
+		return itemGUID, "" // 非计件物品（钓线的同名字段是"米数"）不拆，整件挂装
 	}
 	count := s.stackCountOf(ctx, row)
 	if count <= 1 {
-		return itemGUID
+		return itemGUID, ""
 	}
+	if n < 1 {
+		n = 1
+	}
+	if n > count {
+		n = count
+	}
+	fullTake := n >= count
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
-		return itemGUID
+		return itemGUID, ""
 	}
 	childFields := cloneFields(fields)
 	if childFields == nil {
-		return itemGUID
+		return itemGUID, ""
 	}
 	childGUID := NewItemGUID()
 	if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(childFields) {
-		childFields[q].Num = ptrU64(1) // 数量=1
+		childFields[q].Num = ptrU64(uint64(n)) // 数量=一钩份数
 	}
 	if p := fieldIdxByCS(row.WireClass, csParent); p >= 0 && p < len(childFields) {
 		childFields[p].Hex = parentGUID // parent=竿
 	}
 	if si := fieldIdxByCS(row.WireClass, csSplitSource); si >= 0 && si < len(childFields) {
-		childFields[si].Hex = itemGUID // f2=来源堆 guid
+		if fullTake {
+			childFields[si].Hex = "" // 整堆上钩不写来源堆引用（见函数头注）
+		} else {
+			childFields[si].Hex = itemGUID // f2=来源堆 guid
+		}
 	}
 	if c := fieldIdxByCS(row.WireClass, csCreated); c >= 0 && c < len(childFields) {
 		childFields[c].Num = ptrU64(uint64(netTicksNow())) // 创建时间=现在
@@ -879,24 +892,30 @@ func (s *Server) splitMountableChild(ctx context.Context, uid int64, parentGUID,
 	}
 	fj, jerr := FieldsToJSON(childFields)
 	if jerr != nil {
-		return itemGUID
+		return itemGUID, ""
 	}
 	child := &store.Item{
 		GUID: childGUID, UID: uid, ItemID: row.ItemID, NumericID: row.NumericID,
 		WireClass: row.WireClass, TypeID: row.TypeID, Container: "rig", Slot: 0,
-		RigGUID: parentGUID, Qty: 1, FieldsJSON: fj,
+		RigGUID: parentGUID, Qty: n, FieldsJSON: fj,
 		Durability: row.Durability, Workmanship: row.Workmanship,
 		CreatedTS: float64(time.Now().Unix()),
 	}
 	if err := s.DB.InsertItem(ctx, child); err != nil {
 		s.log.Warn("计件挂载拆分失败", "item", shortGUID(itemGUID), "err", err)
-		return itemGUID
+		return itemGUID, ""
 	}
-	// 来源堆数量减一，并在更新段返回剩余数量。
-	s.setStackCount(ctx, row, count-1)
-	s.log.Info("计件物品挂载拆分", "item", shortGUID(itemGUID), "count", count,
+	if fullTake {
+		_ = s.DB.DeleteItems(ctx, []string{itemGUID})
+		s.log.Info("计件物品整堆上钩", "item", shortGUID(itemGUID), "count", count,
+			"child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
+		return childGUID, itemGUID
+	}
+	// 来源堆数量减 n，剩余留在背包（调用方负责推更新树）。
+	s.setStackCount(ctx, row, count-n)
+	s.log.Info("计件物品挂载拆分", "item", shortGUID(itemGUID), "count", count, "take", n,
 		"child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
-	return childGUID
+	return childGUID, ""
 }
 
 // materializeHanditemChild 将整堆装填物搬入新的子实例。
@@ -959,33 +978,6 @@ func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parent
 	s.log.Info("手持物装填：整堆搬进新子实例", "src", shortGUID(itemGUID),
 		"count", count, "child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
 	return childGUID, itemGUID
-}
-
-// baitFullStackRod 判断 parentGUID 是否适用钩饵整包装填。
-// 浮钓/沉底族单钩钓组整包上饵；多钩钓组（模板钩槽数 >1 或实际挂载钩 >1，
-// 如串钩、多钩水底）保持一钩一份的逐份拆分配饵。竿缺失或钓组类型未知时
-// 保守返回 false，维持原拆分路径。
-func (s *Server) baitFullStackRod(ctx context.Context, parentGUID string) bool {
-	if s.DB == nil || parentGUID == "" {
-		return false
-	}
-	prow, err := s.DB.GetItemByGUID(ctx, parentGUID)
-	if err != nil || prow == nil {
-		return false
-	}
-	rigType := s.rigTypeOfItem(ctx, prow)
-	if !baitFullStackRigTypes[rigType] {
-		return false
-	}
-	if len(slotIndicesFor(rigType, catHook)) > 1 || len(slotIndicesFor(rigType, catLure)) > 1 {
-		return false
-	}
-	// 模板可能不反映实际挂载：已挂第二口钩时同样降级（与
-	// consumeBaitEvent 的多钩分支用同一计数方式）。
-	if comps := s.storedRigComponents(ctx, parentGUID); len(rigCompKeysOfCategory(comps, catHook)) > 1 {
-		return false
-	}
-	return true
 }
 
 // setHanditemLoadedRef 将手持工具字段 f1 设为当前装填物 GUID；空字符串表示清空。
@@ -1126,19 +1118,39 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 	var removed []string
 	materialized := false
 	// 计件物品挂载分三种：
-	//   * 浮钓/沉底单钩饵料（qty>1）：整包装填进新子实例，咬口逐份扣减；
-	//   * 其余计件物品：拆出数量为 1 的挂载子实例，并刷新来源堆；
-	//   * 手持工具：整堆装填搬进新子实例。
-	if opts.SplitStack && itemCat == catBait && s.stackCountOf(ctx, it) > 1 && s.baitFullStackRod(ctx, parentGUID) {
-		g, srcRemoved := s.materializeHanditemChild(ctx, uid, parentGUID, itemGUID)
+	//   * 饵料（qty>1）：按玩家在该竿选定的挂饵方式拆份数上钩（官方模型，
+	//     baitHookCount）：默认一钩一份；玉米浮+蛆15 拆 15 份蛆等。
+	//     来源堆保留在背包，同种饵可挂到其他竿；咬口由 consumeBaitEvent
+	//     逐份扣减，用尽后写 rebait 记录、抛竿前自动补挂。
+	//   * 其余计件物品（钩、窝料等）：拆出数量为 1 的挂载子实例；
+	//     沉底族多钩需按钩逐份配饵。
+	//   * 手持工具（13/x）：整堆装填搬进新子实例（materializeHanditemChild
+	//     先例）。
+	// 注：曾短暂实现过浮钓/沉底单钩「整包装填」（来源堆整包搬上钩），
+	// 被反编译证伪：客户端发丝族按子实例数量渲染并计重，整包上钩直接超重；
+	// 整包删源栈还会让第二根竿选不到同种饵。已回归官方的按挂饵方式数量拆分。
+	if opts.SplitStack && itemCat == catBait && s.stackCountOf(ctx, it) > 1 {
+		n := s.baitHookCount(ctx, parentGUID, it)
+		sourceGUID := itemGUID
+		g, srcRemoved := s.splitMountableChild(ctx, uid, parentGUID, itemGUID, n)
 		itemGUID = g
 		if srcRemoved != "" {
 			removed = append(removed, srcRemoved)
 			materialized = true
+		} else if itemGUID != sourceGUID {
+			// 来源堆留在背包：数量减了 n。客户端只按「新增/移除」更新背包
+			// 计数，这里同时提供新树（回包 f1）和回包后的移除+重加刷新。
+			if src, serr := s.DB.GetItemByGUID(ctx, sourceGUID); serr == nil && src != nil {
+				if t, terr := s.itemTree(ctx, src); terr == nil {
+					res.SourceGUID = sourceGUID
+					res.SourceTree = t
+					updated = append(updated, t)
+				}
+			}
 		}
 	} else if opts.SplitStack {
 		sourceGUID := itemGUID
-		itemGUID = s.splitMountableChild(ctx, uid, parentGUID, itemGUID)
+		itemGUID, _ = s.splitMountableChild(ctx, uid, parentGUID, itemGUID, 1)
 		if itemGUID != sourceGUID {
 			// 拆分把来源堆数量减一。客户端只按「新增/移除」更新背包计数，
 			// 这里同时提供新树（回包 f1）和回包后的移除+重加刷新。
@@ -1168,13 +1180,17 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 	if oldGUID != "" && oldGUID != itemGUID {
 		if prev, oerr := s.DB.GetItemByGUID(ctx, oldGUID); oerr == nil && prev != nil {
 			if s.refundableSplitChild(ctx, prev) {
-				// 原有挂载是拆分子实例：整条删除，并把 1 个单位退回来源堆。
+				// 原有挂载是拆分子实例：整条删除，并把钩上剩余份数退回来源堆。
 				srcGUID := splitSourceGUID(prev)
+				refund := s.stackCountOf(ctx, prev)
+				if refund < 1 {
+					refund = 1
+				}
 				_ = s.DB.DeleteItems(ctx, []string{oldGUID})
 				removed = append(removed, oldGUID)
 				if srcGUID != "" {
 					if src, serr := s.DB.GetItemByGUID(ctx, srcGUID); serr == nil && src != nil {
-						s.setStackCount(ctx, src, s.stackCountOf(ctx, src)+1)
+						s.setStackCount(ctx, src, s.stackCountOf(ctx, src)+refund)
 						if fresh, ferr := s.DB.GetItemByGUID(ctx, srcGUID); ferr == nil && fresh != nil {
 							if t, terr := s.itemTree(ctx, fresh); terr == nil {
 								updated = append(updated, t)
@@ -1304,6 +1320,14 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 		return ordinal, comps[rigCompKey(slot, ordinal)].GUID
 	}
 	idxs := uniqueIndices(slotIndicesFor(s.rigTypeForWrite(ctx, parentGUID), slot))
+	limit := len(idxs)
+	if slot == catLure && limit < 2 {
+		if row, err := s.DB.GetItemByGUID(ctx, itemGUID); err == nil && row != nil {
+			if n := s.baitMountComponentLimit(ctx, parentGUID, row); n > int64(limit) {
+				limit = int(n)
+			}
+		}
+	}
 	if extra != 0 {
 		matched := make([]int, 0, len(idxs))
 		for pos, idx := range idxs {
@@ -1316,12 +1340,11 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 				return int64(pos), ""
 			}
 		}
-		if len(matched) > 0 {
+		if len(matched) > 0 && limit <= len(idxs) {
 			pos := matched[0]
 			return int64(pos), comps[rigCompKey(slot, int64(pos))].GUID
 		}
 	}
-	limit := len(idxs)
 	if limit < 1 {
 		limit = 1
 	}
@@ -1631,7 +1654,7 @@ func (s *Server) rigRemoveItemComponent(ctx context.Context, uid int64, parentGU
 }
 
 // rigDetach 从父对象摘除一件组件。
-// 拆分子实例整条删除并把一个单位退回来源堆；普通物品退回背包并清空父引用。
+// 拆分子实例整条删除并把钩上剩余份数退回来源堆；普通物品退回背包并清空父引用。
 // 两种退回树都通过 rigDetachResult 进入响应 f1。
 func (s *Server) rigDetach(ctx context.Context, parentGUID string, slot int64, compGUID string) *rigDetachResult {
 	comps := s.storedRigComponents(ctx, parentGUID)
@@ -1650,13 +1673,17 @@ func (s *Server) rigDetachAt(ctx context.Context, parentGUID string, slot, ordin
 	if compGUID != "" {
 		if prev, oerr := s.DB.GetItemByGUID(ctx, compGUID); oerr == nil && prev != nil {
 			if s.refundableSplitChild(ctx, prev) {
-				// 拆分子实例整条删除，并把一个单位退回来源堆。
+				// 拆分子实例整条删除，并把钩上剩余份数退回来源堆。
 				srcGUID := splitSourceGUID(prev)
+				refund := s.stackCountOf(ctx, prev)
+				if refund < 1 {
+					refund = 1
+				}
 				_ = s.DB.DeleteItems(ctx, []string{compGUID})
 				res.DeletedGUID = compGUID
 				if srcGUID != "" {
 					if src, serr := s.DB.GetItemByGUID(ctx, srcGUID); serr == nil && src != nil {
-						s.setStackCount(ctx, src, s.stackCountOf(ctx, src)+1)
+						s.setStackCount(ctx, src, s.stackCountOf(ctx, src)+refund)
 						if fresh, ferr := s.DB.GetItemByGUID(ctx, srcGUID); ferr == nil && fresh != nil {
 							res.SourceTree, _ = s.itemTree(ctx, fresh)
 							res.SourceGUID = srcGUID
