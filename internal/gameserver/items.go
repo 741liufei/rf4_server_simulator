@@ -70,6 +70,11 @@ var categoryWireClass = map[int64]wireClassEntry{
 	59: {"iknkgeomkip", 3200},  // Cobra 打窝器
 	60: {"ifnaghdaolg", 3201},  // Slingshot 弹弓
 	79: {"abmokghdbhf", 11500}, // 竿架（rod pod），客户端模型 pphmpibfgea
+	// 提取物/蘸饵（dip）与竿架同一个客户端 UI 家族
+	// dfignppokoh<pphmpibfgea, oelnaeldlla>（lillemolakn）：背包格子把物品
+	// DTO 强转成 pphmpibfgea（Player.log InvalidCastException 实证 456 次），
+	// 早期没有映射时落成钓线类会卡死整个背包加载。
+	58: {"abmokghdbhf", 11500},
 	80: {"ipdakkbfoja", 13301}, // 技能书（客户端按 wrapper 承载书目配置）
 	81: {"kbpmmclfipg", 1470},  // 渔轮电机（装在轮 f14 扩展槽，DTO odlknjlbooh）
 }
@@ -101,6 +106,33 @@ func fieldOpAt(class string, idx int) string {
 		return ""
 	}
 	return ops[idx]
+}
+
+// itemQtyFieldIdx 可堆叠数量槽 idx。多数实例类的数量字段就叫 ljnnpokapig；
+// abmokghdbhf（竿架/提取物族 11500）的数量在 meta 基类槽 dnmfciolgep（f13）。
+func itemQtyFieldIdx(class string) int {
+	if idx := fieldIdxByCS(class, csQty); idx >= 0 {
+		return idx
+	}
+	if class == "abmokghdbhf" {
+		return fieldIdxByCS(class, "dnmfciolgep")
+	}
+	return -1
+}
+
+// writeItemQty 把可堆叠数量写进实例数量槽；abmokghdbhf 家族的 UI 计数
+// 另读 f0 miecmmbpolk（lillemolakn.medpgjlibog），两处一起写。
+func writeItemQty(class string, obj *proto.Value, qty uint64) {
+	idx := itemQtyFieldIdx(class)
+	if idx < 0 || idx >= len(obj.Fields) {
+		return
+	}
+	obj.Fields[idx].Num = ptrU64(qty)
+	if class == "abmokghdbhf" {
+		if f0 := fieldIdxByCS(class, "miecmmbpolk"); f0 >= 0 && f0 < len(obj.Fields) {
+			obj.Fields[f0].Num = ptrU64(qty)
+		}
+	}
 }
 
 // fieldIsFloat 该位置的 op 是否浮点。
@@ -781,6 +813,16 @@ func (s *Server) applyDefAttrs(def *store.ItemDef, class string, obj *proto.Valu
 			}
 		}
 	}
+	// 提取物/竿架族（abmokghdbhf）的数量在定义里叫 ljnnpokapig，实例字段是
+	// meta 基类的剩余数量槽 dnmfciolgep（f13），按别名映射；家族 UI 计数
+	// f0 miecmmbpolk 由 writeItemQty 镜像。
+	if class == "abmokghdbhf" {
+		if v, ok := attrs["ljnnpokapig"]; ok {
+			if _, exists := attrs["dnmfciolgep"]; !exists {
+				attrs["dnmfciolgep"] = v
+			}
+		}
+	}
 	for cs, val := range attrs {
 		idx := fieldIdxByCS(class, cs)
 		if idx < 0 || idx >= len(obj.Fields) {
@@ -926,7 +968,7 @@ func netTicksNow() int64 {
 // reclassifyCategories 限定允许改写的类别：这些类别的实例在客户端是独立 DTO，
 // 早期没有映射时被创建成钓线类 ohciikgjghe，必须换类才能正常渲染。
 // 新增映射时可把类别加进来，启动修复会对存量物品重写一次。
-var reclassifyCategories = map[int64]bool{41: true, 42: true, 47: true, 57: true}
+var reclassifyCategories = map[int64]bool{41: true, 42: true, 47: true, 57: true, 58: true, 79: true}
 
 func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *store.ItemDef) (bool, error) {
 	if it == nil || def == nil || !reclassifyCategories[def.Category] {
@@ -971,9 +1013,7 @@ func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *
 	setNum(csNumericID, uint64(def.NumericID))
 	rowQty := it.Qty
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
-			obj.Fields[idx].Num = ptrU64(uint64(rowQty))
-		}
+		writeItemQty(cls.Class, obj, uint64(rowQty))
 	}
 	workmanship := it.Workmanship
 	durability := it.Durability

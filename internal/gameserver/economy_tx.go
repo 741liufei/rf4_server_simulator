@@ -230,7 +230,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 	setNum(csNumericID, uint64(def.NumericID))
 	rowQty := int64(1)
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
+		if idx := itemQtyFieldIdx(cls.Class); idx >= 0 {
 			defQty := u64Of(obj.Fields[idx].Num)
 			if defQty == 0 {
 				defQty = 1
@@ -239,7 +239,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 				units = 1
 			}
 			fieldQty := defQty * uint64(units)
-			obj.Fields[idx].Num = ptrU64(fieldQty)
+			writeItemQty(cls.Class, obj, fieldQty)
 			rowQty = int64(fieldQty)
 		}
 	}
