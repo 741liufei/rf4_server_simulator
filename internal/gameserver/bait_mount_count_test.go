@@ -126,6 +126,10 @@ func TestBaitMountCountFollowsMountType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 蛆组合挂法只属于底蛆钓组（29）：先换钓组再选挂法（钓组↔挂法联动）。
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 29) {
+		t.Fatal("rigSetType 失败")
+	}
 	// 玉米浮+蛆15（262144）：蛆一钩 15 份。
 	saveMountTypeForTest(t, s, rod.GUID, 262144)
 	src, child := mountBaitForCountTest(t, s, rod.GUID, "maggot", 48)
@@ -151,6 +155,10 @@ func TestBaitMountFullTakeClearsSourceRef(t *testing.T) {
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 玉米浮族属于 pop-up 钓组（26）：先换钓组再选挂法。
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 26) {
+		t.Fatal("rigSetType 失败")
 	}
 	// 玉米浮×2（1024），背包恰好 2 颗：整堆上钩，来源堆删除且不携带引用。
 	saveMountTypeForTest(t, s, rod.GUID, 1024)
@@ -205,6 +213,10 @@ func TestBaitMountExhaustWritesRebaitAndAutoRemountsSameCount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 蛆组合挂法属于底蛆钓组（29）：先换钓组再选挂法。
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 29) {
+		t.Fatal("rigSetType 失败")
+	}
 	saveMountTypeForTest(t, s, rod.GUID, 65536) // 玉米浮+蛆5
 	_, child := mountBaitForCountTest(t, s, rod.GUID, "bloodworm", 5)
 	for i := 1; i <= 5; i++ {
@@ -250,6 +262,10 @@ func TestBaitMountUnmountRefundsRemainder(t *testing.T) {
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// 蛆组合挂法属于底蛆钓组（29）：先换钓组再选挂法。
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 29) {
+		t.Fatal("rigSetType 失败")
 	}
 	saveMountTypeForTest(t, s, rod.GUID, 262144) // 玉米浮+蛆15
 	src, child := mountBaitForCountTest(t, s, rod.GUID, "maggot", 20)
