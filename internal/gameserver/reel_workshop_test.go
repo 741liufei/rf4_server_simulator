@@ -201,9 +201,9 @@ func TestReelWorkshopStatsSurviveRelogTreeBuild(t *testing.T) {
 	if !ok || gearDef == nil || gearDef.ItemID != "rgm_zmn_jet_jsg-r" {
 		t.Fatalf("重登后齿轮=%v ok=%v，期望保留JSG-R", gearDef, ok)
 	}
-	wantRatio := itemDefF32(gearDef, gearAttrRatio) * fresh.Workmanship
-	if math.Abs(gotRatio-wantRatio) > 0.001 {
-		t.Fatalf("重登后传动比=%f，期望保留改装值%f", gotRatio, wantRatio)
+	wantStrength := srv.reelBaseDragFromRow(ctx, fresh)
+	if math.Abs(gotRatio-wantStrength) > 0.001 {
+		t.Fatalf("重登后轮子力度上限=%f，期望当前摩擦片制动力%f，不能是传动比%f", gotRatio, wantStrength, itemDefF32(gearDef, gearAttrRatio)*fresh.Workmanship)
 	}
 
 	drag, dragDef, _, ok := srv.selectedReelPart(ctx, tree.Fields, 9)

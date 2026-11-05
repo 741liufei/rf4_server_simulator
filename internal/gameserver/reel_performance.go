@@ -93,7 +93,20 @@ func (s *Server) selectedReelPart(ctx context.Context, fields []proto.Field, cat
 
 // reelBaseDragFromRow 从当前已安装的摩擦片实例读取基础制动力。
 // 老数据的子实例若缺物理字段，会回退到所选零件定义，而不是母轮出厂定义。
+// 零件字段记录的是零件自身成色；母轮顶层受力值还要乘母轮成色。
 func (s *Server) reelBaseDragFromRow(ctx context.Context, row *store.Item) float64 {
+	if row == nil {
+		return 0
+	}
+	drag := s.reelInstalledDragFromRow(ctx, row)
+	if drag <= 0 || row.Workmanship <= 0 {
+		return drag
+	}
+	return drag * row.Workmanship
+}
+
+// reelInstalledDragFromRow 读取当前摩擦片实例自身的物理制动力（未乘母轮成色）。
+func (s *Server) reelInstalledDragFromRow(ctx context.Context, row *store.Item) float64 {
 	if row == nil {
 		return 0
 	}

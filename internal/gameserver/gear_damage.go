@@ -416,9 +416,15 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	if spec.RodPowerKg > 0 {
 		cs = append(cs, candidate{part: "rod", guid: rodGUID, category: gearCatRod, kg: spec.RodPowerKg, priority: 3})
 	}
-	if spec.ReelPresent && ids.ReelGUID != "" && spec.ReelDragKg > 0 {
+	// 渔轮一项按当前摩擦档位的制动力参与比较：1~29 档一旦超过就打滑放线，
+	// 竿和线根本承受不到更高的张力，只有第 30 档锁轮才可能压断更硬的件。
+	reelKg := spec.ReelCurrentDragKg
+	if reelKg <= 0 {
+		reelKg = spec.ReelDragKg
+	}
+	if spec.ReelPresent && ids.ReelGUID != "" && reelKg > 0 {
 		cs = append(cs, candidate{part: "reel", guid: ids.ReelGUID, category: gearCatReel,
-			kg: spec.ReelDragKg, priority: 2})
+			kg: reelKg, priority: 2})
 	}
 
 	if len(cs) > 0 {
@@ -427,6 +433,18 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 			if c.kg < best.kg-1e-9 || (math.Abs(c.kg-best.kg) <= 1e-9 && c.priority < best.priority) {
 				best = c
 			}
+		}
+		setting, hasSetting := s.rodReelDragSetting(ctx, rodGUID)
+		if !hasSetting {
+			setting = maxReelDragStop
+		}
+		if s.log != nil {
+			kg2 := func(v float64) float64 { return math.Round(v*100) / 100 }
+			s.log.Info("17/9 断件裁决", "rod", guidShort(rodGUID), "part", best.part,
+				"drag_setting", setting, "kg", kg2(best.kg), "rod_kg", kg2(spec.RodPowerKg),
+				"line_kg", kg2(spec.LineStrengthKg), "leader_kg", kg2(spec.LeaderStrengthKg),
+				"reel_kg", kg2(reelKg), "reel_lock_kg", kg2(spec.ReelDragKg),
+				"reported", guidShort(reportedGUID))
 		}
 		return gearBreakDecision{Part: best.part, GUID: best.guid, Category: best.category}, nil
 	}
