@@ -14,7 +14,7 @@ func registerDynamicProtocolHandlers(d *Dispatch) {
 	d.Register(13, 5, hDynamicHanditemThrow)
 	d.Register(13, 6, hDynamicRigSnapshot)
 	d.Register(17, 9, hDynamicRodBreak)
-	d.Register(17, 10, hDynamicRigSnapshot)
+	d.Register(17, 10, hRodCutLine)
 	d.Register(17, 11, hDynamicRigSnapshot)
 	d.Register(3, 40, hDynamicRewardEntry)
 	d.Register(3, 41, hDynamicEquippedItems)
@@ -84,7 +84,7 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 	return body, true
 }
 
-// hDynamicRigSnapshot 为 13/6、17/10、17/11 返回当前容器状态的 800 全量快照。
+// hDynamicRigSnapshot 为 13/6、17/11 返回当前容器状态的 800 全量快照。
 func hDynamicRigSnapshot(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv
 	if !srv.requireDB(ctx) {
@@ -200,6 +200,95 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 	body, err := proto.EncodeValue(obj, ctx.Sess.Table())
 	if err != nil {
 		return nil, false
+	}
+	return body, true
+}
+
+// hRodCutLine 17/10 rod/cutline：玩家按 X 主动剪线。
+// 请求参数为 [竿 GUID, 本次放出的线长（米）]，响应 800 容器全量快照。
+// 语义：放出多少米就从竿上主线剩余长度里扣多少米，主线以下的前导、子线、
+// 钩、饵、拟饵、浮漂全部随线丢失；主线扣到 0 时整条消失。
+// 客户端只负责播剪线动画，物品模型仍以服务端为准。800 快照的三段语义是
+// f0 新增物品 / f1 更新物品 / f2 移除 GUID（见 buildRigSnapshot800），剪线没有新物品，
+// 所以竿和主线走 f1、剪掉的钩组走 f2。不能把整个背包塞进 f0：那会让客户端把
+// 已有物品当新物品重新入库，表现为剪掉的配件又冒出来、甚至落进背包。
+// 回包之后再补 4/21 删除和 4/22 竿线刷新，保证搏鱼中的模型也同步。
+func hRodCutLine(ctx *Ctx) ([]byte, bool) {
+	srv := ctx.Sess.Srv
+	if !srv.requireDB(ctx) {
+		return nil, false
+	}
+	snapshot := func() ([]byte, bool) {
+		body := srv.rigFullSnapshotBody(ctx)
+		if len(body) == 0 || body[0] != 0x01 {
+			return nil, false
+		}
+		return body, true
+	}
+	rodGUID, cutM := parseRodGuidInt(ctx.Tree)
+	rodGUID = normalizeDynamicGUID(rodGUID)
+	if cutM < 0 {
+		cutM = 0
+	}
+	st := srv.stateFor(ctx.Sess.Userid)
+	if rodGUID == "" || rodGUID == zeroGUID {
+		st.mu.Lock()
+		rodGUID = normalizeDynamicGUID(st.GearGuid)
+		st.mu.Unlock()
+	}
+	st.mu.Lock()
+	inWater := st.CastActive || st.InWater
+	pending := st.Pending
+	st.mu.Unlock()
+	if rodGUID == "" || rodGUID == zeroGUID {
+		ctx.Log.Warn("17/10 剪线被拒：没有在手的鱼竿", "cut_m", cutM)
+		return snapshot()
+	}
+	// 没有放线时不接受剪线：客户端误触也不该把整套钩组清空。
+	if cutM <= 0 && !inWater {
+		ctx.Log.Info("17/10 剪线被拒：当前没有放线", "rod", shortGUID(rodGUID))
+		return snapshot()
+	}
+	outcome, err := srv.cutLineTx(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID, cutM)
+	if err != nil {
+		ctx.Log.Warn("17/10 剪线失败", "rod", shortGUID(rodGUID), "cut_m", cutM, "err", err)
+		return snapshot()
+	}
+	// 线已剪断，本次抛投到此结束；线上还挂着鱼就算跑鱼。
+	st.mu.Lock()
+	if st.biteTimer != nil {
+		st.biteTimer.Stop()
+	}
+	st.Pending = nil
+	st.CastActive = false
+	st.Hooked = false
+	st.Resolved = true
+	st.InWater = false
+	st.NeedBite = false
+	st.mu.Unlock()
+	if pending != nil {
+		srv.bumpFishingCounter(ctx.Sess.Userid, "escapes")
+		srv.notifyFishEscape(ctx.Sess, pending, "剪线跑鱼")
+	}
+	ctx.Log.Info("17/10 剪线", "rod", shortGUID(rodGUID), "cut_m", cutM,
+		"line_loss_m", outcome.LineLossM, "line_left", srv.rodLineLengthLeft(ctx.Sess.pushCtx(), rodGUID),
+		"removed", len(outcome.RemovedGUIDs))
+	removed := append([]string(nil), outcome.RemovedGUIDs...)
+	stackRefresh := append([]string(nil), outcome.StackRefreshGUIDs...)
+	ctx.AfterResponse(func() {
+		if len(removed) > 0 {
+			ctx.Sess.Push4_21(removed)
+		}
+		if len(stackRefresh) > 0 {
+			// 与正常吃饵一致：4/22 只推变更的背包堆，不能夹带全套竿线。
+			ctx.Sess.Push4_22ItemGUIDs(stackRefresh)
+		} else {
+			ctx.Sess.Push4_22Full()
+		}
+	})
+	body, err := proto.EncodeValue(buildRigSnapshot800(nil, outcome.UpdatedTrees, removed), ctx.Sess.Table())
+	if err != nil || len(body) == 0 || body[0] != 0x01 {
+		return snapshot()
 	}
 	return body, true
 }

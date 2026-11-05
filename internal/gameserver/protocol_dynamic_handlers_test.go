@@ -107,7 +107,12 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 
 	t.Run("snapshot handlers return dynamic 800", func(t *testing.T) {
 		for _, k := range []key2{{13, 6}, {17, 10}, {17, 11}} {
-			body, ok := hDynamicRigSnapshot(dynamicTestCtx(srv, rigRequestTree(t)))
+			// 17/10 剪线已改成自己落库的 handler，回包仍是同一种 800 容器快照。
+			fn := hDynamicRigSnapshot
+			if k == (key2{17, 10}) {
+				fn = hRodCutLine
+			}
+			body, ok := fn(dynamicTestCtx(srv, rigRequestTree(t)))
 			if !ok {
 				t.Fatalf("%d/%d 未处理", k.main, k.sub)
 			}
