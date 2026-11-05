@@ -64,10 +64,77 @@ func TestEffectiveBaitDepthTracksFloatSinkingAndLureLayer(t *testing.T) {
 	if got := lureState.effectiveBaitDepthCMLocked(now); got != 400 {
 		t.Fatalf("路亚水层 0.8 应折算 400cm，实得 %d", got)
 	}
-	if got := classifyLureMotion(0x800); got != "bottom_motionless" {
-		t.Fatalf("0x800 应识别为底层静止，实得 %q", got)
+	if got := classifyLureMotion(0x800); got != "bottom" {
+		t.Fatalf("0x800 应识别为在水底无移动，实得 %q", got)
 	}
 	if got := lureLayerFromMotion(0x1000, .5); got != .08 {
 		t.Fatalf("水面运动应映射到浅层，实得 %f", got)
+	}
+}
+
+func TestClassifyLureMotionUsesClientStatusBits(t *testing.T) {
+	cases := []struct {
+		mask uint32
+		want string
+	}{
+		{0xD1000010, "twitch"},
+		{0xD1000080, "jig"},
+		{0xD1000100, "walk_dog"},
+		{0xD1002000, "bottom_move"},
+		{0xD1004000, "trolling"},
+		{0xD1010000, "stop_go"},
+		{0xD1020000, "hard_twitch"},
+		{0xD1400000, "bottom_layer_move"},
+		{0xD1000400, "steady"},
+	}
+	for _, tc := range cases {
+		if got := classifyLureMotion(tc.mask); got != tc.want {
+			t.Errorf("classifyLureMotion(0x%X)=%q，期望 %q", tc.mask, got, tc.want)
+		}
+	}
+	if got := lureLayerFromMotion(0xD1080000, .1); got != .18 {
+		t.Fatalf("下沉动作应增加水层深度到 .18，实得 %f", got)
+	}
+}
+
+func TestFishEcologyActionWeightFallsBackToLegacyRows(t *testing.T) {
+	legacy := map[string]float64{
+		"moving":                  1.25,
+		"bottom_motionless":       1.4,
+		"water_column_motionless": 1.1,
+		"surface_motionless":      1.2,
+	}
+	cases := []struct {
+		action string
+		want   float64
+	}{
+		{"steady", 1.25},
+		{"bottom_move", 1.4},
+		{"bottom_contact", 1.4},
+		{"surface", 1.2},
+		{"sinking", 1.1},
+	}
+	for _, tc := range cases {
+		got, ok := fishEcologyActionWeight(legacy, tc.action)
+		if !ok || got != tc.want {
+			t.Errorf("action %s weight=%f,%v，期望 %f,true", tc.action, got, ok, tc.want)
+		}
+	}
+}
+
+func TestLurePulseOverridesSteadyReelState(t *testing.T) {
+	now := time.Now()
+	st := &FishState{LureMotionMask: 0xD1000400}
+	st.recordLurePulseLocked(now)
+	if st.LureAction != "twitch" {
+		t.Fatalf("单次右键脉冲应覆盖 steady，得到 %q", st.LureAction)
+	}
+	st.recordLurePulseLocked(now.Add(100 * time.Millisecond))
+	if st.LureAction != "jerk" {
+		t.Fatalf("第二次右键脉冲应为 jerk，得到 %q", st.LureAction)
+	}
+	st.recordLurePulseLocked(now.Add(200 * time.Millisecond))
+	if st.LureAction != "hard_twitch" {
+		t.Fatalf("连续三次右键脉冲应为 hard_twitch，得到 %q", st.LureAction)
 	}
 }

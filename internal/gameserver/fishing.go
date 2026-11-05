@@ -19,50 +19,55 @@ import (
 
 // FishState 保存单个玩家的钓鱼状态，重连后继续使用。
 type FishState struct {
-	mu             fishStateMutex
-	finishMu       sync.Mutex
-	GearGuid       string
-	RigType        int64 // jppmjnahbpo 钓组种类（on_cast 记录；路亚族单独节奏）
-	Loc            string
-	Spot           uint64
-	DepthCM        int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
-	ReelSetting    int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
-	CastActive     bool
-	InWater        bool
-	NeedBite       bool
-	PosX           float64
-	PosZ           float64
-	HasPos         bool
-	CastPosX       float64
-	CastPosZ       float64
-	HasCastPos     bool
-	CastTs         time.Time
-	FallTs         time.Time
-	FallSeen       bool
-	RigSettled     bool
-	TickSeen       bool
-	TickSeq        uint64  // 14/7 f14 客户端 tick 序号（诊断/恢复）
-	LastAnim       uint32  // 14/7 f5 上一次的动画位（仅在变更时打日志）
-	LureMotionMask uint32  // 14/7 f5 原始拟饵运动位，保留给完整状态映射
-	LureAction     string  // 已识别的运动状态；未知时为空
-	LureLayer      float64 // 0=水面，1=水底；路亚实时水层
-	PushSent       bool
-	pushing        *RolledFish // 仅进程内：防止同一尾鱼并发重推
-	Hooked         bool
-	Resolved       bool
-	Pending        *RolledFish
-	biteTimer      *time.Timer
-	pendingTimer   *time.Timer
-	castGeneration uint64
-	biteTicket     uint64
-	pendingTicket  uint64
-	BiteAt         time.Time     // 原定咬钩绝对时刻；硬重启后据此恢复 timer
-	Keepnet        []*RolledFish // 回退缓存（DB 权威）
-	Bait           string
-	LastSkill      int64       // 本次钓鱼大类（1 浮钓 / 2 纺车）
-	Armed          *RolledFish // GM 武装"下一杆必上"（唯一绕过重量上限的路径）
-	Bonus          fishingSkillBonus
-	persist        fishPersistMeta
+	mu              fishStateMutex
+	finishMu        sync.Mutex
+	GearGuid        string
+	RigType         int64 // jppmjnahbpo 钓组种类（on_cast 记录；路亚族单独节奏）
+	Loc             string
+	Spot            uint64
+	DepthCM         int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
+	ReelSetting     int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
+	CastActive      bool
+	InWater         bool
+	NeedBite        bool
+	PosX            float64
+	PosZ            float64
+	HasPos          bool
+	CastPosX        float64
+	CastPosZ        float64
+	HasCastPos      bool
+	CastTs          time.Time
+	FallTs          time.Time
+	FallSeen        bool
+	RigSettled      bool
+	TickSeen        bool
+	TickSeq         uint64  // 14/7 f14 客户端 tick 序号（诊断/恢复）
+	LastAnim        uint32  // 14/7 f5 上一次的动画位（仅在变更时打日志）
+	LureMotionMask  uint32  // 14/7 f5 原始拟饵运动位，保留给完整状态映射
+	LureAction      string  // 已识别的运动状态；未知时为空
+	LureLayer       float64 // 0=水面，1=水底；路亚实时水层
+	LureStateAt     time.Time
+	LurePulseAt     time.Time
+	LurePulseCount  int
+	LureToggleAt    time.Time
+	LureToggleCount int
+	PushSent        bool
+	pushing         *RolledFish // 仅进程内：防止同一尾鱼并发重推
+	Hooked          bool
+	Resolved        bool
+	Pending         *RolledFish
+	biteTimer       *time.Timer
+	pendingTimer    *time.Timer
+	castGeneration  uint64
+	biteTicket      uint64
+	pendingTicket   uint64
+	BiteAt          time.Time     // 原定咬钩绝对时刻；硬重启后据此恢复 timer
+	Keepnet         []*RolledFish // 回退缓存（DB 权威）
+	Bait            string
+	LastSkill       int64       // 本次钓鱼大类（1 浮钓 / 2 纺车）
+	Armed           *RolledFish // GM 武装"下一杆必上"（唯一绕过重量上限的路径）
+	Bonus           fishingSkillBonus
+	persist         fishPersistMeta
 }
 
 // effectiveBaitDepthCMLocked 返回当前有效饵深。手杆从落水开始按固定
@@ -97,6 +102,56 @@ func (st *FishState) effectiveBaitDepthCMLocked(now time.Time) int64 {
 		depth = 0
 	}
 	return depth
+}
+
+func (st *FishState) recordLurePulseLocked(now time.Time) {
+	if st.LurePulseAt.IsZero() || now.Sub(st.LurePulseAt) > 1500*time.Millisecond {
+		st.LurePulseCount = 0
+	}
+	st.LurePulseAt = now
+	st.LurePulseCount++
+	st.updateLureActionLocked(now, st.LureMotionMask, st.LureMotionMask)
+}
+
+// updateLureActionLocked 优先采用客户端已经算好的 kRigAnimationType_* 位；
+// 14/9 右键脉冲用于补齐客户端未放进 14/7 的短抽动作。
+func (st *FishState) updateLureActionLocked(now time.Time, previousMask, mask uint32) {
+	moving := mask&0x400 != 0
+	prevMoving := previousMask&0x400 != 0
+	if moving != prevMoving && moving {
+		if st.LureToggleAt.IsZero() || now.Sub(st.LureToggleAt) > 6*time.Second {
+			st.LureToggleCount = 0
+		}
+		st.LureToggleAt = now
+		st.LureToggleCount++
+	}
+	pulseRecent := !st.LurePulseAt.IsZero() && now.Sub(st.LurePulseAt) <= 1500*time.Millisecond
+	previousAction := st.LureAction
+	action := classifyLureMotion(mask)
+	if action == "steady" || action == "speed_up" {
+		action = ""
+	}
+	switch {
+	case action != "":
+		st.LureAction = action
+	case pulseRecent && st.LurePulseCount >= 3:
+		st.LureAction = "hard_twitch"
+	case pulseRecent && st.LurePulseCount == 2:
+		st.LureAction = "jerk"
+	case pulseRecent:
+		st.LureAction = "twitch"
+	case moving && st.LureToggleCount >= 3:
+		st.LureAction = "stop_go"
+	case moving:
+		st.LureAction = "steady"
+	case st.LureLayer >= .82:
+		st.LureAction = "bottom"
+	default:
+		st.LureAction = "sinking"
+	}
+	if st.LureAction != previousAction {
+		st.LureStateAt = now
+	}
 }
 
 type fishingTimerTicket struct{ generation, sequence uint64 }

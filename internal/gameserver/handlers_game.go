@@ -640,8 +640,12 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 	if !srv.pendingCatchAllowsCast(ctx, st) {
 		return nil, true
 	}
+	reelSetting, hasReelSetting := srv.rodReelDragSetting(ctx.Sess.pushCtx(), gear)
 	st.mu.Lock()
 	st.GearGuid = gear
+	if hasReelSetting {
+		st.ReelSetting = reelSetting
+	}
 	depthCM := st.DepthCM
 	rigType := st.RigType
 	st.mu.Unlock()
@@ -939,10 +943,11 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 			}
 			changed := anim != st.LastAnim
 			st.LastAnim = anim
+			previousMask := st.LureMotionMask
 			st.LureMotionMask = anim
-			st.LureAction = classifyLureMotion(anim)
 			if rigTypeLureFamily[st.RigType] {
 				st.LureLayer = lureLayerFromMotion(anim, st.LureLayer)
+				st.updateLureActionLocked(time.Now(), previousMask, anim)
 			}
 			// 0x200/0x400/0x800/0x1000 是不同水层与姿态的“在水中”位族；岸上不会出现。
 			enterWater := false
@@ -973,7 +978,12 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 			}
 			// 14/7 每帧都会发送，仅在动画位变化时记录日志。
 			if changed {
-				ctx.Log.Info("14/7 钓组动画位", "f5", fmt.Sprintf("0x%X", anim))
+				stateAgeMS := time.Since(st.LureStateAt).Milliseconds()
+				ctx.Log.Info("14/7 钓组动画位", "f5", fmt.Sprintf("0x%X", anim),
+					"mask", fmt.Sprintf("0x%X", anim&lureMotionStatusMask),
+					"action", st.LureAction, "layer", st.LureLayer,
+					"layer_cm", st.effectiveBaitDepthCMLocked(time.Now()),
+					"speed", st.ReelSetting, "state_age_ms", stateAgeMS)
 			}
 		}
 	}
@@ -994,6 +1004,12 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	// 客户端在本地播放杆梢动作，这条命令是 fire-and-forget 通知，不需要回包。
 	// 先原样记录请求体，便于确认两种手势的参数差异。
 	ctx.Log.Info("14/9 抬杆/小刺", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 96))
+	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+	st.mu.Lock()
+	if rigTypeLureFamily[st.RigType] {
+		st.recordLurePulseLocked(time.Now())
+	}
+	st.mu.Unlock()
 	return nil, true
 }
 

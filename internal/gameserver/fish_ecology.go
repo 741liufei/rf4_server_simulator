@@ -101,31 +101,31 @@ func defaultFishEcology(key string) fishEcologyProfile {
 		p.LayerMin, p.LayerPref, p.LayerMax = .15, .5, .95
 		p.Aggression = 1.45
 		p.DietJSON = `{"fish":1.6,"lure":1.5}`
-		p.ActionJSON = `{"moving":1.2,"water_column_motionless":1.05}`
+		p.ActionJSON = `{"steady":1.15,"twitch":1.2,"jerk":1.2,"hard_twitch":1.2}`
 	case has("catfish", "sturgeon", "beluga", "kaluga", "sterlet", "osetr", "burbot", "eel", "lamprey", "flounder", "kambala", "halibut", "cod"):
 		p.LayerMin, p.LayerPref, p.LayerMax = .45, .9, 1
 		p.Aggression = 1.15
 		p.DietJSON = `{"fish":1.5,"worm":1.1}`
-		p.ActionJSON = `{"bottom_motionless":1.25,"moving":1.08}`
+		p.ActionJSON = `{"bottom":1.25,"bottom_move":1.22,"jig":1.2,"steady":1.05}`
 	case has("carp", "bream", "tench", "barbel", "buffalo", "crucian", "roach", "rudd", "dace", "chub", "gudgeon", "bleak"):
 		p.LayerMin, p.LayerPref, p.LayerMax = .35, .8, 1
 		p.DietJSON = `{"plant":1.4,"worm":1.2,"boilie":1.3}`
-		p.ActionJSON = `{"bottom_motionless":1.25,"water_column_motionless":1.12}`
+		p.ActionJSON = `{"bottom":1.25,"bottom_contact":1.15,"bottom_move":1.12,"sinking":1.08}`
 	case has("salmon", "trout", "char", "taimen", "lenok", "nelma", "omul", "muksun", "smelt", "vendace"):
 		p.LayerMin, p.LayerPref, p.LayerMax = .1, .42, .9
 		p.Aggression = 1.2
 		p.DietJSON = `{"worm":1.1,"fish":1.2,"lure":1.3}`
-		p.ActionJSON = `{"moving":1.2,"surface_motionless":1.05}`
+		p.ActionJSON = `{"steady":1.2,"trolling":1.2,"twitch":1.15,"sinking":1.05}`
 	case has("pike", "perch", "zander", "walleye", "asp", "bass", "barsch", "orfe"):
 		p.LayerMin, p.LayerPref, p.LayerMax = .08, .45, .95
 		p.Aggression = 1.3
 		p.DietJSON = `{"fish":1.4,"worm":1.1,"lure":1.35}`
-		p.ActionJSON = `{"moving":1.3,"water_column_motionless":1.1,"surface_motionless":1.15}`
+		p.ActionJSON = `{"twitch":1.3,"jerk":1.35,"hard_twitch":1.35,"stop_go":1.2,"jig":1.25,"walk_dog":1.15,"steady":1.1}`
 	case has("herring", "mackerel", "makrel", "shad", "sabrefish", "smelt"):
 		p.LayerMin, p.LayerPref, p.LayerMax = .05, .38, .8
 		p.Aggression = 1.05
 		p.DietJSON = `{"plankton":1.3,"worm":1,"fish":1.1}`
-		p.ActionJSON = `{"moving":1.2,"surface_motionless":1.08}`
+		p.ActionJSON = `{"steady":1.2,"trolling":1.15,"drift":1.1,"twitch":1.1,"stop_go":1.05}`
 	}
 	if low, high, known := fishWeatherTemperatureBand(key); known {
 		p.TempMinC, p.TempMaxC = low, high
@@ -221,7 +221,7 @@ func (s *Server) fishBiteEnvironmentWeight(ctx context.Context, key string, c fi
 	}
 	if c.lureAction != "" {
 		if weights := fishEcologyJSONMap(p.ActionJSON); len(weights) > 0 {
-			if weight, ok := weights[c.lureAction]; ok {
+			if weight, ok := fishEcologyActionWeight(weights, c.lureAction); ok {
 				factor *= math.Max(.05, weight)
 			}
 		}
@@ -258,34 +258,109 @@ func fishEcologyJSONMap(raw string) map[string]float64 {
 	return m
 }
 
-// classifyLureMotion 只标记协议位已经确认的粗状态。完整 31 种运动模式仍需
-// 结合客户端动作抓包逐位映射，原始 f5 保存在 LureMotionMask 供后续校准。
+// lureMotionStatusMask 覆盖客户端 Gmkegncajem 已知的 0..22 位动作状态。
+// 0xD0000000/0xD1000000 的高位是钓组阶段，不属于拟饵动作。
+const lureMotionStatusMask uint32 = 0x007FFFFF
+
+// classifyLureMotion 映射客户端 kRigAnimationType_* 状态位。优先级按
+// “瞬时主动作 > 水层姿态 > 收线兜底”排列，避免 0x400 收线盖住抽、跳等动作。
 func classifyLureMotion(mask uint32) string {
+	mask &= lureMotionStatusMask
 	switch {
-	case mask&0x1000 != 0:
-		return "surface_motionless"
+	case mask&0x20000 != 0:
+		return "hard_twitch"
+	case mask&0x10000 != 0:
+		return "stop_go"
+	case mask&0x10 != 0:
+		return "twitch"
+	case mask&0x80 != 0:
+		return "jig"
+	case mask&0x100 != 0:
+		return "walk_dog"
+	case mask&0x400000 != 0:
+		return "bottom_layer_move"
+	case mask&0x4000 != 0:
+		return "trolling"
+	case mask&0x2000 != 0:
+		return "bottom_move"
+	case mask&0x20 != 0:
+		return "splash"
 	case mask&0x800 != 0:
-		return "bottom_motionless"
+		return "bottom"
 	case mask&0x200 != 0:
-		return "water_column_motionless"
+		return "bottom_hang"
+	case mask&0x1000 != 0:
+		return "surface"
+	case mask&0x40 != 0:
+		return "drift"
+	case mask&0x8 != 0:
+		return "bottom_contact"
+	case mask&0x4 != 0:
+		return "jerk"
+	case mask&0x2 != 0:
+		return "speed_up"
+	case mask&0x80000 != 0:
+		return "sinking"
+	case mask&0x200000 != 0:
+		return "vertical_rise"
 	case mask&0x400 != 0:
-		return "moving"
+		return "steady"
+	case mask&0x1 != 0:
+		return "stir"
 	default:
 		return ""
 	}
+}
+
+// fishEcologyActionWeight 兼容旧 fish_ecology.action_json 键。已有数据库行
+// 不会被 INSERT OR IGNORE 更新，因此新细分动作必须能回退到旧粗分类。
+func fishEcologyActionWeight(weights map[string]float64, action string) (float64, bool) {
+	if weight, ok := weights[action]; ok {
+		return weight, true
+	}
+	var candidates []string
+	switch action {
+	case "steady", "speed_up", "trolling", "drift", "twitch", "jerk", "hard_twitch", "stop_go":
+		candidates = []string{"moving"}
+	case "bottom", "bottom_contact", "bottom_hang":
+		candidates = []string{"bottom_motionless"}
+	case "bottom_move", "bottom_layer_move":
+		candidates = []string{"bottom_motionless", "moving"}
+	case "jig", "walk_dog":
+		candidates = []string{"moving", "bottom_motionless"}
+	case "surface", "splash":
+		candidates = []string{"surface_motionless", "moving"}
+	case "sinking", "vertical_rise":
+		candidates = []string{"water_column_motionless", "moving"}
+	case "stir":
+		candidates = []string{"moving", "water_column_motionless"}
+	}
+	for _, candidate := range candidates {
+		if weight, ok := weights[candidate]; ok {
+			return weight, true
+		}
+	}
+	return 0, false
 }
 
 func lureLayerFromMotion(mask uint32, previous float64) float64 {
 	if previous <= 0 {
 		previous = .5
 	}
+	mask &= lureMotionStatusMask
 	switch {
 	case mask&0x1000 != 0:
 		return .08
+	case mask&0x80000 != 0:
+		return normalizeWaterLayer(previous + .08)
+	case mask&0x200000 != 0:
+		return normalizeWaterLayer(previous - .08)
+	case mask&0x2000 != 0, mask&0x400000 != 0:
+		return .94
 	case mask&0x800 != 0:
 		return .92
 	case mask&0x200 != 0:
-		return .48
+		return .85
 	case mask&0x400 != 0:
 		return normalizeWaterLayer(previous + .03)
 	default:
