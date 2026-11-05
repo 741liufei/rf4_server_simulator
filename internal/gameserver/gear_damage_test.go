@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"rf4server/internal/logging"
@@ -734,7 +735,7 @@ func TestTerminalComponentBreakRechecksAttachment(t *testing.T) {
 
 // 断竿官方表现（回归：此前断竿不清线组，客户端鱼仍挂钩整轮卡死）：
 // 整组钓组与主线随竿报废进 11028 移除列表，竿耐久归零但物品保留。
-func TestRodBreakDestroysRigAndReturnsRemovedList(t *testing.T) {
+func TestRodBreakReturnsRigGearToBackpack(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -761,10 +762,15 @@ func TestRodBreakDestroysRigAndReturnsRemovedList(t *testing.T) {
 	mountGearForTest(t, srv, sess, rod.GUID, bobber.GUID)
 
 	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(rod.GUID), proto.U32(1), proto.Null())
-	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
-		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
+	hctx := &Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
+		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()}
+	body, ok := hDynamicRodBreak(hctx)
 	if !ok || len(body) == 0 {
 		t.Fatal("17/9 断竿未处理")
+	}
+	// 配件回背包的刷新必须排在 11028 之后，否则客户端删掉本地模型后要重登才看得见。
+	if len(hctx.afterResponse) != 1 {
+		t.Fatalf("断竿后应注册一次回包后的物品刷新，实得 %d", len(hctx.afterResponse))
 	}
 	dec, _, err := proto.DecodeValue(body, 0, srv.Table())
 	if err != nil {
@@ -777,8 +783,12 @@ func TestRodBreakDestroysRigAndReturnsRemovedList(t *testing.T) {
 		}
 	}
 	for _, guid := range []string{line.GUID, hook.GUID, bobber.GUID} {
-		if row, _ := db.GetItemByGUID(ctx, guid); row != nil {
-			t.Fatalf("断竿后 %s 应随竿报废删除", guid)
+		row, err := db.GetItemByGUID(ctx, guid)
+		if row == nil {
+			t.Fatalf("断竿后 %s 应保留下来: %v", guid, err)
+		}
+		if row.Container != "backpack" || row.RigGUID != "" {
+			t.Fatalf("断竿后 %s 应摘回背包: container=%s rig=%s", guid, row.Container, row.RigGUID)
 		}
 		if !removed[guid] {
 			t.Fatalf("断竿移除列表缺少 %s", guid)
@@ -803,6 +813,14 @@ func TestRodBreakDestroysRigAndReturnsRemovedList(t *testing.T) {
 	if _, hasHook := rigCompsOf(rigStoredF5(t, freshRod))[catHook]; hasHook {
 		t.Fatal("断竿后竿 f5 不应残留组件")
 	}
+	// 摘回背包的配件还能装到别的竿上，断竿只锁自己的装配。
+	other, err := srv.CreateItem(ctx, uid, "tele_10180_4", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := mountGearForTest(t, srv, sess, other.GUID, bobber.GUID); res == nil {
+		t.Fatal("断竿摘回的浮漂应能重新装配到其他鱼竿")
+	}
 	logs, _ := db.ListItemDamageLogs(ctx, uid, 50)
 	seen := map[string]int{}
 	for _, entry := range logs {
@@ -811,8 +829,8 @@ func TestRodBreakDestroysRigAndReturnsRemovedList(t *testing.T) {
 	if seen[damageEventRodBreak] != 1 {
 		t.Fatalf("rod_break 记录=%d，期望 1", seen[damageEventRodBreak])
 	}
-	if seen[damageEventLostOnRodBreak] != 3 {
-		t.Fatalf("lost_on_rod_break 记录=%d，期望 3（线+钩+漂）", seen[damageEventLostOnRodBreak])
+	if seen[damageEventDetachedOnRodBreak] != 3 {
+		t.Fatalf("detached_on_rod_break 记录=%d，期望 3（线+钩+漂）", seen[damageEventDetachedOnRodBreak])
 	}
 }
 
@@ -929,5 +947,52 @@ func TestBrokenRodRejectsComponentMount(t *testing.T) {
 	sess := newProbeSess(srv)
 	if res := mountGearForTest(t, srv, sess, rod.GUID, line.GUID); res == nil {
 		t.Fatal("修理后应恢复装配")
+	}
+}
+
+func TestRodBreakDetachesReelAndClearsRodReference(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "spin_5820", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := srv.CreateItem(ctx, uid, "mono_15249", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+
+	outcome, err := srv.breakRodTx(ctx, uid, rod.GUID, rod.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(outcome.RemovedGUIDs, reel.GUID) {
+		t.Fatalf("断竿移除列表缺少渔轮: %+v", outcome.RemovedGUIDs)
+	}
+	fresh, err := db.GetItemByGUID(ctx, rod.GUID)
+	if err != nil || fresh == nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(fresh.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if idx := fieldIdxByCS(fresh.WireClass, csReel); idx >= 0 && idx < len(fields) && fields[idx].Hex != "" {
+		t.Fatalf("断竿后竿实例仍引用渔轮 %s", fields[idx].Hex)
+	}
+	returned, err := db.GetItemByGUID(ctx, reel.GUID)
+	if err != nil || returned == nil {
+		t.Fatal(err)
+	}
+	if returned.Container != "backpack" || returned.RigGUID != "" {
+		t.Fatalf("渔轮未正确退回背包: %+v", returned)
 	}
 }

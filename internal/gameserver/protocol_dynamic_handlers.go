@@ -155,8 +155,11 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 				"broken", shortGUID(outcome.BrokenGUID), "line", outcome.LineBroken,
 				"comp", outcome.ComponentBroken,
 				"line_loss_m", outcome.LineLossM, "removed", len(outcome.RemovedGUIDs))
-			// 断件会改变竿耐久和装配状态，全量同步强制刷新客户端物品模型。
-			ctx.Sess.Push4_22Full()
+			// 断件会改变竿耐久和装配状态，需要全量同步刷新客户端物品模型。
+			// 断竿时配件只是摘回背包，11028 的移除清单会让客户端先删掉本地模型，
+			// 所以刷新必须排在回包之后，否则配件要到重登才重新出现。
+			syncGUIDs := append([]string(nil), outcome.RemovedGUIDs...)
+			ctx.AfterResponse(func() { ctx.Sess.Push4_22Items(syncGUIDs) })
 			// 断件必丢鱼：11028 只表达装备损坏，另经聊天频道提示跑鱼。
 			reason := "断竿"
 			switch {
