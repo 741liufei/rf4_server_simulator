@@ -237,16 +237,15 @@ func hRodCutLine(ctx *Ctx) ([]byte, bool) {
 		st.mu.Unlock()
 	}
 	st.mu.Lock()
-	inWater := st.CastActive || st.InWater
 	pending := st.Pending
 	st.mu.Unlock()
 	if rodGUID == "" || rodGUID == zeroGUID {
 		ctx.Log.Warn("17/10 剪线被拒：没有在手的鱼竿", "cut_m", cutM)
 		return snapshot()
 	}
-	// 没有放线时不接受剪线：客户端误触也不该把整套钩组清空。
-	if cutM <= 0 && !inWater {
-		ctx.Log.Info("17/10 剪线被拒：当前没有放线", "rod", shortGUID(rodGUID))
+	// 剪线必须上报正数米数；零米请求不应清空整套钩组。
+	if cutM <= 0 {
+		ctx.Log.Info("17/10 剪线被拒：放线米数无效", "rod", shortGUID(rodGUID), "cut_m", cutM)
 		return snapshot()
 	}
 	outcome, err := srv.cutLineTx(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID, cutM)

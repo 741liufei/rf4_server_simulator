@@ -1278,6 +1278,49 @@ func TestCutLineWithoutCastKeepsTackle(t *testing.T) {
 	}
 }
 
+// TestCutLineWithZeroLengthRejectedInWater 防止异常零米报文在入水状态清空钩组。
+func TestCutLineWithZeroLengthRejectedInWater(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "tele_10180_4", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := srv.CreateItem(ctx, uid, "mono_15095", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hook, err := srv.CreateItem(ctx, uid, "clas_20163", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, hook.GUID)
+	setTestLineLengthM(t, db, line.GUID, 50)
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.CastActive = true
+	st.InWater = true
+	st.mu.Unlock()
+
+	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.U32(0))
+	hctx := &Ctx{Sess: sess, Main: 17, Sub: 10, Tree: tree,
+		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()}
+	body, ok := hRodCutLine(hctx)
+	if !ok || len(body) == 0 {
+		t.Fatal("17/10 零米剪线未回快照")
+	}
+	if got := lineLengthOfTestItem(t, srv, line.GUID); got != 50 {
+		t.Fatalf("零米剪线不应改变主线长度，实得 %d", got)
+	}
+	if row, _ := db.GetItemByGUID(ctx, hook.GUID); row == nil {
+		t.Fatal("零米剪线不应删除鱼钩")
+	}
+}
+
 // TestMainLineLossCategoriesCoverRigComponents 主线断/剪的丢失集合必须来自槽位表，
 // 铅坠、食笼、底钓组主体、铅芯前导这些挂在线上的东西不能漏。
 func TestMainLineLossCategoriesCoverRigComponents(t *testing.T) {
