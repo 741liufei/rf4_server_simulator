@@ -1658,6 +1658,15 @@ func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) 
 	if s.tunableF("fish_tv_kv", 0) != 0 {
 		kv = fishTVKv(f.Species, f.WeightG)
 	}
+	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数；KV 未启用
+	// （kv==nil）时客户端解析模板缺参会抛异常断连（回登录界面）。此时退化
+	// 为已验证的普通系统文本播报，保留提示且不掉线。
+	if kv == nil {
+		if text := s.fishLandedText(f, newRecord); text != "" {
+			sess.pushSystemChat(text)
+		}
+		return
+	}
 	switch {
 	case f.Grade >= 4:
 		sess.pushChatProbe(27, 25, "", kv) // 超级稀有鱼 X 千克
