@@ -306,7 +306,7 @@ func TestFishingBonusUsesActualRigSkillCategory(t *testing.T) {
 	}
 }
 
-func TestReelStrengthUsesGearRatioNotDrag(t *testing.T) {
+func TestReelStrengthUsesDragNotGearRatio(t *testing.T) {
 	def := &store.ItemDef{
 		Category: 6,
 		AttrsJSON: attrsJSON(t, map[string]any{
@@ -315,8 +315,8 @@ func TestReelStrengthUsesGearRatioNotDrag(t *testing.T) {
 		}),
 	}
 	got, ok := strengthBitsFor(def, 1)
-	if !ok || math.Abs(got-4) > 1e-3 {
-		t.Fatalf("渔轮强度=%v ok=%v，期望传动比 4，不能等于摩擦 35.4", got, ok)
+	if !ok || math.Abs(got-35.4) > 0.01 {
+		t.Fatalf("渔轮强度=%v ok=%v，期望摩擦制动力 35.4，不能等于传动比 4", got, ok)
 	}
 	if drag := reelDragMaxKg(def); math.Abs(drag-35.4) > 0.05 {
 		t.Fatalf("摩擦制动力=%f，期望 35.4", drag)

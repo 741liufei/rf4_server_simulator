@@ -371,29 +371,28 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 	if err != nil || def == nil {
 		return changed
 	}
-	// 渔轮顶部 f0 表示当前齿轮传动比。必须先读已安装齿轮，只有找不到
-	// 零件时才回退到母轮出厂定义；否则每次上线都会重置收线速度。
-	reelGearApplied := false
+	// 渔轮顶部 f0 是客户端的受力/力度上限，不是传动比。优先使用当前
+	// 安装的摩擦片制动力，缺失时才回退到出厂摩擦片；传动比只在齿轮
+	// 子件自己的强度字段里出现，不能污染母轮上限。
 	if class == "dgjinoebdop" {
-		if _, gearDef, _, ok := s.selectedReelPart(ctx, fields, 52); ok {
-			if ratio := itemDefF32(gearDef, gearAttrRatio); ratio > 0 {
-				idx := fieldIdxByCS(class, csStrength)
-				if setWireFloat(fields, class, idx, ratio*it.Workmanship) {
-					changed = true
-				}
-				reelGearApplied = true
+		strength := s.reelBaseDragFromRow(ctx, it)
+		if strength > 0 {
+			idx := fieldIdxByCS(class, csStrength)
+			if setWireFloat(fields, class, idx, strength) {
+				changed = true
 			}
-		}
-	}
-	if !reelGearApplied {
-		if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
 			idx := fieldIdxByCS(class, csStrength)
 			if setWireFloat(fields, class, idx, strength) {
 				changed = true
 			}
 		}
+	} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		idx := fieldIdxByCS(class, csStrength)
+		if setWireFloat(fields, class, idx, strength) {
+			changed = true
+		}
 	}
-
 	// 渔轮刹车片子是嵌套实例，客户端使用它自己的 f0。其值必须来自当前
 	// 安装摩擦片的定义，而不是母轮出厂摩擦片，否则重登后摩擦力会归位。
 	if class == "dgjinoebdop" {
