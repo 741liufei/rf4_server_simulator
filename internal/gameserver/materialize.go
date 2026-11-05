@@ -208,18 +208,17 @@ func itoa(v int) string {
 	return string(buf[i:])
 }
 
-// strengthBitsFor 返回物品强度。渔轮的齿轮强度是传动比 oiaplokhcii.dpgbopbanal
-// （官方观测 3.4..11.7），摩擦制动力 omghfmdfjpc 只写在刹车片子上，两者不能是同一个数。
+// strengthBitsFor 返回物品的受力/强度值。渔轮使用最大摩擦制动力
+// omghfmdfjpc；传动比 dpgbopbanal 仅用于收线速度，不能作为力度上限。
 // 其他类型读取顶层 kngaaefkpka。实例强度等于定义值乘以耐久。
 func strengthBitsFor(def *store.ItemDef, durability float64) (float64, bool) {
 	if def != nil && def.Category == 6 {
-		ratio := reelGearRatio(def)
-		if ratio <= 0 {
+		drag := reelDragMaxKg(def)
+		if drag <= 0 {
 			return 0, false
 		}
-		return ratio * durability, true
+		return drag * durability, true
 	}
-	// 前导总强度来自嵌套线材/连接件中的最弱值，顶层没有 kngaaefkpka。
 	if def != nil && def.Category == gearCatLeader {
 		strength := leaderStrengthKg(def) * durability
 		if strength <= 0 {

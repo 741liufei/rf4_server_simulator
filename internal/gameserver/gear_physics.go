@@ -3,6 +3,7 @@ package gameserver
 import (
 	"context"
 	"math"
+	"strconv"
 	"strings"
 
 	"rf4server/internal/store"
@@ -62,16 +63,17 @@ type rigGearIDs struct {
 
 // gearPhysicsSpec 是 item_def 解码后的物理量快照（kg/mm/m/比例）。
 type gearPhysicsSpec struct {
-	RodPowerKg       float64
-	LineStrengthKg   float64
-	LeaderStrengthKg float64
-	ReelPresent      bool
-	ReelDragKg       float64 // 当前耐久阶段下的锁轮承力
-	LineStretch      float64
-	HookPresent      bool
-	HookStrengthKg   float64
-	HookLengthMM     float64
-	HookSize         int64
+	RodPowerKg        float64
+	LineStrengthKg    float64
+	LeaderStrengthKg  float64
+	ReelPresent       bool
+	ReelDragKg        float64 // 当前耐久阶段下的锁轮承力
+	ReelCurrentDragKg float64 // 当前摩擦档位下的制动力，第 30 档锁轮时等于锁轮承力
+	LineStretch       float64
+	HookPresent       bool
+	HookStrengthKg    float64
+	HookLengthMM      float64
+	HookSize          int64
 }
 
 // decodeU32F32 把 attrs_json 中的 U32 数值按 IEEE-754 F32 位型还原。
@@ -198,6 +200,44 @@ func reelGearRatio(def *store.ItemDef) float64 {
 		return 0
 	}
 	return nestedF32(itemDefNested(def, gearAttrGear), gearAttrRatio)
+}
+
+// 渔轮摩擦档位：1~29 是制动力刻度，第 30 档是锁轮。
+const (
+	fullReelDragStop = 29
+	maxReelDragStop  = 30
+)
+
+// reelDragAtSetting 按摩擦档位给出实际作用在线上的制动力。
+// 1~29 档超过该值时渔轮打滑放线，竿与线不会承受高于它的张力；
+// 第 30 档锁轮后不再打滑，张力上限换成锁轮承力。
+func reelDragAtSetting(perf *store.ReelPerformance, setting int64) float64 {
+	if setting >= maxReelDragStop {
+		return perf.LockedDragKg
+	}
+	if setting <= 0 {
+		return 0
+	}
+	return perf.BaseDragKg * float64(setting) / float64(fullReelDragStop) * perf.BearingFactor
+}
+
+// rodReelDragSetting 读取客户端 17/14 保存的摩擦档位；没有记录时返回 false。
+func (s *Server) rodReelDragSetting(ctx context.Context, rodGUID string) (int64, bool) {
+	if s == nil || s.DB == nil || strings.TrimSpace(rodGUID) == "" {
+		return 0, false
+	}
+	raw, err := s.DB.GetRodSetting(ctx, rodGUID, reelDragSettingKey)
+	if err != nil {
+		return 0, false
+	}
+	setting, cerr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if cerr != nil || setting <= 0 {
+		return 0, false
+	}
+	if setting > maxReelDragStop {
+		setting = maxReelDragStop
+	}
+	return setting, true
 }
 
 func rodTestG(def *store.ItemDef) (float64, float64) {
@@ -379,6 +419,12 @@ func (s *Server) loadGearSpecForRig(ctx context.Context, ids rigGearIDs, rodGUID
 			if perf, perr := s.syncReelPerformance(ctx, row); perr == nil {
 				spec.ReelPresent = true
 				spec.ReelDragKg = perf.LockedDragKg
+				if setting, ok := s.rodReelDragSetting(ctx, rodGUID); ok {
+					spec.ReelCurrentDragKg = reelDragAtSetting(perf, setting)
+				} else {
+					// 客户端还没保存过摩擦档位时只有锁轮数据可用，按锁轮兜底。
+					spec.ReelCurrentDragKg = perf.LockedDragKg
+				}
 			}
 		}
 	}
