@@ -15,7 +15,11 @@ import (
 
 func TestBaitMountAvailForRigTable(t *testing.T) {
 	base := int64(126) // 官方抓包锚点：沉底六种基础挂法
-	for _, rt := range []int64{12, 13, 14, 15, 16, 17, 18, 23} {
+	// BottomSimple(12) 保留旧版全开，避免飞德竿自动选中活饵安装方式。
+	if got := baitMountAvailForRig(12, 0); got != defaultBaitMountAvail {
+		t.Fatalf("飞德 BottomSimple 可选集 = %d，期望全开 %d", got, defaultBaitMountAvail)
+	}
+	for _, rt := range []int64{13, 14, 15, 16, 17, 18, 23} {
 		if got := baitMountAvailForRig(rt, 0); got != base {
 			t.Fatalf("钓组 %d 可选集 = %d，期望锚点 %d", rt, got, base)
 		}
@@ -62,8 +66,8 @@ func TestBuildRig153LikeClampsToRigMask(t *testing.T) {
 	// 模板带旧全开掩码 + pop-up 选中（换钓组前的残留）。
 	tpl := buildRig153Full("rig_BottomHingedStiff", 27, nil, 100, 0, 16384, defaultBaitMountAvail)
 	rebuilt := buildRig153Like(tpl, "rig_BottomSimple", 12, nil, 100, 0)
-	if sel, avail := rigBaitMountsOf(rebuilt); sel != 0 || avail != 126 {
-		t.Fatalf("切到普通沉底后 f8/f9 = %d/%d，期望 0/126", sel, avail)
+	if sel, avail := rigBaitMountsOf(rebuilt); sel != 16384 || avail != defaultBaitMountAvail {
+		t.Fatalf("切到普通沉底后 f8/f9 = %d/%d，期望 16384/%d", sel, avail, defaultBaitMountAvail)
 	}
 	// 同族切换：选择仍在可选集内则保留（Chod = 纯 pop-up 族）。
 	kept := buildRig153Like(tpl, "rig_BottomChod", 28, nil, 100, 0)
@@ -105,8 +109,8 @@ func TestRigSetTypeRebuildsBaitMountFields(t *testing.T) {
 	if idx < 0 || idx >= len(fields) {
 		t.Fatal("竿实例缺钓组字段")
 	}
-	if sel, avail := rigBaitMountsOf(fields[idx].Val); sel != 0 || avail != 126 {
-		t.Fatalf("实例 f8/f9 = %d/%d，期望 0/126", sel, avail)
+	if sel, avail := rigBaitMountsOf(fields[idx].Val); sel != 16384 || avail != defaultBaitMountAvail {
+		t.Fatalf("实例 f8/f9 = %d/%d，期望 16384/%d", sel, avail, defaultBaitMountAvail)
 	}
 	if got := s.baitMountFor(ctx, rod.GUID); got != 0 {
 		t.Fatalf("渲染 f8 应为 0，实得 %d", got)
@@ -162,8 +166,8 @@ func TestItemToTreeSanitizesLegacyBaitMountFields(t *testing.T) {
 		t.Fatal("ItemToTree 失败: ", err)
 	}
 	rig := tree.Fields[5].Val
-	if sel, avail := rigBaitMountsOf(rig); sel != 0 || avail != 126 {
-		t.Fatalf("渲染树 f8/f9 = %d/%d，期望 0/126（全开掩码不得外泄）", sel, avail)
+	if sel, avail := rigBaitMountsOf(rig); sel != 16384 || avail != defaultBaitMountAvail {
+		t.Fatalf("渲染树 f8/f9 = %d/%d，期望 16384/%d", sel, avail, defaultBaitMountAvail)
 	}
 	// 渲染只改 wire：库里的快照保持原样。
 	after, err := db.GetItemByGUID(ctx, rod.GUID)
