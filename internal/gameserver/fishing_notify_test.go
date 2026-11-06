@@ -1,6 +1,8 @@
 package gameserver
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"strings"
@@ -121,9 +123,9 @@ func TestFishUnhookedDepartureIsSilent(t *testing.T) {
 // 已中鱼后跑鱼（14/11 确认中鱼 → 14/12 f0=1/2/8）：客户端搏鱼失钩
 // 经计时器路径上报，f0 不区分「曾上钩」与「未上钩」（线上实证：
 // 14/14 → 14/11 → f0=2，全程无 8/7）。服务端以 st.Hooked 为准，
-// 已中鱼的跑鱼等同 f0=7 真脱钩：应播报模板 7。
+// 已中鱼的跑鱼等同 f0=7 真脱钩：默认走蓝色模板 3 播报。
 func TestFishHookedEscapeBroadcasts(t *testing.T) {
-	srv, _ := newRigTestServer(t)
+	srv, db := newRigTestServer(t)
 	for _, f0 := range []uint64{1, 2, 8} {
 		sess, gc := newTunnelProbe(t, srv)
 		st := srv.stateFor(sess.Userid)
@@ -148,13 +150,42 @@ func TestFishHookedEscapeBroadcasts(t *testing.T) {
 			t.Fatalf("f0=%d 推送 body 不可解码: %v", f0, err)
 		}
 		mf0 := dec.Items[0].Field(0)
-		if got := mf0.Num; got == nil || u64Of(got) != 7 {
-			t.Fatalf("f0=%d 已中鱼跑鱼应走模板类型 7，实得 %v", f0, got)
+		if got := mf0.Num; got == nil || *got != 3 {
+			t.Fatalf("f0=%d 已中鱼跑鱼应走蓝色模板 3，实得 %v", f0, got)
 		}
+		if !bytes.Contains(env.Body, []byte("跑掉了")) {
+			t.Fatalf("f0=%d 推送缺少跑鱼文案: %x", f0, env.Body)
+		}
+	}
+
+	// 关闭嘲讽开关后回退官方模板 7，保证可回滚。
+	if err := db.TunableSet(context.Background(), "fish_escape_taunt", "0", "test"); err != nil {
+		t.Fatal(err)
+	}
+	srv.execAdminCmd(&AdminCommand{Op: "reload_tunables"})
+	sess, gc := newTunnelProbe(t, srv)
+	st := srv.stateFor(sess.Userid)
+	st.mu.Lock()
+	st.CastActive = true
+	st.Hooked = true
+	st.Pending = &RolledFish{Species: "g_tench", WeightG: 547}
+	st.mu.Unlock()
+	tree := proto.Args524(proto.Obj("lhicjpmglbo", 0,
+		proto.Field{Op: "U32", Num: ptrU64(1)}))
+	if _, ok := hFishingLeft(miscCtx(sess, 14, 12, tree)); !ok {
+		t.Fatal("14/12 未处理")
+	}
+	env := awaitPushEnvelope(t, gc)
+	dec, _, err := proto.DecodeValue(env.Body, 0, srv.Table())
+	if err != nil {
+		t.Fatalf("推送 body 不可解码: %v", err)
+	}
+	if got := dec.Items[0].Field(0).Num; got == nil || *got != 7 {
+		t.Fatalf("关闭嘲讽后应回退官方模板 7，实得 %v", got)
 	}
 }
 
-// 真脱钩（f0=7，搏鱼中钩引用消失，鱼曾上钩）保留官方模板 7 播报。
+// 真脱钩（f0=7，搏鱼中钩引用消失，鱼曾上钩）默认同样播报蓝色模板 3。
 func TestFishTrueEscapeStillBroadcasts(t *testing.T) {
 	srv, _ := newRigTestServer(t)
 	sess, gc := newTunnelProbe(t, srv)
@@ -183,10 +214,12 @@ func TestFishTrueEscapeStillBroadcasts(t *testing.T) {
 	if dec.Kind != proto.KindArgs || len(dec.Items) != 3 {
 		t.Fatalf("24/27 body 应 args[3]")
 	}
-	// 脱钩走官方模板类型 7（"player 鱼脱钩了"），文本为空由客户端渲染。
 	mf0 := dec.Items[0].Field(0)
-	if got := mf0.Num; got == nil || u64Of(got) != 7 {
-		t.Fatalf("真脱钩应走模板类型 7，实得 %v", got)
+	if got := mf0.Num; got == nil || *got != 3 {
+		t.Fatalf("真脱钩应走蓝色模板 3，实得 %v", got)
+	}
+	if !bytes.Contains(env.Body, []byte("跑掉了")) {
+		t.Fatalf("推送缺少跑鱼文案: %x", env.Body)
 	}
 }
 
