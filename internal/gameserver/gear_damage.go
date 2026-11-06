@@ -642,6 +642,9 @@ func (s *Server) breakLineTx(ctx context.Context, uid int64, rodGUID, brokenGUID
 // cutLineTx 处理 17/10 剪线：客户端上报本次放出多少米，竿上主线就少多少米；
 // 主线以下的前导、子线、钩、饵、拟饵、浮漂全部随线丢失，主线本体保留。
 func (s *Server) cutLineTx(ctx context.Context, uid int64, rodGUID string, cutM int64) (*gearBreakOutcome, error) {
+	if cutM <= 0 {
+		return nil, errors.New("剪线长度必须大于 0")
+	}
 	return s.lineLossTx(ctx, uid, rodGUID, "", catLine, lineLossPolicy{
 		requestedM: cutM,
 		eventLine:  damageEventLineCut,

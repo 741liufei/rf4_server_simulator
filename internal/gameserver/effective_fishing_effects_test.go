@@ -63,8 +63,8 @@ func TestEffectiveFishingSkillsUseOnlyCurrentOwnedRod(t *testing.T) {
 	if err := srv.DB.SetSkillNode(ctx, uid, 1004, 0); err != nil {
 		t.Fatal(err)
 	}
-	if got := srv.fishingBonus(ctx, uid, 55, gear); got != withRod {
-		t.Fatal("unknown node meaning added a generic fishing bonus")
+	if cleared := srv.fishingBonus(ctx, uid, 55, gear); cleared == withRod {
+		t.Fatal("clearing the learned node did not remove its node bonus")
 	}
 	_, mastery, nodes := srv.castSkillStats(ctx, uid, 55, gear)
 	if mastery != 65 || nodes != 0 {
@@ -73,7 +73,7 @@ func TestEffectiveFishingSkillsUseOnlyCurrentOwnedRod(t *testing.T) {
 	if pts, _ := srv.DB.GetSkillPoints(ctx, uid, 11); pts != 60 {
 		t.Fatal("temporary mastery was written to permanent proficiency")
 	}
-	// 前面为验证“未知节点不产生通用加成”把永久等级写成了 0；
+	// 前面为验证节点效果随学习等级变化把永久等级写成了 0；
 	// 断竿只应丢失装备赠级，这里先恢复永久等级 2。
 	if err := srv.DB.SetSkillNode(ctx, uid, 1004, 2); err != nil {
 		t.Fatal(err)

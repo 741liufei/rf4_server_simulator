@@ -123,6 +123,7 @@ func (s *Session) consumeTripTimes(now time.Time) bool {
 		if elapsed <= 0 {
 			continue
 		}
+		expected := *st
 		st.LastConsumeTS = nowF
 		if elapsed < st.RemainingSec {
 			st.RemainingSec -= elapsed
@@ -133,7 +134,6 @@ func (s *Session) consumeTripTimes(now time.Time) bool {
 		// 重试），档案 f22 不再包含该地点；钓鱼游装备包（租用物品）一并
 		// 从背包移除（trip_equip.go）。拆开执行曾在删除失败时留下 access
 		// 残留行，资格判断因此放行已到期玩家。
-		expected := *st
 		st.RemainingSec = 0
 		expired, uerr := s.Srv.DB.ExpireTripAccessTx(cctx, expected, nowF)
 		if uerr != nil {
