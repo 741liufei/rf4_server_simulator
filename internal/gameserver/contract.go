@@ -108,18 +108,44 @@ func checkPushArgs(main, sub uint8, body *proto.Value) string {
 	return ""
 }
 
+// itemTypeIDs 物品实例 type_id 显式白名单，集合由 items.go 的
+// categoryWireClass（类别 → wire 类/tid 唯一权威映射）派生：基础装备
+// 100..199 之外，实际 tid 覆盖鱼护 25、铃铛 700、提取物 721、渔轮组件
+// 610..616、电机 1470、礼包 3100/3103、打窝器/弹弓 3200/3201、竿架 11500、
+// 定义类 12600/12601、铃铛族 12702/12703、标本 13001、13041、房契类
+// 11301、2015、技能书 13301 及兜底 140。
+// 服务端下发的物品树一律出自 categoryWireClass（ItemToTree / prepareNewItem），
+// 以它为单一事实来源可同时满足两类实证案例：按 100..199 设上限会拒发
+// 钓鱼游装备包的铃铛/竿架（4/22 缺件，2026-11-05 实测），漏 13001 会让
+// 标本制作后的背包增量 4/22 丢失（2026-11-06 实测）；tid < 100 是系统
+// 对象，仍拒绝。
+var itemTypeIDs = func() map[uint32]struct{} {
+	m := make(map[uint32]struct{}, len(categoryWireClass))
+	for _, e := range categoryWireClass {
+		m[uint32(e.TypeID)] = struct{}{}
+	}
+	return m
+}()
+
+// isItemTypeID 物品实例 type_id 白名单判定。
+func isItemTypeID(tid uint32) bool {
+	_, ok := itemTypeIDs[tid]
+	return ok
+}
+
 // matchPattern 单个参数与模式匹配；返回空串=通过。
 func matchPattern(want string, it *proto.Value) string {
 	switch {
 	case want == "*":
 		return ""
 	case want == "item":
-		// 物品实例包装对象：type_id 100..199 的 obj。
+		// 物品实例包装对象：type_id 必须命中 categoryWireClass 派生的
+		// 实例白名单（见 itemTypeIDs 注释）。
 		if it == nil || !it.IsKind(proto.KindObj) {
-			return "应为 item(obj 100..199)"
+			return "应为 item(obj 实例白名单)"
 		}
-		if it.TypeID < 100 || it.TypeID > 199 {
-			return fmt.Sprintf("应为 item(type_id 100..199), 实得 %d", it.TypeID)
+		if !isItemTypeID(it.TypeID) {
+			return fmt.Sprintf("应为 item(obj 实例白名单), 实得 %d", it.TypeID)
 		}
 		return ""
 	case want == "guid":

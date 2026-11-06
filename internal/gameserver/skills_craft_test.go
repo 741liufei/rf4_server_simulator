@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -57,7 +58,8 @@ func craftObj8(recipe string, materials []craftSlot, qty uint64) *proto.Value {
 		materialsArg.Items = append(materialsArg.Items, proto.Obj("bhfikaplhmh", 9,
 			proto.FStr("STR", proto.S(sl.ItemID)),
 			proto.FGuid(sl.GUID),
-			proto.FStr("STR", proto.S("")),
+			// f2 鱼种：标本板的槽位第三字段（普通制作留空）
+			proto.FStr("STR", proto.S(sl.Species)),
 		))
 	}
 	return proto.Obj("dhkphmjinmj", 8,
@@ -695,6 +697,8 @@ func TestCraftFlow(t *testing.T) {
 		t.Fatalf("9/6 名称不符: %q", s)
 	}
 	f3 := v.Fields[3].Val
+	// 需求对象 tid=17 无 by_elem，走 by_type_id 兜底 18——与主网既有行为
+	// 一致，不做全局策略变更（见 listCodeForObjs 注释）。
 	if f3 == nil || f3.Kind != proto.KindArgs || f3.ArgCodeStr() != "18" || len(f3.Items) != 1 {
 		t.Fatalf("9/6.f3 应 args(18)[1]，实得 %+v", f3)
 	}
@@ -922,6 +926,230 @@ func TestCraftSkillCatForRecipe(t *testing.T) {
 		if got := craftSkillCatForRecipe(c.recipe); got != c.want {
 			t.Fatalf("craftSkillCatForRecipe(%s)=%d, want %d", c.recipe, got, c.want)
 		}
+	}
+}
+
+// TestListCodeForObjsMatrix 对象列表容器 code 审计矩阵（覆盖 9/1 产出列表与
+// 9/6 需求列表两个调用点能出现的全部产物类别，见审查回复的产物 type_id
+// 分布表）：
+//   - 13001 标本：显式覆盖 61。by_type_id 合成段的 471 会把客户端 803 解码
+//     送进 dnepcgceamm 枚举解码器强转断线（Player.log 2026-11-06 02:59 实证）。
+//   - by_elem 实抓段照常生效（140→61）。
+//   - 其余沿用 by_type_id 兜底的既有类别一律保持原值：窝料 120→49、干饵
+//     145→74、香精 125→54、礼包 3103→193、9/6 需求对象 17→18——这些是
+//     主网已验证行为，不做无回归矩阵的全局变更。
+func TestListCodeForObjsMatrix(t *testing.T) {
+	cases := []struct {
+		typeID uint32
+		want   string
+		note   string
+	}{
+		{13001, "61", "标本 override（合成段 471 有断线证据）"},
+		{140, "61", "ohciikgjghe，by_elem=61"},
+		{120, "49", "cat46 成品窝料，by_type_id 既有"},
+		{145, "74", "cat30 干饵，by_type_id 既有"},
+		{125, "54", "cat19 香精，by_type_id 既有"},
+		{3103, "193", "cat61，by_type_id 既有"},
+		{17, "18", "9/6 需求对象 kdpbhdffjaf，by_type_id 既有"},
+	}
+	for _, c := range cases {
+		v := &proto.Value{Kind: proto.KindObj, TypeID: c.typeID}
+		if got := listCodeForObjs([]*proto.Value{v}); got != c.want {
+			t.Fatalf("tid %d 应 %s（%s），实得 %q", c.typeID, c.want, c.note, got)
+		}
+	}
+	if got := listCodeForObjs([]*proto.Value{nil, &proto.Value{Kind: proto.KindObj, TypeID: 13001}}); got != "61" {
+		t.Fatalf("非对象元素应跳过，实得 %q", got)
+	}
+	if got := listCodeForObjs([]*proto.Value{&proto.Value{Kind: proto.KindObj, TypeID: 999999}}); got != "61" {
+		t.Fatalf("未知 tid 应回落 61，实得 %q", got)
+	}
+	if got := listCodeForObjs(nil); got != "61" {
+		t.Fatalf("空列表应回落 61，实得 %q", got)
+	}
+}
+
+// TestMountedFishTreeTx 校验标本挂鱼（事务内）：按槽位 EchoGUID 定位鱼护
+// 渔获，产出 25/ecknbkpeeji 鱼对象、鱼种一致、guid 按板子派生（不与鱼护
+// 原鱼同 guid）；鱼种不符与无有效鱼护引用都必须返回 (nil, 原因)——猫 71
+// 制作据此 803(false)，不再静默产空白板。
+func TestMountedFishTreeTx(t *testing.T) {
+	srv, db := newEconomyTxTestServer(t)
+	const uid int64 = 7361
+	entry, _ := seedImportedKeepnetFish(t, srv, uid, 21, false) // species=asp
+
+	const boardGUID = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+	ctx := context.Background()
+	tx, err := db.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+
+	mf, note, merr := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{ItemID: "bait_fishForCut", GUID: entry.EchoGUID, Species: "asp"}}, boardGUID)
+	if merr != nil || mf == nil {
+		t.Fatalf("应定位到渔获，mf=%v err=%v note=%q", mf, merr, note)
+	}
+	if mf.Species != "asp" || mf.EchoGUID != entry.EchoGUID {
+		t.Fatalf("返回渔获不符: %+v", mf)
+	}
+	fish := mf.Tree
+	if fish.Class != "ecknbkpeeji" || fish.TypeID != 25 {
+		t.Fatalf("应 25/ecknbkpeeji，实得 %d/%s", fish.TypeID, fish.Class)
+	}
+	if s := fish.Fields[0].StrOr(); s != "asp" {
+		t.Fatalf("f0 鱼种应 asp，实得 %q", s)
+	}
+	if mounted := fish.Fields[16].Hex; mounted == "" || mounted == entry.EchoGUID {
+		t.Fatalf("嵌鱼 guid 应派生新值，实得 %q", mounted)
+	}
+	if mf2, bad, err2 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{GUID: entry.EchoGUID, Species: "perch"}}, boardGUID); mf2 != nil || bad == "" || err2 != nil {
+		t.Fatalf("鱼种不符应拒绝，got=%v note=%q err=%v", mf2, bad, err2)
+	}
+	if mf3, note3, err3 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{GUID: "ffffffffffffffffffffffffffffffff"}}, boardGUID); mf3 != nil || note3 == "" || err3 != nil {
+		t.Fatalf("未知 guid 应返回 nil+原因，got=%v note=%q err=%v", mf3, note3, err3)
+	}
+	if mf4, note4, err4 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{ItemID: "worm_01", GUID: ""}}, boardGUID); mf4 != nil || note4 == "" || err4 != nil {
+		t.Fatalf("无鱼护引用应返回 nil+原因，got=%v note=%q err=%v", mf4, note4, err4)
+	}
+}
+
+// TestCraftFishBoardConsumesKeepnet 标本制作端到端：803 成功、产出板 f1 嵌
+// 25 类鱼对象（鱼种一致、guid 派生）、f8 携带被消耗的鱼护 guid、鱼护条目删除。
+func TestCraftFishBoardConsumesKeepnet(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.1, 0.9)
+	uid := int64(2000003)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess}
+
+	entry, _ := seedImportedKeepnetFish(t, srv, uid, 31, false) // species=asp
+	box.main, box.sub, box.tree = 9, 1, proto.Args524(craftObj8("craft_fish_board_s_01",
+		[]craftSlot{{ItemID: "bait_fishForCut", GUID: entry.EchoGUID, Species: "asp"}}, 1))
+	body, ok := box.invoke(t)
+	if !ok {
+		t.Fatal("9/1 未处理")
+	}
+	v := decodeTreeValue(t, srv, body)
+	if !v.IsKind(proto.KindObj) || v.TypeID != 803 {
+		t.Fatalf("应 803，实得 %v/%d", v.Kind, v.TypeID)
+	}
+	if got := u64Of(v.Fields[0].Num); got != 1 {
+		t.Fatalf("803.f0 应 1，实得 %d", got)
+	}
+
+	// f1 产出：13001 板，f1 peipahjmida 嵌 25 类鱼
+	f1 := v.Fields[1].Val
+	if f1 == nil || f1.Kind != proto.KindArgs || len(f1.Items) != 1 {
+		t.Fatalf("803.f1 应 1 件产出，实得 %+v", f1)
+	}
+	board := f1.Items[0]
+	if board.TypeID != 13001 {
+		t.Fatalf("产出应 13001 标本，实得 %d", board.TypeID)
+	}
+	mounted := board.Fields[1].Val
+	if mounted == nil || mounted.Kind != proto.KindObj || mounted.TypeID != 25 {
+		t.Fatalf("板 f1 应嵌 25 类鱼，实得 %+v", mounted)
+	}
+	if s := mounted.Fields[0].StrOr(); s != "asp" {
+		t.Fatalf("嵌鱼鱼种应 asp，实得 %q", s)
+	}
+	if mounted.Fields[16].Hex == entry.EchoGUID {
+		t.Fatal("嵌鱼 guid 应派生新值")
+	}
+
+	// f8 移除列表含被消耗的鱼护 guid
+	f8 := v.Fields[8].Val
+	if f8 == nil {
+		t.Fatal("803.f8 应携带移除列表")
+	}
+	found := false
+	for _, g := range f8.Items {
+		if g.Hex == entry.EchoGUID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("f8 应含鱼护 guid %s，实得 %+v", entry.EchoGUID, f8)
+	}
+
+	// 鱼护条目已删除（KeepnetGet 对不存在返回 err=ErrNoRows）
+	if got, gerr := srv.DB.KeepnetGet(ctx, uid, entry.EchoGUID); gerr == nil && got != nil {
+		t.Fatalf("鱼护条目应已删除，got=%v", got)
+	}
+}
+
+// TestCraftFishBoardWithoutFishFails 审查 P1 回归：无有效渔获的标本制作必须
+// 803(f0=0)，且不留任何痕迹——不产板、不扣标本券、不动鱼护。此前该路径
+// 静默成功并生成空白板（craft_ops 挂鱼失败仅记日志）。
+func TestCraftFishBoardWithoutFishFails(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.1, 0.9)
+	uid := int64(2000004)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess}
+
+	// 种一条无关鱼到鱼护，验证它不会被误伤；标本券给一张，验证不被扣。
+	other, _ := seedImportedKeepnetFish(t, srv, uid, 41, false)
+	coupon := &store.Item{GUID: fmt.Sprintf("%032x", 999), UID: uid, ItemID: "coupon_chuchelo",
+		Container: "backpack", Qty: 1}
+	if err := db.InsertItem(ctx, coupon); err != nil {
+		t.Fatal(err)
+	}
+
+	// 无鱼护 GUID 的槽位（客户端临时 GUID / 材料引用）
+	box.main, box.sub, box.tree = 9, 1, proto.Args524(craftObj8("craft_fish_board_s_01",
+		[]craftSlot{{ItemID: "coupon_chuchelo", GUID: coupon.GUID}}, 1))
+	body, ok := box.invoke(t)
+	if !ok {
+		t.Fatal("9/1 未处理")
+	}
+	v := decodeTreeValue(t, srv, body)
+	if !v.IsKind(proto.KindObj) || v.TypeID != 803 {
+		t.Fatalf("应 803，实得 %v/%d", v.Kind, v.TypeID)
+	}
+	if got := u64Of(v.Fields[0].Num); got != 0 {
+		t.Fatalf("803.f0 应 0（拒绝空白标本），实得 %d", got)
+	}
+	// 无产出
+	if f1 := v.Fields[1].Val; f1 != nil && len(f1.Items) != 0 {
+		t.Fatalf("失败回包不应携带产出，实得 %+v", f1)
+	}
+	// 标本券未被扣
+	var n int
+	if err := db.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE uid=? AND item_id=?`, uid, "coupon_chuchelo").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("标本券不应被消耗，剩余 %d", n)
+	}
+	// 鱼护无关鱼完好
+	if got, gerr := db.KeepnetGet(ctx, uid, other.EchoGUID); gerr != nil || got == nil {
+		t.Fatalf("无关渔获不应被误删，got=%v err=%v", got, gerr)
+	}
+	// 背包没有板子
+	var n2 int
+	if err := db.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE uid=? AND item_id=?`, uid, "fish_board_s_01").Scan(&n2); err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 0 {
+		t.Fatalf("不应产出板子，背包有 %d", n2)
 	}
 }
 
