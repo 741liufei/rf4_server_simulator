@@ -37,7 +37,7 @@ func TestHandleAdminServesEmbeddedControlDeck(t *testing.T) {
 
 	rr := httptest.NewRecorder()
 	a.handleAdmin(rr, httptest.NewRequest(http.MethodGet, "/admin/", nil))
-	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "RF4 Control Deck") {
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), "RF4 服务器助手") {
 		t.Fatalf("admin page: code=%d body=%q", rr.Code, rr.Body.String())
 	}
 
