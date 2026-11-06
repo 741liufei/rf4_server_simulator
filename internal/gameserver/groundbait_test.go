@@ -273,3 +273,71 @@ func TestGroundbaitCastDepositMapsChannels(t *testing.T) {
 		t.Fatalf("通道映射错了: %+v", got)
 	}
 }
+
+// 先打窝、后抛竿的顺序实测过：弹弓与手抛只上报距离、不上报落点坐标，
+// 这种窝记在「落点未知」那一格。玩家抛竿后判鱼用的是浮标落点格子，两者不同格——
+// 这份窝必须按衰减系数继续生效（否则少爷「先用弹弓打窝再抛竿」等于白打），
+// 但抬升要低于同一份数、落点正好压在浮标格上的窝；衰减调 0 退回「只认同格」。
+func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const uidUnknown = int64(1000001)
+	const uidKnown = int64(1000002)
+
+	// 落点未知：hasPos=false，落点退化成「整个钓点一格」(spot,-1)。
+	s.groundbaitDeposit(ctx, uidUnknown, "gb-test-loc", 0, 0, false, 7, "feed_karp", 8, "catapult", "gb:n1")
+	// 同份数、落点已知，并且正好压在浮标所在的 (300,300) 格。
+	s.groundbaitDeposit(ctx, uidKnown, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:n2")
+
+	roll := func(uid int64) float64 {
+		c := fishRollContext{
+			uid: uid, loc: "gb-test-loc", x: 300, z: 300, hasPos: true, spot: 7,
+			now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), rigType: 1, depthCM: 100,
+			cache:   newFishingRollCache(),
+			weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 18, wind: 3},
+		}
+		keys := []string{"carp", "n.pike"}
+		wts := []float64{100, 100}
+		s.applyGroundbaitWeight(ctx, &c, keys, wts)
+		if wts[1] != 100 {
+			t.Fatalf("掠食者任何时候都不该蹭窝，实得 %.2f", wts[1])
+		}
+		return wts[0]
+	}
+
+	diffuse := roll(uidUnknown)
+	if diffuse <= 100 {
+		t.Fatalf("落点未知的窝也应在浮标格生效，实得 %.2f", diffuse)
+	}
+	full := roll(uidKnown)
+	if full <= diffuse {
+		t.Fatalf("落点未知的抬升（%.2f）必须低于同份数落点已知的窝（%.2f）", diffuse, full)
+	}
+
+	// 落点未知的批次要能在状态里看出来，现场日志靠这两个数分辨窝打没打上。
+	st := s.groundbaitSpot(ctx, uidUnknown, "gb-test-loc", int64(300/groundbaitCellSizeM), int64(300/groundbaitCellSizeM))
+	if st.batches != 1 || st.diffuse != 1 {
+		t.Fatalf("应看到 1 批落点未知的窝，实得 batches=%d diffuse=%d", st.batches, st.diffuse)
+	}
+	if st.units < 3.19 || st.units > 3.21 {
+		t.Fatalf("8 份落点未知按 0.40 衰减应得 N=3.2，实得 %.3f", st.units)
+	}
+
+	// 衰减调成 0：退回「只认同格」，浮标格彻底看不见这份窝。
+	setWeatherTestTunable(t, s, "groundbait_diffuse_fall", "0")
+	if back := roll(uidUnknown); back != 100 {
+		t.Fatalf("衰减=0 时落点未知的窝不该影响浮标格，实得 %.2f", back)
+	}
+	setWeatherTestTunable(t, s, "groundbait_diffuse_fall", "0.40")
+
+	// 咬口扣份也要能从落点未知那几行里扣，否则窝永远不吃薄、死窝也解不开。
+	s.groundbaitConsumeBite(ctx, uidUnknown, "gb-test-loc", 300, 300, true, 7, 1)
+	var left float64
+	if err := s.DB.SQL.QueryRow(`SELECT units_left FROM groundbait_deposit WHERE txn_guid='gb:n1'`).Scan(&left); err != nil {
+		t.Fatal(err)
+	}
+	if left < 6.99 || left > 7.01 {
+		t.Fatalf("咬口应从没落点的窝行里扣掉 1 份（8→7），实得 %.3f", left)
+	}
+}

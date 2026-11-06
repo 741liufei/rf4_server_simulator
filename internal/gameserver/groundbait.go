@@ -275,6 +275,7 @@ type groundbaitSpotState struct {
 	units     float64            // N：净窝份数（已按剩余窝时等比稀释）
 	hoursLeft float64            // T：剩余窝时（游戏小时）
 	batches   int                // 未过期批次数
+	diffuse   int                // 其中落点未知的批数（按衰减系数计入）
 	hold      float64            // 按份数加权的留窝系数，用于流速门
 	affinity  map[string]float64 // 鱼种 -> 按份数加权的契合度 A
 	special   map[string]float64 // 鱼种 -> 按份数加权的专食性
@@ -292,8 +293,13 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 	}
 	acc := s.groundbaitGameHours(ctx, uid)
 	prior := s.tunableF("groundbait_prior", 0.35)
-	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id,item_id,portions,units_left,hours0,deposit_hour
-		FROM groundbait_deposit WHERE uid=? AND loc=? AND bx=? AND bz=?`, uid, loc, bx, bz)
+	// 同格投放全额生效；落点未知的投放（has_pos=0）按衰减系数计入，
+	// 免得「先打窝后抛竿」的窝在玩家抛竿后凭空消失。
+	fallDiffuse := s.groundbaitDiffuseFall()
+	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id,item_id,portions,units_left,hours0,deposit_hour,has_pos
+		FROM groundbait_deposit
+		WHERE uid=? AND loc=? AND ((bx=? AND bz=?) OR has_pos=0)
+		ORDER BY has_pos DESC, deposit_hour`, uid, loc, bx, bz)
 	if err != nil {
 		s.log.Warn("窝料账本读取失败", "err", err)
 		return st
@@ -305,6 +311,7 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 		units  float64
 		remain float64
 		ratio  float64
+		fall   float64
 	}
 	var alive []live
 	for rows.Next() {
@@ -313,8 +320,9 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 			itemID                 string
 			portions, units, hours float64
 			depositAt              float64
+			hasPosRow              int
 		)
-		if serr := rows.Scan(&id, &itemID, &portions, &units, &hours, &depositAt); serr != nil {
+		if serr := rows.Scan(&id, &itemID, &portions, &units, &hours, &depositAt, &hasPosRow); serr != nil {
 			continue
 		}
 		remain := hours - (acc - depositAt)
@@ -323,7 +331,12 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 			continue
 		}
 		ratio := groundbaitClamp(remain/hours, 0, 1)
-		alive = append(alive, live{id: id, itemID: itemID, units: units * ratio, remain: remain, ratio: ratio})
+		fall := 1.0
+		if hasPosRow == 0 {
+			fall = fallDiffuse
+		}
+		alive = append(alive, live{id: id, itemID: itemID, units: units * ratio * fall,
+			remain: remain * fall, ratio: ratio, fall: fall})
 	}
 	if cerr := rows.Close(); cerr != nil {
 		s.log.Warn("窝料账本游标关闭失败", "err", cerr)
@@ -344,6 +357,9 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 		st.units += b.units
 		st.hoursLeft += b.remain
 		st.batches++
+		if b.fall < 1 {
+			st.diffuse++
+		}
 		it, known := defs.itemDef(b.itemID)
 		if !known {
 			it.Hold = 1.0
@@ -389,6 +405,14 @@ func (s *Server) groundbaitOverdoseP(units float64) float64 {
 		return 1
 	}
 	return groundbaitClamp(1-step*(units-from), 0, 1)
+}
+
+// groundbaitDiffuseFall 落点未知投放的衰减系数。弹弓与手抛只上报距离、不上报坐标，
+// 这种窝记在「整个钓点一格」里；等玩家抛竿后判鱼用的是浮标落点格子，两者对不上。
+// 与其让这份窝凭空失效，不如让它按衰减系数继续生效（实测：同一钓点打窝后抛竿，
+// 本格 0 批 + 落点未知 1 批，全靠这条通道生效）。缺省 0.40，调 0 即只认同格。
+func (s *Server) groundbaitDiffuseFall() float64 {
+	return groundbaitClamp(s.tunableF("groundbait_diffuse_fall", 0.40), 0, 1)
 }
 
 // groundbaitGates 算习性门：硬门（水层/昼夜/季节/底质/流速/稀有度）与
@@ -498,7 +522,8 @@ func (s *Server) groundbaitBiteGate(ctx context.Context, uid int64, loc string, 
 	// 强度多少、开口率被压到多少。只在真的投过窝的格子上打，量不会大。
 	s.log.Info("窝料影响咬钩", "loc", loc, "cell", fmt.Sprintf("%d,%d", bx, bz),
 		"portions", st.units, "hours_left", st.hoursLeft, "batches", st.batches,
-		"strength", s.groundbaitStrength(st.units), "bite_gate", P)
+		"strength", s.groundbaitStrength(st.units), "bite_gate", P,
+		"on_spot", st.batches-st.diffuse, "no_pos", st.diffuse)
 	return P
 }
 
@@ -511,7 +536,9 @@ func (s *Server) groundbaitConsumeBite(ctx context.Context, uid int64, loc strin
 	acc := s.groundbaitGameHours(ctx, uid)
 	bx, bz, _ := groundbaitCellFor(x, z, hasPos, spot)
 	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id, units_left, hours0, deposit_hour
-		FROM groundbait_deposit WHERE uid=? AND loc=? AND bx=? AND bz=? ORDER BY deposit_hour`, uid, loc, bx, bz)
+		FROM groundbait_deposit
+		WHERE uid=? AND loc=? AND ((bx=? AND bz=?) OR has_pos=0)
+		ORDER BY has_pos DESC, deposit_hour`, uid, loc, bx, bz)
 	if err != nil {
 		return
 	}
