@@ -156,7 +156,11 @@ func lineMassGPM(def *store.ItemDef) float64 {
 // leaderMassG 估算前导重量。成品前导（cat13）的 hkgndoipdlc 是厘米，
 // 散装前导线（cat15）的长度在 ljnnpokapig（米）。线径与材质优先取
 // 内嵌线段（mbnambppbom）的登记值，缺失时用前导自身字段。
-func leaderMassG(def *store.ItemDef) float64 {
+//
+// instanceLengthM 来自物品实例 csQty（itemLength，单位米），只在静态定义
+// 没写长度时补位：cat15 有 82/193 条缺 ljnnpokapig，全靠定义会整类按 0 g。
+// 定义里已有长度时以定义为准，不能让成品前导的实例数量（件数）盖掉厘米值。
+func leaderMassG(def *store.ItemDef, instanceLengthM float64) float64 {
 	if def == nil {
 		return 0
 	}
@@ -168,6 +172,9 @@ func leaderMassG(def *store.ItemDef) float64 {
 		if v := itemDefNumericScalar(def, gearAttrLineLen); v > 0 {
 			lengthM = v // 散装前导线：米
 		}
+	}
+	if lengthM <= 0 && instanceLengthM > 0 {
+		lengthM = instanceLengthM
 	}
 	if lengthM <= 0 {
 		return 0
@@ -188,6 +195,10 @@ func leaderMassG(def *store.ItemDef) float64 {
 		}
 	}
 	if diameterMM <= 0 {
+		// 无线径兜底：lgjeahdobch 在静态表里是刚性/柔软度（同材质下近似常数），
+		// 这里只能把它近似当成"每米克重"再乘长度，量纲不是严格的物理量。
+		// 之所以保留：cat13 有 52/181 条既无内嵌线段也无顶层线径，去掉兜底
+		// 会让这 52 条整类按 0 g 计入抛投载荷。有实例长度时至少与长度成正比。
 		lengthM *= itemDefNumericScalar(def, gearAttrDensity)
 		if lengthM <= 0 {
 			return 0
@@ -222,10 +233,10 @@ func lureChildWeightG(def *store.ItemDef) float64 {
 
 // rigComponentCastWeight 返回单个装配组件对组合重量的贡献。
 // 只有线杯上的存线不计入终端重量（由调用方按运行线段单独折算）。
-func rigComponentCastWeight(category int64, def *store.ItemDef) float64 {
+func rigComponentCastWeight(category int64, def *store.ItemDef, instanceLengthM float64) float64 {
 	switch category {
 	case catLead, 15:
-		if w := leaderMassG(def); w > 0 {
+		if w := leaderMassG(def, instanceLengthM); w > 0 {
 			return w
 		}
 	case catLure:
@@ -269,7 +280,12 @@ func (s *Server) castPayloadWeights(ctx context.Context, rodGUID string) (rigWei
 		if err != nil || def == nil {
 			continue
 		}
-		weight := rigComponentCastWeight(comp.Category, def)
+		// 前导线静态定义可能没写长度，用实例 csQty 的米数补位。
+		instanceLengthM := 0.0
+		if comp.Category == catLead || comp.Category == 15 {
+			instanceLengthM = float64(s.itemLength(ctx, row))
+		}
+		weight := rigComponentCastWeight(comp.Category, def, instanceLengthM)
 		if weight <= 0 {
 			continue
 		}

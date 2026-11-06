@@ -242,11 +242,18 @@ func castRodActionFactor(action int64) float64 {
 }
 
 // castRodStiffnessFactor 用硬度档做极小幅修正：越硬的竿梢越不容易“吃掉”
-// 挥杆行程，但过硬会牺牲容错。幅度压在 ±1% 内，不和竿长、Test 克重抢
-// 主导权，避免同一根竿只换硬度标号就出现距离跳变。
+// 挥杆行程，但过硬会牺牲容错。幅度压在 -1.4%..+1.4% 内，不和竿长、Test
+// 克重抢主导权，避免同一根竿只换硬度标号就出现距离跳变。
+//
+// 客户端硬度档实际是 0..10（0=未登记/任意，1..7 常见档，8..10 多为船竿），
+// 不是旧注释假设的 1..7。8 档以上按公式已超过 clamp 上限，统一取 1.014；
+// 0 保持中性 1.0，异常大值按最硬档封顶，不再静默降级成中性。
 func castRodStiffnessFactor(stiffness int64) float64 {
-	if stiffness < 1 || stiffness > 7 {
+	if stiffness <= 0 {
 		return 1
+	}
+	if stiffness > 10 {
+		stiffness = 10
 	}
 	return clampFloat(0.986+0.004*float64(stiffness), 0.986, 1.014)
 }
@@ -421,15 +428,20 @@ func rodTestWeightFactor(payloadG, testMinG, testMaxG float64) float64 {
 	if payloadG <= testMaxG {
 		return inBand(payloadG)
 	}
-	// 峰值取 Test 上限处的储能，超出后按超重倍率衰减：1.5 倍约剩 78%，
-	// 3 倍约剩 48%，10 倍约剩 22%。下限避免出现“抛在脚边”的极端值。
+	// 峰值取 Test 上限处的储能，超出后按超重倍率 r=payload/testMax 衰减。
+	// 相对峰值的比例恒为 1/(1+rodTestOverloadDecay*(r-1))，只与超重倍率
+	// 有关、与竿型无关：1.5×→74.1%，2×→58.8%，3×→41.7%。
+	// r 很大时会撞到 clampFloat 的绝对下限 0.22（那是系数绝对值，不是
+	// "剩峰值的 22%"）；下限用于避免"抛在脚边"的极端值。
 	peak := inBand(testMaxG)
 	overRatio := payloadG/testMaxG - 1
 	return clampFloat(peak/(1+rodTestOverloadDecay*overRatio), 0.22, peak)
 }
 
-// rodTestOverloadDecay 控制超重衰减陡度。取值使 2 倍 Test 上限的载荷
-// 只剩峰值距离的约 59%，接近路亚实钓中“超重后抛投距离明显下降”的量级。
+// rodTestOverloadDecay 控制超重衰减陡度。2 倍 Test 上限时 r=2，系数为
+// 1/(1+0.70)=58.8% 峰值，接近路亚实钓中"超重后抛投距离明显下降"的量级。
+// 该数值是常数取值的标定锚点，由 TestCastOverTestPayloadShortensDistance
+// 的数值断言锁定，调整常数必须同步调整断言。
 const rodTestOverloadDecay = 0.70
 
 // rodOverTestRatio 返回载荷相对竿 Test 上限的倍率，1 表示刚好在上限。
@@ -553,7 +565,7 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 		RigType: rigType, CastAction: p.CastAction, CastPower: p.CastPower,
 		RodLengthM: p.RodLengthM, RodAction: p.RodAction, RodStiffness: p.RodStiffness,
 		RodSensitivity: p.RodSensitivity,
-		RodTestMinG: p.RodTestMinG, RodTestMaxG: p.RodTestMaxG,
+		RodTestMinG:    p.RodTestMinG, RodTestMaxG: p.RodTestMaxG,
 		RigWeightG: p.RigWeightG, BaitWeightG: p.BaitWeightG, PayloadWeightG: p.PayloadWeightG,
 		ReelEfficiency: perf.CastEfficiency,
 		ReelType:       p.ReelType, SpoolSize: p.SpoolSize, SpoolCapacityM: p.SpoolCapacityM,

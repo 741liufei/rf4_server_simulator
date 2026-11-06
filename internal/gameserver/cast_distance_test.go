@@ -70,6 +70,25 @@ func TestCastOverTestPayloadShortensDistance(t *testing.T) {
 	if hundred < 0.15 {
 		t.Fatalf("超重 10 倍时系数过低，距离会被压到失去意义: %.4f", hundred)
 	}
+	// 数值锚点：衰减只与超重倍率 r=payload/testMax 有关，相对峰值恒为
+	// 1/(1+0.70*(r-1))。这里故意用字面量 0.70 而不是 rodTestOverloadDecay，
+	// 这样以后微调常数会立刻被断言拦住，而不是断言跟着一起漂。
+	for _, tc := range []struct {
+		payload float64
+		want    float64
+	}{
+		{15, 1.0 / (1 + 0.70*0.5)}, // 1.5× → 峰值 74.1%
+		{20, 1.0 / (1 + 0.70*1.0)}, // 2×   → 峰值 58.8%
+		{30, 1.0 / (1 + 0.70*2.0)}, // 3×   → 峰值 41.7%
+	} {
+		if ratio := rodTestWeightFactor(tc.payload, 2, 10) / peak; math.Abs(ratio-tc.want) > 1e-9 {
+			t.Fatalf("%.0fg 应为峰值的 %.4f，实得 %.4f", tc.payload, tc.want, ratio)
+		}
+	}
+	// 10× 撞的是 clampFloat 的绝对下限 0.22，不是"剩峰值的 22%"。
+	if math.Abs(hundred-0.22) > 1e-9 {
+		t.Fatalf("超重 10 倍应落到绝对下限 0.22，实得 %.4f", hundred)
+	}
 	if ratio := rodOverTestRatio(25, 10); math.Abs(ratio-2.5) > 1e-9 {
 		t.Fatalf("超重倍率应为 2.5，实得 %f", ratio)
 	}

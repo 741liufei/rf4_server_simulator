@@ -34,14 +34,14 @@ func TestLeaderWeightFromGeometry(t *testing.T) {
 		`{"hkgndoipdlc":%d,"mbnambppbom":{"ciichedlnjh":%d,"ocmbfkebgpp":1}}`,
 		f32Attr(200.0), f32Attr(0.35))}
 	want := 1.14 * math.Pi / 4 * 0.35 * 0.35 * 2.0
-	if got := leaderMassG(leader); math.Abs(got-want) > 1e-6 {
+	if got := leaderMassG(leader, 0); math.Abs(got-want) > 1e-6 {
 		t.Fatalf("2m 0.35mm 尼龙前导应约 %.4fg，实得 %f", want, got)
 	}
 	// 散装钢丝前导线：长度在 ljnnpokapig（米）。
 	wire := &store.ItemDef{AttrsJSON: fmt.Sprintf(
 		`{"ocmbfkebgpp":6,"kngaaefkpka":%d,"ciichedlnjh":%d,"ljnnpokapig":%d}`,
 		f32Attr(13.0), f32Attr(0.50), f32Attr(15.0))}
-	gotWire := leaderMassG(wire)
+	gotWire := leaderMassG(wire, 0)
 	if gotWire <= 0 {
 		t.Fatalf("钢丝前导线应折算为正重量，实得 %f", gotWire)
 	}
@@ -52,8 +52,8 @@ func TestLeaderWeightFromGeometry(t *testing.T) {
 	short := &store.ItemDef{AttrsJSON: fmt.Sprintf(
 		`{"hkgndoipdlc":%d,"mbnambppbom":{"ciichedlnjh":%d,"ocmbfkebgpp":1}}`,
 		f32Attr(100.0), f32Attr(0.35))}
-	if math.Abs(leaderMassG(short)*2-leaderMassG(leader)) > 1e-6 {
-		t.Fatalf("前导重量应对长度线性: 1m=%f 2m=%f", leaderMassG(short), leaderMassG(leader))
+	if math.Abs(leaderMassG(short, 0)*2-leaderMassG(leader, 0)) > 1e-6 {
+		t.Fatalf("前导重量应对长度线性: 1m=%f 2m=%f", leaderMassG(short, 0), leaderMassG(leader, 0))
 	}
 }
 
@@ -65,7 +65,7 @@ func TestLureWeightIncludesNestedHooks(t *testing.T) {
 	if got := lureChildWeightG(lure); math.Abs(got-4.8) > 1e-6 {
 		t.Fatalf("三枚 1.6g 子钩应合计 4.8g，实得 %f", got)
 	}
-	if got := rigComponentCastWeight(catLure, lure); math.Abs(got-24.8) > 1e-6 {
+	if got := rigComponentCastWeight(catLure, lure, 0); math.Abs(got-24.8) > 1e-6 {
 		t.Fatalf("20g 饵体 + 4.8g 子钩 应计 24.8g，实得 %f", got)
 	}
 }
@@ -84,7 +84,7 @@ func TestRigComponentWeightsByCategory(t *testing.T) {
 		{"浮漂(号数克重)", 28, fmt.Sprintf(`{"jpaemlfkohn":%d}`, f32Attr(3.5)), 3.5},
 	}
 	for _, tc := range cases {
-		if got := rigComponentCastWeight(tc.category, testDef(tc.attrs)); math.Abs(got-tc.want) > 1e-6 {
+		if got := rigComponentCastWeight(tc.category, testDef(tc.attrs), 0); math.Abs(got-tc.want) > 1e-6 {
 			t.Fatalf("%s: 期望 %.4fg，实得 %f", tc.name, tc.want, got)
 		}
 	}

@@ -30,7 +30,9 @@ const (
 
 	// gearAttrRodAction 是鱼竿调性：1=Slow 2=Moderate 3=Fast 4=ExtraFast。
 	gearAttrRodAction = "bmmpdijcjdf"
-	// gearAttrRodStiffness 是鱼竿硬度档：0=任意 1=UL 2=L 3=ML 4=M 5=MH 6=H 7=XH。
+	// gearAttrRodStiffness 是鱼竿硬度档：0=未登记/任意，1..10 依次变硬（8..10
+	// 多为船竿）。item_def 里 cat3 的实际分布是 0:217 1:54 2:72 3:63 4:171
+	// 5:152 6:170 7:91 8:18 9:21 10:14，共 53 根落在 8..10，不能按 1..7 截断。
 	gearAttrRodStiffness = "ndpfblpkagj"
 	// gearAttrRodRigidity 是竿身刚度（0..1），本体侧用于弯曲手感，服务端只记录。
 	gearAttrRodRigidity = "lpgpehmjnjc"
