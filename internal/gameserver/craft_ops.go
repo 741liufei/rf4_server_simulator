@@ -7,12 +7,13 @@ package gameserver
 import (
 	"context"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
-	"strconv"
 	"strings"
 	"time"
 
@@ -133,13 +134,18 @@ func craftSkillCatForRecipe(recipeID string) int64 {
 // bundleCategory 套盒类别（shop_rules.BUNDLE_CATEGORY）。
 const bundleCategory = 55
 
+// trophyMountCategory 标本/奖章类（悬挂板、落地架、吊顶，输出均此类别）。
+const trophyMountCategory = 71
+
 // ---- 请求解析 ----
 
 // craftSlot 表示 koelkolmmee 槽位：f0 是需求 id，f1 是物品实例 GUID。
 // 部分界面使用客户端临时 GUID，服务端会再按需求 id 定位材料。
+// 标本板的槽位是三字段 bhfikaplhmh {需求id, 鱼护EchoGUID, 鱼种}，f2 带鱼种。
 type craftSlot struct {
-	ItemID string
-	GUID   string
+	ItemID  string
+	GUID    string
+	Species string
 }
 
 // craftPayload 9/1 / 9/4 共用的制作载荷。
@@ -205,7 +211,11 @@ func slotList(tree *proto.Value) []craftSlot {
 		if v.Kind == proto.KindObj && v.FieldCount() == 3 {
 			g := v.Fields[1]
 			if g.Op == "GUID16" || (g.Op == "OPTGUID" && g.Hex != "") {
-				out = append(out, craftSlot{ItemID: v.Fields[0].StrOr(), GUID: g.Hex})
+				out = append(out, craftSlot{
+					ItemID:  v.Fields[0].StrOr(),
+					GUID:    g.Hex,
+					Species: v.Fields[2].StrOr(),
+				})
 			}
 		}
 		walkChildren(v, walk)
@@ -406,6 +416,20 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		ctx.Log.Warn("9/1 产出物不可构造", "output", outputID, "err", err)
 		return srv.replyCraftResult(ctx, false, nil, nil, nil)
 	}
+
+	// 标本/奖章族（悬挂板 board s/m/l、落地架 stand xl、吊顶 ceil xxl，
+	// 输出均为 cat 71）：客户端材料槽带鱼护 EchoGUID+鱼种（bhfikaplhmh
+	// 三字段），把该渔获按鱼护同款 25 类编码嵌进板子 f1 peipahjmida，
+	// 客户端据此在奖牌上渲染鱼。按输出品类判定而非配方前缀——stand/ceil
+	// 族曾因只匹配 craft_fish_board_ 前缀漏嵌鱼（2026-11-06 实测）。
+	// 复用上方 outputDef（静态库查询必须在经济事务开启前完成，SQLite 单连接）。
+	// 嵌鱼 guid 按板子 guid 派生，避免与鱼护内原鱼同 guid。
+	// 渔获定位/嵌鱼/消耗都在事务内做：无有效渔获必须 803(false)——
+	// 曾实测无鱼护 GUID 的请求静默产出空白板；且消费与制作同事务，
+	// 杜绝"板子已入库、鱼还在护"或并发同鱼双开标本。
+	isTrophyMount := outputDef != nil && outputDef.Category == trophyMountCategory
+	var mounted *mountedFish
+
 	if isLeaderCraft {
 		// 必须在经济事务开启前加载静态目录；SQLite 单连接事务内再查会阻塞。
 		if _, err := srv.leaderWireCatalog(cctx); err != nil {
@@ -573,6 +597,25 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		}
 	}
 
+	// 标本挂鱼（事务内）：定位→嵌鱼→消耗一体，任何一步失败整体回滚。
+	if isTrophyMount {
+		mf, note, merr := srv.mountedFishTreeTx(cctx, tx, uid, req.Materials, producedRow.GUID)
+		if merr != nil {
+			return fail("标本渔获读取失败", "err", merr)
+		}
+		if mf == nil {
+			return fail("标本制作缺少有效渔获", "note", note)
+		}
+		if err := embedMountedFish(producedRow, mf); err != nil {
+			return fail("标本嵌鱼失败", "err", err)
+		}
+		if err := srv.consumeMountedFishTx(cctx, tx, uid, mf.EchoGUID); err != nil {
+			return fail("标本消耗渔获失败", "guid", shortGUID(mf.EchoGUID), "err", err)
+		}
+		mounted = mf
+		ctx.Log.Info("9/1 标本挂鱼", "species", mf.Species, "board", shortGUID(producedRow.GUID))
+	}
+
 	if isLeaderCraft {
 		if err := srv.materializeCraftedLeaderTx(cctx, tx, producedRow, leaderMaterials); err != nil {
 			return fail("引线成品物化失败", "err", err)
@@ -633,6 +676,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 			upsert = append(upsert, tree)
 		}
 	}
+	// 渔获已在事务内消耗（鱼即成为标本，官方语义）；这里只补通知信号。
+	if mounted != nil {
+		removed = append(removed, mounted.EchoGUID)
+		ctx.Log.Info("9/1 标本消耗渔获", "species", mounted.Species, "guid", shortGUID(mounted.EchoGUID))
+	}
 	var progress, skillTree *proto.Value
 	if masteryGain > 0 {
 		progress = masteryGainValue(skillCat, masteryGain)
@@ -641,6 +689,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 	ctx.AfterResponse(func() {
 		if masteryGain > 0 {
 			ctx.Sess.Push2_4SkillTree("制作 " + outputID)
+		}
+		if mounted != nil {
+			// 4/21 是物品移除信号：客户端据它把鱼护里的原鱼撤下
+			// （与卖鱼/移动物品同一信号，见 boat.go / hItemRemove）。
+			ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{mounted.EchoGUID})))
 		}
 		if stackTree != nil {
 			// 4/22 是背包快照，必须下发合并后的整堆数量。
@@ -1071,6 +1124,87 @@ func (s *Server) removeItems(ctx context.Context, uid int64, guids []string) int
 	return n
 }
 
+// mountedFish 标本挂鱼结果：嵌进板子树的鱼对象 + 被消耗的鱼护条目。
+type mountedFish struct {
+	Tree     *proto.Value
+	EchoGUID string
+	Species  string
+}
+
+// mountedFishTreeTx 标本挂鱼对象（事务内）：按材料槽（bhfikaplhmh {需求id,
+// 鱼护EchoGUID, 鱼种}）在鱼护里定位该渔获，按鱼护同款 25 类构造鱼对象，
+// guid 以板子 guid 派生（uuid5，避免与鱼护内原鱼同 guid）。
+// 返回 (nil, 原因, nil) = 没有槽位指向有效鱼护记录（槽位 GUID 是普通材料
+// 或已不存在的 echo guid）；返回 (nil, "", err) = 读取异常；两者都要求
+// 调用方（猫 71 制作）以 803(false) 收场——猫 71 的 52 个配方全部是标本
+// 板/支架/吊顶，没有渔获就没有标本，静默放行会产出空白板。
+// 鱼种不符同样拒绝：客户端槽位鱼种与鱼护实不符意味着引用已错位。
+func (s *Server) mountedFishTreeTx(ctx context.Context, tx *sql.Tx, uid int64, slots []craftSlot, boardGUID string) (*mountedFish, string, error) {
+	for _, sl := range slots {
+		if sl.GUID == "" {
+			continue
+		}
+		entry, err := s.DB.KeepnetGetTx(ctx, tx, uid, sl.GUID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, "", err
+		}
+		if sl.Species != "" && entry.Species != "" && sl.Species != entry.Species {
+			return nil, fmt.Sprintf("鱼种不符 slot=%s keepnet=%s", sl.Species, entry.Species), nil
+		}
+		fish := buildKeepnet25(entry, "")
+		if idx := fieldIdxByCS("ecknbkpeeji", csGUID); idx >= 0 && idx < len(fish.Fields) {
+			fish.Fields[idx].Hex = uuid5OIDHex(boardGUID + "/mounted_fish")
+		}
+		return &mountedFish{Tree: fish, EchoGUID: entry.EchoGUID, Species: entry.Species}, "", nil
+	}
+	return nil, "材料槽没有指向有效鱼护记录", nil
+}
+
+// embedMountedFish 把渔获对象嵌进板子字段 f1 peipahjmida 并序列化回快照。
+// 任何失败都应让制作整体失败：无鱼的板子客户端渲染为空白标本。
+func embedMountedFish(row *store.Item, mf *mountedFish) error {
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return fmt.Errorf("板子字段解析失败: %w", err)
+	}
+	idx := fieldIdxByCS(row.WireClass, "peipahjmida")
+	if idx < 0 || idx >= len(fields) {
+		return fmt.Errorf("wire 类 %s 无 peipahjmida 字段", row.WireClass)
+	}
+	fields[idx] = proto.Field{Op: "VAL", Val: mf.Tree}
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return fmt.Errorf("板子字段序列化失败: %w", err)
+	}
+	row.FieldsJSON = fj
+	return nil
+}
+
+// consumeMountedFishTx 事务内消耗渔获：护网条目 + 导入快照镜像行 +
+// 槽位/钓组关联一并清理（与旧 KeepnetDelete+DeleteItemOfUID+DeleteItemRefs
+// 同语义）。条目不存在返回错误——消费必须"恰好一次"，杜绝同一尾鱼双开。
+func (s *Server) consumeMountedFishTx(ctx context.Context, tx *sql.Tx, uid int64, guid string) error {
+	deleted, err := s.DB.DeleteKeepnetTx(ctx, tx, uid, guid)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return fmt.Errorf("鱼护条目不存在或已被消费")
+	}
+	// 镜像行兜底清理：type_id 非 25 的残留行也一并移除（正常不存在）。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item WHERE uid=? AND guid=?`, uid, guid); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM container_slot WHERE guid=?`, guid); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM rig_component WHERE guid=?`, guid)
+	return err
+}
+
 // ---- 9/4 制作询价 ----
 
 // hCraftCost 处理 9/4 制作询价，返回 501 价格行：
@@ -1248,21 +1382,39 @@ func (s *Server) replyCraftResultWithSkill(ctx *Ctx, ok bool, produced, upsert [
 	return body, true
 }
 
-// listCodeForObjs 根据首个对象元素的 type_id 推导数组容器 code。
-// by_elem 优先，by_type_id 兜底；都无法确定或结果为 524 时返回 61。
+// listCodeOverrides 个别元素 type_id 的容器 code 显式覆盖（优先于
+// by_elem/by_type_id）。只放有实抓断线证据、且合成段结果已验证有毒的条目，
+// 不做全局策略变更——by_type_id 段虽是按"属性 id 顺序补全"的合成表，但
+// cat 46 窝料(120→49)、cat 30 干饵(145→74)、cat 19 香精(125→54)、cat 61
+// (3103→193)、9/6 需求对象(17→18) 等既有制作/模板一直按它下发且客户端
+// 接受，全量改回落 61 属于无回归矩阵的行为变更。
+var listCodeOverrides = map[string]string{
+	// cat 71 标本实例 (13001)：by_type_id 合成段给 471，客户端按 code 471
+	// 走 dnepcgceamm 枚举解码器，803 解码 InvalidCastException 直接断线
+	// （Player.log 2026-11-06 02:59 实证）。实抓容器 code 同通用对象列表 61
+	// （cat 13/17/26/27 的 by_elem 亦为 61）。
+	"13001": "61",
+}
+
+// listCodeForObjs 根据首个对象元素的 type_id 推导数组容器 code：
+// 显式覆盖 → by_elem 实抓映射 → by_type_id 兜底 → 61（通用对象列表）。
 func listCodeForObjs(items []*proto.Value) string {
 	a := loadArgcode()
 	for _, it := range items {
-		if it == nil || !it.IsKind(proto.KindObj) {
+		if it == nil || it.Kind != proto.KindObj {
 			continue
 		}
-		k := strconv.FormatUint(uint64(it.TypeID), 10)
+		k := fmt.Sprintf("%d", it.TypeID)
+		if v, ok := listCodeOverrides[k]; ok && v != "" {
+			return v
+		}
 		if v, ok := a.ByElem[k]; ok && v != "" && v != "524" {
 			return v
 		}
 		if v, ok := a.ByTypeID[k]; ok && v != "" && v != "524" {
 			return v
 		}
+		break
 	}
 	return "61"
 }

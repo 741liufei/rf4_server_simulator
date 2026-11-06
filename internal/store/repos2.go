@@ -211,6 +211,23 @@ func (d *DB) KeepnetGet(ctx context.Context, uid int64, echoGUID string) (*Keepn
 	return e, nil
 }
 
+// KeepnetGetTx KeepnetGet 的事务版：标本制作等需要在同一事务内
+// "读取-校验-消费"鱼护条目时使用。
+func (d *DB) KeepnetGetTx(ctx context.Context, tx *sql.Tx, uid int64, echoGUID string) (*KeepnetEntry, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT echo_guid, uid, COALESCE(species,''), COALESCE(name_zh,''), weight_g, length_m,
+		       cat, COALESCE(keep_loc,''), COALESCE(keep_spot,0), COALESCE(keep_bait,''),
+		       COALESCE(keep_level,''), COALESCE(ts,0)
+		FROM keepnet_items WHERE uid=? AND echo_guid=?`, uid, echoGUID)
+	e := &KeepnetEntry{}
+	err := row.Scan(&e.EchoGUID, &e.UID, &e.Species, &e.NameZh, &e.WeightG, &e.LengthM,
+		&e.Cat, &e.KeepLoc, &e.KeepSpot, &e.KeepBait, &e.KeepLevel, &e.TS)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 // KeepnetDelete 卖鱼出护。
 func (d *DB) KeepnetDelete(ctx context.Context, uid int64, echoGUIDs []string) error {
 	if len(echoGUIDs) == 0 {
