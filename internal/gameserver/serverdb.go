@@ -103,7 +103,6 @@ func (s *Server) buildFightCurvesForFish(f *RolledFish, pull float64, profile fi
 func (s *Server) buildFightCurvesWithProfile(species string, pull float64, profile fishFightProfile) *proto.Value {
 	s.curveMu.Lock()
 	rows := s.curves[species]
-	fallback := s.curves["crucian"]
 	if len(rows) == 0 {
 		rows = s.curves[fishFightArchetypeFor(species).CurvePool]
 		if len(rows) == 0 {

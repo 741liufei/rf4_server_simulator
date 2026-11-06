@@ -160,6 +160,7 @@ func (s *Server) markPlayerBoarded(ctx *Ctx, tree *proto.Value) {
 	}
 	st.mu.Lock()
 	st.markBoardLocked(unix)
+	st.markBoatClientEventLocked(time.Now().Unix(), true)
 	st.mu.Unlock()
 }
 

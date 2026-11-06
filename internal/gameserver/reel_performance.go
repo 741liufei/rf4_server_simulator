@@ -103,18 +103,6 @@ func (s *Server) reelInstalledDragFromRow(ctx context.Context, row *store.Item) 
 	if row == nil {
 		return 0
 	}
-	drag := s.reelInstalledDragFromRow(ctx, row)
-	if drag <= 0 || row.Workmanship <= 0 {
-		return drag
-	}
-	return drag * row.Workmanship
-}
-
-// reelInstalledDragFromRow 读取当前摩擦片实例自身的物理制动力（未乘母轮成色）。
-func (s *Server) reelInstalledDragFromRow(ctx context.Context, row *store.Item) float64 {
-	if row == nil {
-		return 0
-	}
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err == nil {
 		for i := range fields {

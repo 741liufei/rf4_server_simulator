@@ -3,6 +3,7 @@ package gameserver
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"rf4server/internal/proto"
 )
@@ -36,6 +37,21 @@ func TestCheckTicket(t *testing.T) {
 	if dec.Kind != proto.KindObj || dec.TypeID != boatTicketTypeID {
 		t.Fatalf("3/7 应回 type_id=%d 的 obj，实得 kind=%s type=%d class=%s",
 			boatTicketTypeID, dec.Kind, dec.TypeID, dec.Class)
+	}
+
+	// 3/7 重新上船必须覆盖更早的 3/10 下船事件。
+	st := srv.stateFor(sess.Userid)
+	st.mu.Lock()
+	st.markBoatClientEventLocked(time.Now().Unix(), false)
+	st.mu.Unlock()
+	if body, ok := hCheckTicket(miscCtx(sess, 3, 7, req)); !ok || len(body) == 0 {
+		t.Fatal("3/7 重新上船未处理")
+	}
+	st.mu.Lock()
+	onBoat, boatKnown := st.onBoatLocked(time.Now().Unix())
+	st.mu.Unlock()
+	if !boatKnown || !onBoat {
+		t.Fatalf("3/7 重新上船后应判在船上，得到 known=%v on=%v", boatKnown, onBoat)
 	}
 
 	// 未命中：必须回 null，让客户端走"无票"分支而不是异常分支。

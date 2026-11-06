@@ -13,6 +13,7 @@ type fishRollContext struct {
 	loc        string
 	now        time.Time
 	baits      []string
+	lureBait   bool
 	forRig     bool
 	depthCM    int64
 	lureLayer  float64

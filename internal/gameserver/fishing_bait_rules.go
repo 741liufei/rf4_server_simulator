@@ -256,6 +256,13 @@ func (s *Server) filterFishBaitSet(loc string, ids []string, keys []string, weig
 	if len(baits) == 0 {
 		return nil, nil
 	}
+	c.lureBait = false
+	for _, b := range baits {
+		if b.category == 17 {
+			c.lureBait = true
+			break
+		}
+	}
 	names, namesOK := s.cachedFishNames(ctx, c)
 	if !namesOK {
 		return nil, nil
@@ -349,8 +356,8 @@ func fishChartCondition(condition string) ([]int, bool) {
 }
 
 // ruleConditionAllows 只用客户端给得出的证据判断攻略前置条件：海图条件要有能
-// 定位的抛竿落点，动作条件要有钓组动作上报。拿不到证据时保持中性，避免把
-// 没有对应上报的钓法一律判成不合格。船票与上船状态仍未接入，不据此限制上鱼。
+// 定位的抛竿落点，拟饵动作条件要有钓组动作上报。天然饵不套用“使用拟饵时”的
+// 动作和船条件；拿不到证据时保持中性，避免把没有对应上报的钓法一律判成不合格。
 func ruleConditionAllows(r fishBaitRule, c fishRollContext) bool {
 	if r.chartAny || len(r.chartZones) > 0 {
 		if c.runtime == nil {
@@ -372,14 +379,26 @@ func ruleConditionAllows(r fishBaitRule, c fishRollContext) bool {
 			}
 		}
 	}
+	if !c.lureBait {
+		return true
+	}
 	if r.needBoat && c.boatKnown && !c.onBoat {
 		return false
 	}
 	if !lureMotionEvidence(c.lureMask) {
 		return true
 	}
-	if r.jigOrMotion && c.lureMask&lureMotionJigBit == 0 && c.lureMask&lureMotionInWaterMask == 0 {
-		return false
+	if r.jigOrMotion {
+		if c.lureMask&lureMotionJigBit != 0 {
+			return true
+		}
+		if c.lureMask&lureMotionInWaterMask == 0 {
+			return false
+		}
+		if c.boatKnown && !c.onBoat {
+			return false
+		}
+		return true
 	}
 	if r.needDrift && c.lureMask&lureMotionDriftBit == 0 {
 		return false

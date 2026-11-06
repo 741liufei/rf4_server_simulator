@@ -267,23 +267,36 @@ func TestRuleConditionAllowsChartZoneAndMotionEvidence(t *testing.T) {
 		t.Fatal("“海图，区域不限”在有海图的地点应放行")
 	}
 	drift := fishBaitRule{needDrift: true}
-	if !ruleConditionAllows(drift, fishRollContext{lureMask: 0}) {
+	if !ruleConditionAllows(drift, fishRollContext{lureBait: true, lureMask: 0}) {
 		t.Fatal("没有钓组动作上报时不该按顺流条件封鱼")
 	}
-	if !ruleConditionAllows(drift, fishRollContext{lureMask: lureMotionDriftBit}) {
+	if !ruleConditionAllows(drift, fishRollContext{lureBait: true, lureMask: lureMotionDriftBit}) {
 		t.Fatal("顺流移动应满足顺水漂流条件")
 	}
-	if ruleConditionAllows(drift, fishRollContext{lureMask: 0x400}) {
+	if ruleConditionAllows(drift, fishRollContext{lureBait: true, lureMask: 0x400}) {
 		t.Fatal("已上报稳定收线且无顺流时不该放行顺水漂流条件")
 	}
 	either := fishBaitRule{jigOrMotion: true}
-	if !ruleConditionAllows(either, fishRollContext{lureMask: lureMotionJigBit}) {
+	if !ruleConditionAllows(either, fishRollContext{lureBait: true, lureMask: lureMotionJigBit, boatKnown: true, onBoat: false}) {
 		t.Fatal("jig 阶梯应满足二选一条件")
 	}
-	if !ruleConditionAllows(either, fishRollContext{lureMask: 0x400}) {
+	if !ruleConditionAllows(either, fishRollContext{lureBait: true, lureMask: 0x400}) {
 		t.Fatal("饵在水中运动应满足二选一条件")
 	}
-	if ruleConditionAllows(either, fishRollContext{lureMask: 0x200}) {
+	if ruleConditionAllows(either, fishRollContext{lureBait: true, lureMask: 0x400, boatKnown: true, onBoat: false}) {
+		t.Fatal("水动分支在确认不在船上时不该放行")
+	}
+	if ruleConditionAllows(either, fishRollContext{lureBait: true, lureMask: 0x200}) {
 		t.Fatal("水层静置既不 jig 也不水动，不该放行")
+	}
+	boatRule := fishBaitRule{needBoat: true}
+	if !ruleConditionAllows(boatRule, fishRollContext{boatKnown: true, onBoat: false}) {
+		t.Fatal("天然饵不该被拟饵专用的船条件封口")
+	}
+	if ruleConditionAllows(boatRule, fishRollContext{lureBait: true, boatKnown: true, onBoat: false}) {
+		t.Fatal("拟饵在确认不在船上时不该放行")
+	}
+	if !ruleConditionAllows(boatRule, fishRollContext{lureBait: true, boatKnown: true, onBoat: true}) {
+		t.Fatal("拟饵在确认在船上时应放行")
 	}
 }
