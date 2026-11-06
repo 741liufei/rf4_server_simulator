@@ -156,7 +156,14 @@ func (d *Dispatch) lookup(main, sub uint8) Handler {
 func (s *Server) handleEnvelopePayload(sess *Session, payload []byte) {
 	env, ok := proto.ParseEnvelope(payload)
 	if !ok {
-		sess.log.Warn("信封解析失败", "len", len(payload))
+		// 解析不了就把原字节带上：客户端的切换窝料等动作会落在这里，
+		// 只有 hex 才能判断是没注册的新命令还是信封版本不同。
+		magic := byte(0)
+		if len(payload) > 0 {
+			magic = payload[0]
+		}
+		sess.log.Warn("信封解析失败", "len", len(payload), "magic", magic,
+			"hex", traceHexHead(payload, traceHexMax))
 		return
 	}
 	if env.Marker != -1 {
