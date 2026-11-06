@@ -72,6 +72,33 @@ func TestFishStats321FromCatchLog(t *testing.T) {
 	if got := fishList.Items[2].Field(0).Str; got == nil || *got != "c.roach" {
 		t.Fatalf("f6 末卡鱼种=%v，期望 c.roach（500g 最轻）", got)
 	}
+	counts := []struct {
+		name                       string
+		total, trophy, superTrophy int64
+	}{
+		{"perch", 1, 1, 1},
+		{"bream", 1, 1, 0},
+		{"c.roach", 2, 0, 0},
+	}
+	for i, want := range counts {
+		card := fishList.Items[i]
+		nameField := card.Field(0)
+		if got := nameField.StrOr(); got != want.name {
+			t.Fatalf("f6[%d] 鱼种=%q，期望 %q", i, got, want.name)
+		}
+		totalField := card.Field(9)
+		if got := int64(totalField.U32()); got != want.total {
+			t.Fatalf("f6[%d] %s 总钓获=%d，期望 %d", i, want.name, got, want.total)
+		}
+		trophyField := card.Field(10)
+		if got := int64(trophyField.U32()); got != want.trophy {
+			t.Fatalf("f6[%d] %s 奖杯数=%d，期望 %d", i, want.name, got, want.trophy)
+		}
+		superTrophyField := card.Field(11)
+		if got := int64(superTrophyField.U32()); got != want.superTrophy {
+			t.Fatalf("f6[%d] %s 超稀有数=%d，期望 %d", i, want.name, got, want.superTrophy)
+		}
+	}
 	card := dec.Field(7).Val
 	if card == nil || card.Class != "ippcfiphgfl" {
 		t.Fatalf("f7 最大渔获卡缺失: %#v", card)

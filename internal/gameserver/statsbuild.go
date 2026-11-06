@@ -126,24 +126,45 @@ func (s *Server) buildStats321(ctx context.Context, uid int64) (*proto.Value, er
 
 	// f6 鱼列表：客户端 DTO ilhlknehckb.aknbobdjjnk 是 gillkjlbkje[]
 	// （320 纪录卡数组，Cpp2IL 元数据实证），不是空容器。发空数组时统计
-	// 面板的鱼列表一片空白。每鱼种取最重一条，按重量降序。
-	bestBySpecies := map[string]catchStatRow{}
+	// 面板的鱼列表一片空白。每鱼种取最重一条，按重量降序；卡片的
+	// f9/f10/f11 分别是该鱼种总钓获、奖杯和超稀有计数（官服 3/2 抓包实证）。
+	type speciesStat struct {
+		best        catchStatRow
+		total       int64
+		trophy      int64
+		superTrophy int64
+	}
+	bestBySpecies := map[string]*speciesStat{}
 	for _, r := range rows {
 		if r.FishKey == "" {
 			continue
 		}
-		if prev, ok := bestBySpecies[r.FishKey]; !ok || r.WeightG > prev.WeightG {
-			bestBySpecies[r.FishKey] = r
+		st := bestBySpecies[r.FishKey]
+		if st == nil {
+			st = &speciesStat{}
+			bestBySpecies[r.FishKey] = st
+		}
+		if st.total == 0 || r.WeightG > st.best.WeightG {
+			st.best = r
+		}
+		st.total++
+		if r.Grade >= 3 {
+			st.trophy++
+		}
+		if r.Grade >= 4 {
+			st.superTrophy++
 		}
 	}
 	fishArgs := proto.Args(proto.S("129"))
-	fishRows := make([]catchStatRow, 0, len(bestBySpecies))
-	for _, r := range bestBySpecies {
-		fishRows = append(fishRows, r)
+	fishRows := make([]*speciesStat, 0, len(bestBySpecies))
+	for _, st := range bestBySpecies {
+		fishRows = append(fishRows, st)
 	}
-	sort.SliceStable(fishRows, func(i, j int) bool { return fishRows[i].WeightG > fishRows[j].WeightG })
-	for _, r := range fishRows {
-		fishArgs.Items = append(fishArgs.Items, recordCard320(r, true))
+	sort.SliceStable(fishRows, func(i, j int) bool { return fishRows[i].best.WeightG > fishRows[j].best.WeightG })
+	for _, st := range fishRows {
+		card := recordCard320(st.best, true)
+		setRecordCard320Counts(card, st.total, st.trophy, st.superTrophy)
+		fishArgs.Items = append(fishArgs.Items, card)
 	}
 
 	baitKeys := append([]string(nil), baitOrder...)
@@ -273,6 +294,24 @@ func buildRecordCards(rows []catchStatRow) map[string]catchStatRow {
 		out["max_spin"] = spinner[0]
 	}
 	return out
+}
+
+func setRecordCard320Counts(card *proto.Value, total, trophy, superTrophy int64) {
+	if card == nil {
+		return
+	}
+	for _, item := range []struct {
+		name  string
+		value int64
+	}{
+		{"ipmijfogljh", total},
+		{"leklbplmgkj", trophy},
+		{"iidphfokfdd", superTrophy},
+	} {
+		if idx := fieldIdxByCS(card.Class, item.name); idx >= 0 && idx < len(card.Fields) {
+			card.Fields[idx].Num = ptrU64(uint64(item.value))
+		}
+	}
 }
 
 func recordCard320(r catchStatRow, ok bool) *proto.Value {
