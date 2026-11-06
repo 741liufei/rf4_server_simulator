@@ -202,6 +202,14 @@ func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*
 		}))
 	}
 
+	// f16 是资料页等级旁的星标计数（稀有鱼数），与统计页「钓到的稀有鱼数」
+	// 和 24/19 玩家卡片同源：catch_log 里 grade>=3 的条数。此前写死 1，
+	// 表现为钓到稀有鱼后主资料页的数字不动。
+	rareCatches, rareErr := s.DB.CatchCountAtLeastGrade(ctx, uid, 3)
+	if rareErr != nil {
+		s.log.Warn("稀有鱼计数读取失败，按 0 下发", "uid", uid, "err", rareErr)
+	}
+
 	return wiregen.MakeObj("ghfbofgdflm", map[int]*proto.Value{
 		0:  proto.U32(uint32(p.UID)),
 		1:  proto.StrVal(p.Name),
@@ -219,7 +227,7 @@ func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*
 		13: buildStats322W(wNow),
 		14: proto.U32(0),
 		15: proto.U32(profileFlags),
-		16: proto.U32(1),
+		16: proto.U32(uint32(rareCatches)),
 		17: proto.StrVal(p.Email),
 		18: proto.U32(uint32(p.Role)),
 		19: proto.U64(uint64(p.Bank)),

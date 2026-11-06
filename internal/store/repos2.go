@@ -249,6 +249,15 @@ func (d *DB) KeepnetDelete(ctx context.Context, uid int64, echoGUIDs []string) e
 // ---- 钓获日志 ----
 
 // CatchLogInsert 记录一次新增钓获；入护重试由 KeepFishingCatch 按鱼 GUID 去重。
+// CatchCountAtLeastGrade 统计玩家 grade≥minGrade 的钓获条数。
+// 稀有鱼（奖杯）按 grade>=3 计，与统计页和玩家卡片的计数口径一致。
+func (d *DB) CatchCountAtLeastGrade(ctx context.Context, uid, minGrade int64) (int64, error) {
+	var n int64
+	err := d.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM catch_log WHERE uid=? AND COALESCE(grade,0)>=?`, uid, minGrade).Scan(&n)
+	return n, err
+}
+
 func (d *DB) CatchLogInsert(ctx context.Context, uid int64, loc string, spot int64, fishKey, nameZh string, weightG int64, lengthM float64, source, bait string, grade, xp, silver int64, locLevel string) error {
 	var identifier [16]byte
 	if _, err := rand.Read(identifier[:]); err != nil {
