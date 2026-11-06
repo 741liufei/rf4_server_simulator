@@ -19,7 +19,7 @@ func seedImportedKeepnetFish(t *testing.T, srv *Server, uid int64, id int, impor
 	if !imported {
 		return entry, ""
 	}
-	tree := buildKeepnet25(entry, entry.KeepLevel)
+	tree := buildKeepnet25(entry, entry.KeepLevel, 0)
 	tree.Fields[9].Num = ptrU64(0)
 	tree.Fields[18].Num = ptrU64(0)
 	tree.Fields[22].Num = ptrU64(639292851529062897)

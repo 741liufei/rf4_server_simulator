@@ -1154,7 +1154,7 @@ func (s *Server) mountedFishTreeTx(ctx context.Context, tx *sql.Tx, uid int64, s
 		if sl.Species != "" && entry.Species != "" && sl.Species != entry.Species {
 			return nil, fmt.Sprintf("鱼种不符 slot=%s keepnet=%s", sl.Species, entry.Species), nil
 		}
-		fish := buildKeepnet25(entry, "")
+		fish := buildKeepnet25(entry, "", store.SpeciesRarityTx(ctx, tx, entry.Species))
 		if idx := fieldIdxByCS("ecknbkpeeji", csGUID); idx >= 0 && idx < len(fish.Fields) {
 			fish.Fields[idx].Hex = uuid5OIDHex(boardGUID + "/mounted_fish")
 		}

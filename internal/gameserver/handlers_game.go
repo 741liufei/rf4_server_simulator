@@ -1414,7 +1414,13 @@ func registerSessionHandlers(d *Dispatch) {
 
 // ---- 25 护网条目 ----
 
-func buildKeepnet25(e *store.KeepnetEntry, levelKey string) *proto.Value {
+// rarityOf25 取鱼种稀有度（ecknbkpeeji.f4，jmpghlofkoc：0 普通 1 稀有 2 超稀有）。
+// 结算卡与图鉴按它渲染紫/粉标（icn_rare_* / icn_very_rare_*），缺省为普通。
+func (s *Server) rarityOf25(fishKey string) int64 {
+	return s.DB.SpeciesRarity(s.dbCtx(), fishKey)
+}
+
+func buildKeepnet25(e *store.KeepnetEntry, levelKey string, rarity int64) *proto.Value {
 	if e.KeepLevel != "" {
 		levelKey = e.KeepLevel
 	}
@@ -1455,6 +1461,7 @@ func buildKeepnet25(e *store.KeepnetEntry, levelKey string) *proto.Value {
 		1: proto.U32(uint32(e.WeightG)),
 		2: proto.U32(lengthBits),
 		3: proto.U32(uint32(grade)),
+		4: proto.U32(uint32(rarity)),
 		5: proto.U64(updated),
 		6: wiregen.MustMakeObj("bncmdhbgahe", map[int]*proto.Value{
 			0: proto.U32(uint32(day)),

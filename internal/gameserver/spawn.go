@@ -330,7 +330,7 @@ func (s *Server) buildTravelBodyAt(sess *Session, key string, nowUnix int64) ([]
 	}
 	kn := proto.Args(proto.S("61"))
 	for _, e := range list {
-		kn.Items = append(kn.Items, buildKeepnet25(e, key))
+		kn.Items = append(kn.Items, buildKeepnet25(e, key, s.rarityOf25(e.Species)))
 	}
 	snap := proto.Obj("dlbahppbdad", 800,
 		proto.Field{Op: "VAL", Val: kn},

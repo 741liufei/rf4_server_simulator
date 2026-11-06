@@ -9,7 +9,7 @@ import (
 // StaticTables 是运行时只读的静态资料表。seed 只允许替换这些表。
 var StaticTables = []string{
 	"item_def", "item_catalog", "item_price", "recipe", "skill_def", "skill_cat_def",
-	"spot_def", "shop_item", "species_weight", "species_grade", "loc_fish", "loc_alias",
+	"spot_def", "shop_item", "species_weight", "species_grade", "species_rarity", "loc_fish", "loc_alias",
 	"loc_bait", "loc_bait_fish", "loc_wiki_fish", "spot_fish", "fish_bait_pref",
 	"sonar_profile", "map_fish_roster", "companion_bait_fish", "companion_fish_meta",
 }

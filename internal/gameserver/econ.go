@@ -240,7 +240,7 @@ func (s *Server) buildPending25(f *RolledFish, st *FishState, levelKey string) *
 		KeepBait: st.Bait,
 		TS:       float64(time.Now().UnixNano()) / 1e9,
 	}
-	return buildKeepnet25(e, levelKey)
+	return buildKeepnet25(e, levelKey, s.rarityOf25(f.Species))
 }
 
 // fishingKeep 14/5 入护。
