@@ -38,7 +38,11 @@ type FishState struct {
 	HasCastPos  bool
 	// BoatUntil 是船票租用有效的截止 unix，3/7 验票上船时写入。0 表示本次会话
 	// 还没有上船证据，判鱼对“已上船”条件保持中性。
-	BoatUntil       int64
+	BoatUntil int64
+	// BoatBoardAt / BoatOffAt 是客户端 3/10 boat_use 上报的上船、下船 unix。
+	// 3/10 只差请求体尾字节，已用实机样本对位（0x0e 上船、0x0f 下船）。
+	BoatBoardAt     int64
+	BoatOffAt       int64
 	CastTs          time.Time
 	FallTs          time.Time
 	FallSeen        bool
@@ -166,14 +170,32 @@ func (st *FishState) markBoardLocked(unix int64) {
 	st.BoatUntil = unix
 }
 
+// markBoatClientEventLocked 记录客户端 3/10 boat_use 上报的上船或下船时刻。
+// 调用方需持有 st.mu。下船只翻转“是否在船上”，不动船票租期：租期没结束前玩家
+// 可以回船上（3/7 会复用同一张票），下一次上船上报会把状态重新置为在船上。
+func (st *FishState) markBoatClientEventLocked(nowUnix int64, board bool) {
+	if board {
+		st.BoatBoardAt = nowUnix
+		return
+	}
+	st.BoatOffAt = nowUnix
+}
+
 // onBoatLocked 判断当前是否还在船上。调用方需持有 st.mu。
-// known=false 表示本次会话没见过上船流程，调用方不该据此封鱼；票租用到期后
-// known=true 且 on=false，可以确认已经不在船上。
+// known=false 表示本次会话没见过上船流程，调用方不该据此封鱼。
+// 优先级：客户端 3/10 实时上报 > 3/7 验票租期。租期已过时即便没收到下船上报
+// 也判不在船上（原版此时会把玩家从船上送回岸）。
 func (st *FishState) onBoatLocked(nowUnix int64) (on, known bool) {
-	if st.BoatUntil == 0 {
+	if st.BoatUntil == 0 && st.BoatBoardAt == 0 && st.BoatOffAt == 0 {
 		return false, false
 	}
-	return st.BoatUntil > nowUnix, true
+	if st.BoatUntil > 0 && st.BoatUntil <= nowUnix {
+		return false, true
+	}
+	if st.BoatOffAt > st.BoatBoardAt {
+		return false, true
+	}
+	return true, true
 }
 
 func (st *FishState) cancelBiteTimerLocked() {

@@ -38,8 +38,9 @@ func init() { RegisterExtra(registerBoatHandlers) }
 
 // registerBoatHandlers 注册载具/船票相关命令。
 //
-// 3/10 boat_use 由 timeline.go 的 hBoatUseLog 处理（仅记录请求体，客户端上船后
-// 单向通知，不需要回包），这里不重复注册，避免注册顺序漂移。
+// 3/10 boat_use 由 timeline.go 的 hBoatUse 处理（客户端上船、下船时单向通知，
+// 不需要回包），这里不重复注册，避免注册顺序漂移。
+// 客户端只在码头上船时发 3/7 验票，下船只有 3/10 尾字节这一条实时证据。
 func registerBoatHandlers(d *Dispatch) {
 	d.Register(3, 7, hCheckTicket)
 }
@@ -134,7 +135,8 @@ func hCheckTicket(ctx *Ctx) ([]byte, bool) {
 }
 
 // markPlayerBoarded 记录“已上船”，截止取票的租用到期时间（iingicaldbk FILETIME）。
-// 客户端只在码头上船时发 3/7，验票通过即上船证据；租用到期就视为已下船。
+// 客户端只在码头上船时发 3/7，验票通过即上船证据；下船看 3/10 的实时上报，
+// 没收到下船上报时才退回“租用到期视为已下船”。
 // 没有票到期时间时不改状态，避免把“没证据”写成“不在船上”。
 func (s *Server) markPlayerBoarded(ctx *Ctx, tree *proto.Value) {
 	if ctx == nil || ctx.Sess == nil || ctx.Sess.Srv == nil || tree == nil {
