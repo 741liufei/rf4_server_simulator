@@ -200,6 +200,13 @@ func (s *Server) RepairReelComponents(ctx context.Context) (int, error) {
 						child.Fields[cidx].Num = old.Fields[didx].Num
 					}
 				}
+				// 同一个零件（沿用原 GUID）重建时，摩擦片制动力也要带过去；
+				// 0 表示已磨穿，同样不能丢。
+				if oldDrag, present, _ := frictionWasherDrag(old); present {
+					if cidx := fieldIdxByCS(child.Class, csDragForce); cidx >= 0 && cidx < child.FieldCount() {
+						setWireFloat(child.Fields, child.Class, cidx, oldDrag)
+					}
+				}
 			}
 			fields[idx].Val = child
 			changed = true
@@ -234,10 +241,10 @@ func (s *Server) normalizeReelPart(host *store.Item, hostFields []proto.Field, c
 		}
 	}
 	if def.Category == 9 {
-		if idx := fieldIdxByCS(child.Class, csDragForce); idx >= 0 && idx < child.FieldCount() {
-			want := uint64(proto.F32Bits(float32(itemDefF32(def, gearAttrDragMax) * host.Workmanship)))
-			if u64Of(child.Fields[idx].Num) != want {
-				child.Fields[idx].Num = ptrU64(want)
+		// 制动力是磨损状态，不是可从定义重算的派生值：只在字段缺失时补齐，
+		// 字段存在（含 0=已磨穿）一律保留，否则启动修复会把磨损刷回满值。
+		if _, present, idx := frictionWasherDrag(child); !present && idx >= 0 && idx < child.FieldCount() {
+			if setWireFloat(child.Fields, child.Class, idx, itemDefF32(def, gearAttrDragMax)*host.Workmanship) {
 				changed = true
 			}
 		}

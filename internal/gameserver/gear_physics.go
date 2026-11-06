@@ -20,6 +20,7 @@ const (
 	gearCatLine       = int64(11)
 	gearCatLeader     = int64(13)
 	gearCatLeaderWire = int64(15)
+	gearCatLeadcore   = int64(57)
 
 	gearAttrMaxLoad  = "kngaaefkpka"
 	gearAttrDiameter = "ciichedlnjh"
@@ -39,16 +40,17 @@ const (
 	// gearAttrSensitivity 是鱼竿灵敏度（0..1），本体侧用于咬口反馈，服务端只记录。
 	gearAttrSensitivity = "ddebfbbjppk"
 
-	gearAttrStretch  = "aomkdnjcgji"
-	gearAttrDensity  = "lgjeahdobch"
-	gearAttrLineLen  = "ljnnpokapig"
-	gearAttrDrag     = "mlfjkaoicdn"
-	gearAttrGear     = "oiaplokhcii"
-	gearAttrDragMax  = "omghfmdfjpc"
-	gearAttrRatio    = "dpgbopbanal"
-	gearAttrLeaderIn = "mbnambppbom"
-	gearAttrHookSize = "gkfbafmbpam"
-	gearAttrHookLen  = "najajfakhdo"
+	gearAttrStretch    = "aomkdnjcgji"
+	gearAttrDensity    = "lgjeahdobch"
+	gearAttrLineLen    = "ljnnpokapig"
+	gearAttrDrag       = "mlfjkaoicdn"
+	gearAttrGear       = "oiaplokhcii"
+	gearAttrDragMax    = "omghfmdfjpc"
+	gearAttrRatio      = "dpgbopbanal"
+	gearAttrLeaderIn   = "mbnambppbom"
+	gearAttrLeaderLock = "lbadjgllglo"
+	gearAttrHookSize   = "gkfbafmbpam"
+	gearAttrHookLen    = "najajfakhdo"
 	// gearAttrMaterial 是前导线材质（cat15）；主线材质走 fopbhlmkcpe。
 	gearAttrMaterial = "ocmbfkebgpp"
 
@@ -65,30 +67,38 @@ const (
 // rigGearIDs 返回当前钓组用于物理判定的 systemID。
 // 空字符串表示数据缺失，该部件不参与最弱环计算。
 type rigGearIDs struct {
-	Rod              string
-	Reel             string
-	ReelGUID         string
-	Line             string
-	Leader           string
-	RodDurability    float64
-	ReelDurability   float64
-	LineDurability   float64
-	LeaderDurability float64
+	Rod                 string
+	Reel                string
+	ReelGUID            string
+	Line                string
+	Leader              string
+	Leadcore            string
+	LeadcoreGUID        string
+	Connector           string
+	ConnectorGUID       string
+	RodDurability       float64
+	ReelDurability      float64
+	LineDurability      float64
+	LeaderDurability    float64
+	LeadcoreDurability  float64
+	ConnectorDurability float64
 }
 
 // gearPhysicsSpec 是 item_def 解码后的物理量快照（kg/mm/m/比例）。
 type gearPhysicsSpec struct {
-	RodPowerKg        float64
-	LineStrengthKg    float64
-	LeaderStrengthKg  float64
-	ReelPresent       bool
-	ReelDragKg        float64 // 当前耐久阶段下的锁轮承力
-	ReelCurrentDragKg float64 // 当前摩擦档位下的制动力，第 30 档锁轮时等于锁轮承力
-	LineStretch       float64
-	HookPresent       bool
-	HookStrengthKg    float64
-	HookLengthMM      float64
-	HookSize          int64
+	RodPowerKg          float64
+	LineStrengthKg      float64
+	LeaderStrengthKg    float64 // 前导/子线：取内嵌线与连接件较小值
+	LeadcoreStrengthKg  float64 // 铅芯前导（cat57）自身拉力
+	ConnectorStrengthKg float64 // 独立连接件（cat14）自身拉力
+	ReelPresent         bool
+	ReelDragKg          float64 // 当前耐久阶段下的锁轮承力
+	ReelCurrentDragKg   float64 // 当前摩擦档位下的制动力，第 30 档锁轮时等于锁轮承力
+	LineStretch         float64
+	HookPresent         bool
+	HookStrengthKg      float64
+	HookLengthMM        float64
+	HookSize            int64
 }
 
 // decodeU32F32 把 attrs_json 中的 U32 数值按 IEEE-754 F32 位型还原。
@@ -224,6 +234,10 @@ func leaderStrengthKg(def *store.ItemDef) float64 {
 	}
 	if inner := itemDefNested(def, gearAttrLeaderIn); inner != nil {
 		if f := nestedF32(inner, gearAttrMaxLoad); f > 0 {
+			// 成品前导 = 内嵌线 + 连接件，承力取两者较小值（连接件是短链短板）。
+			if lock := nestedF32(itemDefNested(def, gearAttrLeaderLock), gearAttrMaxLoad); lock > 0 && lock < f {
+				return lock
+			}
 			return f
 		}
 	}
@@ -287,11 +301,18 @@ func rodTestG(def *store.ItemDef) (float64, float64) {
 }
 
 // gearBreakLimitKg 返回整副钓组最弱一环的拉力；0 表示没有可信物理数据。
-// 手竿没有轮子，只比较竿/主线/子线；带轮竿额外比较锁轮承力。
+// 承力件 = 竿 / 主线 / 前导(子线) / 铅芯前导 / 连接件 / 钩，带轮竿额外比较锁轮承力。
+// 渔轮本身是泄力装置、靠打滑化解鱼力，不算"会断"的承力件，但锁轮承力是张力上限。
 func gearBreakLimitKg(spec gearPhysicsSpec) float64 {
-	parts := []float64{spec.RodPowerKg, spec.LineStrengthKg, spec.LeaderStrengthKg}
+	parts := []float64{
+		spec.RodPowerKg, spec.LineStrengthKg, spec.LeaderStrengthKg,
+		spec.LeadcoreStrengthKg, spec.ConnectorStrengthKg,
+	}
 	if spec.ReelPresent {
 		parts = append(parts, spec.ReelDragKg)
+	}
+	if spec.HookPresent {
+		parts = append(parts, spec.HookStrengthKg)
 	}
 	limit := 0.0
 	for _, p := range parts {
@@ -381,6 +402,9 @@ func gearWeakestPart(spec gearPhysicsSpec) string {
 		{"rod", spec.RodPowerKg},
 		{"line", spec.LineStrengthKg},
 		{"leader", spec.LeaderStrengthKg},
+		{"leadcore", spec.LeadcoreStrengthKg},
+		{"connector", spec.ConnectorStrengthKg},
+		{"hook", spec.HookStrengthKg},
 	}
 	name := ""
 	limit := 0.0
@@ -472,6 +496,8 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 	spec.LineStrengthKg = applyDurability(lineStrengthKg(lineDef), ids.LineDurability)
 	spec.LineStretch = lineStretch(lineDef)
 	spec.LeaderStrengthKg = applyDurability(leaderStrengthKg(load(ids.Leader)), ids.LeaderDurability)
+	spec.LeadcoreStrengthKg = applyDurability(itemDefF32(load(ids.Leadcore), gearAttrMaxLoad), ids.LeadcoreDurability)
+	spec.ConnectorStrengthKg = applyDurability(itemDefF32(load(ids.Connector), gearAttrMaxLoad), ids.ConnectorDurability)
 	return spec
 }
 
@@ -602,6 +628,12 @@ func (s *Server) rigGearIDs(ctx context.Context, uid int64, rodGUID string) rigG
 	if out.Leader == "" {
 		out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, compGUIDs[gearCatLeader])
 	}
+	// 铅芯前导与独立连接件是和前导/子线并列的终端承力件，各自有拉力，
+	// 不能混进"Leader"里算，否则最弱环会漏掉它们。
+	out.LeadcoreGUID = compGUIDs[gearCatLeadcore]
+	out.Leadcore, out.LeadcoreDurability = s.itemSystemIDDurabilityByGUID(ctx, out.LeadcoreGUID)
+	out.ConnectorGUID = compGUIDs[catLeaderLock]
+	out.Connector, out.ConnectorDurability = s.itemSystemIDDurabilityByGUID(ctx, out.ConnectorGUID)
 
 	// 没有挂轮就是手竿；轮子和主线都只认当前竿上的真实装配，
 	// 不能拿背包里的任意物品补位。

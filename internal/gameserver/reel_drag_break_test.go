@@ -97,6 +97,18 @@ func TestReelDragWorkmanshipAppliedOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// csDragForce 已是持久化磨损状态，字段存在时不再按母轮成色重算。
+	// 本例专门验证"仅字段缺失时初始化"这条路径只应用一次成色：先清掉
+	// 子件字段，再让 canonicalize 按 0.8 成色补齐。
+	drag, _, _, ok := srv.selectedReelPart(ctx, fields, 9)
+	if !ok || drag == nil {
+		t.Fatal("轮子缺少摩擦片(cat9)子实例")
+	}
+	dragIdx := fieldIdxByCS(drag.Class, csDragForce)
+	if dragIdx < 0 || dragIdx >= len(drag.Fields) {
+		t.Fatal("摩擦片缺少制动力字段")
+	}
+	drag.Fields[dragIdx].Num = nil
 	srv.canonicalizeItemPhysicalFields(ctx, reel, fields)
 	fj, err := FieldsToJSON(fields)
 	if err != nil {
