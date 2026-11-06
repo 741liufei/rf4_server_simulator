@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>RF4 Control Deck</title>
+<title>RF4 服务器助手</title>
 <style>
 :root{--bg:#09111d;--bg2:#0d1725;--panel:#111e2e;--panel2:#162638;--line:#24384f;--text:#e8f0f8;--muted:#8294aa;--accent:#42b8ff;--accent2:#37e2b0;--danger:#ff6178;--warn:#ffbb55;--ok:#54d98c;--shadow:0 18px 40px #0008;--r:16px}
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;background:radial-gradient(circle at 80% 0,#17314b 0,transparent 30%),radial-gradient(circle at 0 100%,#122b2a 0,transparent 28%),var(--bg);color:var(--text);font:14px/1.55 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
@@ -26,10 +26,73 @@ button,input,select,textarea{font:inherit;color:var(--text)}button{cursor:pointe
 
 @media(max-width:720px){.shell{grid-template-columns:minmax(0,1fr)}.field.span2{grid-column:auto}.toolbar .grow{min-width:100px}.player-hero .actions,.tabs{flex-wrap:wrap}.tabs button{flex:0 0 auto;white-space:nowrap}.nav button{flex:0 0 auto}}
 
-#fishRulesCard .section-head{flex-wrap:wrap}#fishRulesCard .rule-row{padding:12px 0;border-bottom:1px solid var(--line)}#fishRulesCard .rule-row:last-of-type{border-bottom:0}#fishRulesCard .rule-row>div{min-width:0;flex:1 1 220px}#fishRulesCard button{flex:0 0 auto}#fishRulesCard p,#fishRulesCard small{overflow-wrap:anywhere}#fishRulesCard p{margin-bottom:0}
-@media(max-width:720px){#view-fish .fish-layout{grid-template-columns:minmax(0,1fr)!important}}
+/* 鱼群规则：单行紧凑开关条（说明默认收起、点「说明」展开），把视口高度让给下方的水域/鱼种列表 */
+#fishRulesCard{padding:12px 16px}
+#fishRulesCard .rules-strip{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+#fishRulesCard .rules-strip>h2{font-size:15px;margin:0}
+#fishRulesCard .rule-item{display:flex;align-items:center;gap:9px;padding:7px 12px;border:1px solid var(--line);border-radius:11px;background:#0e1b29;cursor:pointer;user-select:none}
+#fishRulesCard .rule-item:hover{border-color:#2a4963}
+#fishRulesCard .rule-item>span{font-size:13px;font-weight:600;white-space:nowrap}
+#fishRulesCard #rulesStatus{flex:1;min-width:0;text-align:right;overflow-wrap:anywhere}
+#fishRulesCard #rulesHelp{margin-top:10px;padding-top:10px;border-top:1px solid var(--line)}
+#fishRulesCard .rule-help{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px;margin:4px 0;font-size:12px}
+#fishRulesCard .rule-help>b{font-weight:600}
+#fishRulesCard .rule-help>span{color:var(--muted);min-width:0;overflow-wrap:anywhere}
+/* 咬钩参数：折叠摘要行（当前值常驻可见）+ 展开编辑 */
+#fishEditor .params-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:2px 0 10px;font-size:12.5px}
+#fishEditor .params-bar .vals{color:var(--muted);min-width:0;flex:1;overflow-wrap:anywhere}
+#fishEditor .params-bar .vals b{color:var(--text);font-family:Consolas,monospace;font-weight:600}
+#fishEditor .params-form{margin:0 0 10px}
+/* 钓场页工作区：玩法开关卡固定在上，双栏等高；水域列表与鱼种表各自内滚（表头吸顶），表单和保存按钮固定可见。
+   高度保底 600px：视口够高时贴合视口（整页不滚动），视口太矮时不再压缩列表、改为整页滚动——长列表任何窗口下都可操作 */
+#view-fish.on{display:flex;flex-direction:column;height:max(600px,calc(100vh - 148px));min-height:600px}
+/* 公告横幅会把整页顶下去 56px，同步抬高工作区基准避免出现无谓滚动 */
+body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
+#fishRulesCard{flex:none}
+#view-fish .fish-layout{flex:1;min-height:0}
+#view-fish .fish-layout>.card{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+#view-fish .fish-layout>.card>:not(#fishAreas):not(#fishRows){flex:none}
+#fishAreas{margin-top:10px;flex:1;min-height:0;overflow:auto}
+#fishRows{flex:1;min-height:0;display:flex;flex-direction:column}
+#fishEditor .table-wrap{flex:1;min-height:0;overflow:auto}
+@media(max-width:720px){
+ #view-fish.on{display:block;height:auto;min-height:0}
+ #view-fish .fish-layout>.card{display:block;overflow:visible}
+ #fishAreas{max-height:45vh;overflow:auto}
+ #fishEditor .table-wrap{max-height:60vh;overflow:auto}
+}
+@media(max-width:720px){#view-fish .fish-layout{grid-template-columns:minmax(0,1fr)!important}#view-dashboard .duo{grid-template-columns:minmax(0,1fr)!important}}
+/* 侧栏两行导航：名称 + 一句功能说明 */
+.nav button .txt{display:flex;flex-direction:column;align-items:flex-start;min-width:0}
+.nav button .txt small{font-size:10.5px;line-height:1.3;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
+.nav button.on .txt small{color:#9db4c8}
+.ico{width:22px;height:22px;flex:none;display:grid;place-items:center;color:var(--accent)}
+.ico svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+/* 总览常用操作卡片：图标 + 名称 + 一句说明 */
+.qa-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,210px),1fr));gap:12px}
+.qa{display:flex;gap:11px;align-items:flex-start;text-align:left;padding:13px 14px;border:1px solid var(--line);border-radius:12px;background:#0e1b29;cursor:pointer;transition:.15s;color:var(--text)}
+.qa:hover{border-color:var(--accent);transform:translateY(-1px)}
+.qa .txt{display:flex;flex-direction:column;min-width:0}
+.qa .txt b{font-size:13.5px}
+.qa .txt small{color:var(--muted);font-size:11.5px;margin-top:2px;overflow-wrap:anywhere}
+/* 参数可见说明与恢复默认 */
+.tunable-hint{font-size:11px;color:var(--muted);margin-top:5px;overflow-wrap:anywhere}
+.rule-mini{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.rule-mini:last-child{border-bottom:0}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+/* 深色细滚动条（水域列表、玩家列表、表格、弹窗结果等所有滚动区） */
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:#2b4258;border-radius:9px;border:2px solid var(--bg2);background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:#3e5d7d;border:2px solid var(--bg2);background-clip:padding-box}
+::-webkit-scrollbar-corner{background:transparent}
+/* 总览双栏 */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+/* 总览双栏在窄屏折叠 */
+@media(max-width:980px){.duo{grid-template-columns:minmax(0,1fr)!important}.tunable-fields{grid-template-columns:1fr}}
 
-.tunable-group+.tunable-group{margin-top:16px}.tunable-group h3{font-size:14px;margin:0 0 10px}.tunable-fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));gap:12px 16px}.tunable-field{min-width:0}.tunable-field label{display:block;color:var(--muted);margin-bottom:6px;overflow-wrap:anywhere}.tunable-field>div{display:flex;gap:8px;align-items:center}.tunable-field input{min-width:0;flex:1;width:0;padding:7px 9px}.tunable-field button{flex:none}.section-head{flex-wrap:wrap}
+/* 参数行式布局：左标签+说明，右数值+操作，双列排布 */
+.tunable-group+.tunable-group{margin-top:18px}.tunable-group h3{font-size:14px;margin:0 0 2px}.tunable-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 34px}.tunable-field{display:flex;gap:14px;align-items:center;justify-content:space-between;min-width:0;padding:9px 0;border-bottom:1px solid var(--line)}.tunable-field>div:first-child{flex:1;min-width:0}.tunable-field label{display:block;color:var(--text);margin:0;font-weight:600;overflow-wrap:anywhere}.tunable-field .tunable-hint{margin-top:2px}.tunable-field>div:last-child{display:flex;gap:8px;align-items:center;flex:none}.tunable-field input{width:112px;min-width:0;flex:none;padding:7px 9px}.tunable-field button{flex:none}.section-head{flex-wrap:wrap}
 #storeSummary{max-width:100%;overflow-wrap:anywhere}
 #playerHappyHour{overflow-wrap:anywhere}
 </style>
@@ -42,7 +105,7 @@ button,input,select,textarea{font:inherit;color:var(--text)}button{cursor:pointe
 </div>
 <div id="login">
   <form class="login-card" onsubmit="doLogin(event)">
-    <div class="logo">RF</div><h1>RF4 Control Deck</h1><p>玩家、库存、商店、鱼口与邮件统一控制台</p>
+    <div class="logo">RF</div><h1>RF4 服务器助手</h1><p>管理玩家、商店、钓场与邮件的系统辅助工具</p>
     <div class="field"><label>管理员账号</label><input id="lu" autocomplete="username" required></div>
     <div class="field"><label>密码</label><input id="lp" type="password" autocomplete="current-password" required></div>
     <button class="btn" style="width:100%;margin-top:6px">进入控制台</button>
@@ -50,24 +113,33 @@ button,input,select,textarea{font:inherit;color:var(--text)}button{cursor:pointe
 </div>
 <div class="shell" id="app" style="display:none">
   <aside class="sidebar">
-    <div class="brand"><div class="logo">RF</div><div><b>Control Deck</b><span>RF4 Admin</span></div></div>
+    <div class="brand"><div class="logo">RF</div><div><b>服务器助手</b><span>RF4 Admin</span></div></div>
     <nav class="nav" id="nav">
-      <button class="on" data-view="dashboard" onclick="go('dashboard')"><span class="ico">⌂</span>总览</button>
-      <button data-view="players" onclick="go('players')"><span class="ico">♟</span>玩家工作台</button>
-      <button data-view="stores" onclick="go('stores')"><span class="ico">▤</span>商店库存</button>
-      <button data-view="fish" onclick="go('fish')"><span class="ico">≈</span>鱼口控制</button>
-      <button data-view="mail" onclick="go('mail')"><span class="ico">✉</span>邮件中心</button>
-      <button data-view="audit" onclick="go('audit')"><span class="ico">≡</span>审计日志</button>
+      <button class="on" data-view="dashboard" onclick="go('dashboard')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h5v-6h4v6h5V9.5"/></svg></span><span class="txt"><b>总览</b><small>服务状态 · 在线 · 最近改动</small></span></button>
+      <button data-view="players" onclick="go('players')"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3 3.4-4.5 6.5-4.5s5.7 1.5 6.5 4.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17.5 15.6c2 .4 3.5 1.6 4 3.9"/></svg></span><span class="txt"><b>玩家管理</b><small>档案 · 资产 · 护鱼网 · 技能</small></span></button>
+      <button data-view="stores" onclick="go('stores')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M2 4h20v4H2z"/><path d="M10 12h4"/></svg></span><span class="txt"><b>商店与库存</b><small>改货架价格和库存</small></span></button>
+      <button data-view="fish" onclick="go('fish')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6.5 12c1.2-3.3 4.3-5.5 7.5-5.5 3.5 0 6 2.5 7 5.5-1 3-3.5 5.5-7 5.5-3.2 0-6.3-2.2-7.5-5.5Z"/><path d="M17.5 11v.01"/><path d="M6.5 12 3 9v6l3.5-3Z"/></svg></span><span class="txt"><b>钓场与鱼口</b><small>玩法开关 · 出什么鱼 · 咬钩快慢</small></span></button>
+      <button data-view="mail" onclick="go('mail')"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><span class="txt"><b>邮件</b><small>发消息和物品附件</small></span></button>
+      <button data-view="params" onclick="go('params')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1.5 14h5M9.5 8h5M17.5 16h5"/></svg></span><span class="txt"><b>游戏参数</b><small>玩法手感 · 经验结算倍率</small></span></button>
+      <button data-view="audit" onclick="go('audit')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></span><span class="txt"><b>审计日志</b><small>后台每次操作的留痕</small></span></button>
     </nav>
     <div class="side-foot"><div class="u" id="who">admin</div><div class="m"><span class="status-dot"></span> 服务在线</div><button class="btn alt sm" onclick="logout()">退出登录</button></div>
   </aside>
   <main class="main">
     <header class="topbar"><div><h1 id="pageTitle">总览</h1><p id="pageSub">服务器运行状态与快捷操作</p></div><div class="top-actions"><button class="btn alt" onclick="refreshCurrent()">刷新</button></div></header>
-    <section class="view on" id="view-dashboard"><div class="grid stats" id="stats"></div><div class="card" style="margin-top:16px"><div class="section-head"><h2>运行参数</h2><small>热更新：修改后 30 秒内生效（部分立即生效）</small></div><div id="tunablesBody"></div></div><div class="card" style="margin-top:16px"><div class="section-head"><h2>快捷入口</h2><small>常用管理动作</small></div><div class="actions"><button class="btn" onclick="go('players')">管理玩家</button><button class="btn alt" onclick="go('stores')">修改库存</button><button class="btn alt" onclick="go('fish')">调整鱼口</button><button class="btn alt" onclick="go('mail')">发送邮件</button></div></div></section>
+    <section class="view on" id="view-dashboard">
+      <div class="grid stats" id="stats"></div>
+      <div class="card" style="margin-top:16px"><div class="section-head"><h2>常用操作</h2><small>点卡片直达对应功能</small></div><div class="qa-grid" id="qaGrid"></div></div>
+      <div class="duo" style="margin-top:16px">
+        <div class="card"><div class="section-head"><h2>最近管理操作</h2><button class="btn alt sm" onclick="go('audit')">查看全部</button></div><div id="recentAudit"><div class="empty">读取中…</div></div></div>
+        <div class="card"><div class="section-head"><h2>玩法开关</h2><button class="btn alt sm" onclick="go('fish')">去调整</button></div><div id="ruleOverview"><div class="empty">读取中…</div></div></div>
+      </div>
+    </section>
     <section class="view" id="view-players"><div class="split"><div class="card player-list"><div class="toolbar"><input class="grow" id="playerSearch" placeholder="搜索 UID / 昵称" onkeydown="if(event.key==='Enter')loadPlayers()"><button class="btn sm" onclick="loadPlayers()">搜索</button></div><div id="playerList" style="margin-top:12px"></div></div><div class="card" id="playerDetail"><div class="empty">选择左侧玩家开始管理</div></div></div></section>
     <section class="view" id="view-stores"><div class="card"><div class="toolbar"><select id="storeSelect" class="grow" onchange="loadStoreItems()"></select><input id="storeSearch" placeholder="搜索商品 / 名称" onkeydown="if(event.key==='Enter')loadStoreItems()"><button class="btn" onclick="loadStoreItems()">查询</button></div><div id="storeSummary" class="muted" style="margin:12px 0"></div><div class="table-wrap" id="storeTable"></div></div></section>
-    <section class="view" id="view-fish"><div class="card" id="fishRulesCard" style="margin-bottom:16px"><div class="section-head"><h2>鱼群规则</h2><small>各项独立保存；生态、天气、饵料和分布规则默认关闭，欢乐时光默认开启。</small></div><div class="section-head rule-row"><div><h2>逐鱼种生态 <span class="pill" id="fishEcologyBadge">正在读取</span></h2><p class="muted" id="fishEcologyMessage" role="status">正在读取开关。</p></div><button class="btn alt" id="fishEcologyToggle" disabled aria-pressed="false" onclick="toggleFishRules('ecology')">正在读取</button></div><div class="section-head rule-row"><div><h2>鱼群随机分布 <span class="pill" id="fishDistributionBadge">正在读取</span></h2><p class="muted" id="fishDistributionMessage" role="status">正在读取开关。</p></div><button class="btn alt" id="fishDistributionToggle" disabled aria-pressed="false" onclick="toggleFishRules('distribution')">正在读取</button></div><div class="section-head rule-row"><div><h2>鱼类吃饵偏好 <span class="pill" id="fishRulesBadge">正在读取</span></h2><p class="muted" id="fishRulesMessage" role="status">正在读取开关。</p></div><button class="btn alt" id="fishRulesToggle" disabled aria-pressed="false" onclick="toggleFishRules('bait')">正在读取</button></div><div class="section-head rule-row"><div><h2>天气与温度鱼口 <span class="pill" id="fishWeatherBadge">正在读取</span></h2><p class="muted" id="fishWeatherMessage" role="status">正在读取开关。</p></div><button class="btn alt" id="fishWeatherToggle" disabled aria-pressed="false" onclick="toggleFishRules('weather')">正在读取</button></div><div class="section-head rule-row"><div><h2>欢乐时光 <span class="pill" id="happyHourBadge">正在读取</span></h2><p class="muted" id="happyHourMessage" role="status">正在读取开关。</p></div><button class="btn alt" id="happyHourToggle" disabled aria-pressed="false" onclick="toggleFishRules('happy')">正在读取</button></div><p class="muted">各项独立保存，关闭逐鱼种生态后沿用原判鱼流程。</p></div><div class="grid fish-layout" style="grid-template-columns:270px minmax(0,1fr)"><div class="card"><div class="section-head"><h2>水域</h2></div><input id="fishSearch" placeholder="筛选水域" oninput="renderFishAreas()"><div id="fishAreas" style="margin-top:10px;max-height:70vh;overflow:auto"></div></div><div class="card" id="fishEditor"><div class="empty">选择水域配置鱼口</div></div></div></section>
+    <section class="view" id="view-fish"><div class="card" id="fishRulesCard" style="margin-bottom:12px"><div class="rules-strip"><h2>鱼群规则</h2><label class="rule-item"><span>鱼群随机分布</span><input type="checkbox" class="switch" id="fishDistributionSwitch" disabled onchange="toggleFishRules('distribution',this)"></label><label class="rule-item"><span>鱼类吃饵偏好</span><input type="checkbox" class="switch" id="fishRulesSwitch" disabled onchange="toggleFishRules('bait',this)"></label><label class="rule-item"><span>天气与温度鱼口</span><input type="checkbox" class="switch" id="fishWeatherSwitch" disabled onchange="toggleFishRules('weather',this)"></label><label class="rule-item"><span>欢乐时光</span><input type="checkbox" class="switch" id="happyHourSwitch" disabled onchange="toggleFishRules('happy',this)"></label><small class="muted" id="rulesStatus"></small><button class="btn alt sm" id="rulesHelpBtn" aria-expanded="false" onclick="toggleRulesHelp()">说明 ⌄</button></div><div id="rulesHelp" hidden><p class="muted" style="margin:0 0 8px">各项独立保存；天气、饵料和分布规则默认关闭，欢乐时光默认开启。</p><div class="rule-help"><b>鱼群随机分布</b><span id="fishDistributionMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>鱼类吃饵偏好</b><span id="fishRulesMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>天气与温度鱼口</b><span id="fishWeatherMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>欢乐时光</b><span id="happyHourMessage" role="status">正在读取开关。</span></div></div></div><div class="grid fish-layout" style="grid-template-columns:270px minmax(0,1fr)"><div class="card"><div class="section-head"><h2>水域</h2></div><input id="fishSearch" placeholder="筛选水域" oninput="renderFishAreas()"><div id="fishAreas"></div></div><div class="card" id="fishEditor"><div class="empty">选择水域配置鱼口</div></div></div></section>
     <section class="view" id="view-mail"><div class="mail-box"><div class="card"><div class="section-head"><h2>撰写邮件</h2><small>队列约 2 秒内由主服投递</small></div><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="field"><label>收件人 UID</label><input id="mailUid" type="number"></div><div class="field"><label>快捷载入玩家</label><input id="mailPlayerSearch" placeholder="搜索并回车" onkeydown="if(event.key==='Enter')findMailPlayer()"></div></div><div class="field" style="margin-top:12px"><label>邮件正文</label><textarea id="mailText" placeholder="写给玩家的消息…"></textarea></div><div class="section-head" style="margin-top:14px"><h2>附件</h2><button class="btn alt sm" onclick="addAttachment()">+ 添加附件</button></div><div id="attachments"></div><div class="actions"><button class="btn good" onclick="sendMail()">发送邮件</button><button class="btn alt" onclick="previewMail()">预览</button></div></div><div class="card"><div class="section-head"><h2>发送预览</h2></div><div id="mailPreview" class="empty">填写邮件后点击预览</div><div class="section-head" style="margin-top:20px"><h2>常用模板</h2></div><div class="actions"><button class="btn alt sm" onclick="mailTemplate('补偿')">补偿邮件</button><button class="btn alt sm" onclick="mailTemplate('活动奖励')">活动奖励</button><button class="btn alt sm" onclick="mailTemplate('测试')">测试邮件</button></div></div></div></section>
+    <section class="view" id="view-params"><div class="card"><div class="section-head"><h2>游戏参数</h2><small>热更新：保存后最多 30 秒生效；随时可调回默认值，不损坏玩家存档</small></div><div id="paramsBody"></div></div></section>
     <section class="view" id="view-audit"><div class="card"><div class="section-head"><h2>最近操作</h2><small>最新 200 条</small></div><div class="table-wrap" id="auditTable"></div></div></section>
   </main>
 </div>
@@ -76,7 +148,7 @@ button,input,select,textarea{font:inherit;color:var(--text)}button{cursor:pointe
 <script>
 let DASHBOARD_TIMER=null;
 let TOKEN=localStorage.getItem('rf4_admin_token')||'';
-let VIEW='dashboard',PLAYER=null,PLAYER_TAB='profile',FISH_AREA='',FISH_CFG=null,STORE_ITEMS=[];
+let VIEW='dashboard',PLAYER=null,PLAYER_TAB='profile',FISH_AREA='',FISH_CFG=null,FISH_DIRTY=false,STORE_ITEMS=[];
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>Number(n||0).toLocaleString('zh-CN');
@@ -113,7 +185,7 @@ async function boot(){
     const initial=location.hash.slice(1);go(titles[initial]?initial:'dashboard',true);if(!DASHBOARD_TIMER)DASHBOARD_TIMER=setInterval(()=>{if(VIEW==='dashboard'&&TOKEN)loadDashboard(false).catch(()=>{})},8000);
   }catch(e){logout()}
 }
-const titles={dashboard:['总览','服务器运行状态与快捷操作'],players:['玩家工作台','档案、背包、护网、技能一站式管理'],stores:['商店库存','覆盖静态货架价格与库存'],fish:['鱼口控制','水域鱼种权重、上鱼概率与发鱼延迟'],mail:['邮件中心','发送文本与多附件邮件'],audit:['审计日志','追踪后台管理操作']};
+const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕']};
 function go(name,fromHash=false){
   if(!titles[name])name='dashboard';
   VIEW=name;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.view===name));
@@ -124,65 +196,85 @@ function go(name,fromHash=false){
 }
 window.addEventListener('hashchange',()=>go(location.hash.slice(1),true));
 function refreshCurrent(){
-  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,mail:()=>{},audit:loadAudit};
+  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,mail:()=>{},params:loadTunables,audit:loadAudit};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
+// 总览常用操作：图标 + 名称 + 一句功能定义
+const QUICK_ACTIONS=[
+  ['grant','给玩家发物品','从物品目录发放到背包 / 护网','players'],
+  ['profile','改玩家资产','等级 · 银币 · 金币 · 会员','players'],
+  ['mail','发邮件','文本消息 + 物品附件','mail'],
+  ['fish','调鱼口','各水域出什么鱼 · 咬钩快慢','fish'],
+  ['store','商店货架','改卖的价格和库存','stores'],
+  ['audit','查操作记录','后台改过什么都有留痕','audit'],
+];
+const QA_ICONS={
+  grant:'<path d="M20 12v9H4v-9"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7Z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z"/>',
+  profile:'<circle cx="12" cy="8" r="4"/><path d="M5 21c.9-3.4 3.8-5 7-5s6.1 1.6 7 5"/>',
+  mail:'<rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  fish:'<path d="M6.5 12c1.2-3.3 4.3-5.5 7.5-5.5 3.5 0 6 2.5 7 5.5-1 3-3.5 5.5-7 5.5-3.2 0-6.3-2.2-7.5-5.5Z"/><path d="M17.5 11v.01"/><path d="M6.5 12 3 9v6l3.5-3Z"/>',
+  store:'<path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M2 4h20v4H2z"/><path d="M10 12h4"/>',
+  audit:'<path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/>',
+};
 async function loadDashboard(refreshForm=true){
   const d=await api('/api/dashboard');
-  const stats=[['在线会话',d.sessions,'主服实时'],['玩家档案',d.players,'已创建'],['物品实例',d.items,'背包+装备'],['邮件',d.mails,'全部记录'],['运行参数',d.tunables,'热更新'],['审计事件',d.audits,'累计']];
+  const stats=[['在线会话',d.sessions,'主服实时'],['玩家档案',d.players,'已创建'],['物品实例',d.items,'背包+装备'],['邮件',d.mails,'全部记录']];
   $('#stats').innerHTML=stats.map(([k,v,s])=>`<div class="card stat"><div class="k">${k}</div><div class="v">${fmt(v)}</div><div class="s">${s}</div></div>`).join('');
-  if(refreshForm)await loadTunables();
+  $('#qaGrid').innerHTML=QUICK_ACTIONS.map(([icon,title,desc,view])=>`<button class="qa" onclick="go('${view}')"><span class="ico"><svg viewBox="0 0 24 24">${QA_ICONS[icon]}</svg></span><span class="txt"><b>${title}</b><small>${desc}</small></span></button>`).join('');
+  loadDashboardSide().catch(()=>{});
 }
+// 总览侧栏：最近 5 条管理操作 + 4 个玩法开关只读速览
+async function loadDashboardSide(){
+  const [audits,tuns]=await Promise.all([api('/api/audit?limit=5'),api('/api/tunables')]);
+  $('#recentAudit').innerHTML=audits.map(e=>`<div class="rule-mini"><span class="muted">${esc(timeText(e.TS??e.ts).slice(5))}</span><span class="tag blue">${esc(e.Action??e.action)}</span><span class="mono" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc((e.Target??e.target)||'')}</span></div>`).join('')||'<div class="empty">还没有操作记录</div>';
+  const rules={fish_bait_rules_enabled:'新吃饵逻辑',fish_distribution_enabled:'鱼群分布',fish_weather_enabled:'天气鱼口',happy_hour_enabled:'欢乐时光'};
+  $('#ruleOverview').innerHTML=Object.entries(rules).map(([k,n])=>{const on=tuns[k]===undefined?k==='happy_hour_enabled':tuns[k]==='1';return `<div class="rule-mini"><span>${n}</span><span class="pill ${on?'ok':''}">${on?'开启':'关闭'}</span></div>`}).join('')||'<div class="empty">读取失败</div>';
+}
+// 参数三件套：中文标签 + 输入框 + 可见的一行说明（第 4 项为默认值，第 5 项为说明）
 const TUNABLE_DEFS=[
-  ['bite_probability','上鱼概率（1=每竿必出）',1],
-  ['bite_delay_fixed','固定咬钩秒（>0 覆盖分布）',0],
-  ['bite_delay_scale','咬钩延迟倍率',1],
-  ['bite_delay_max','咬钩上限秒',20],
-  ['bite_delay_lure_max','路亚上限秒',6],
-  ['bait_pref_scale','饵效强度（0=关闭）',1],
-  ['bait_pref_weight_shift','饵效偏大体型',1],
-  ['xp_gain','经验倍率',1],
-  ['release_xp_ratio','放生经验比例',0.5],
-  ['fight_power_scale','搏斗拉力倍率（越低越不易断线）',1],
-  ['fish_weight_scale','鱼体重倍率（2=两倍重）',1],
-  ['fish_weight_cap','承力截断：鱼重受钓具强度限制（0=关，派鱼不看线粗）',0,'鱼重上限截断'],
-  ['hook_entry_cap','钩入口截断（0=关，所有钩都能上所有鱼）',0,'钩入口截断'],
-  ['settle_scale_debug','结算刻度调试（0=关）',0],
-  ['fish_tv_channel','鱼汛聊天通道（24..31，27=公聊）',27],
-  ['fish_tv_kind','鱼汛消息类型（401.f0，0=发言）',0],
-  ['fish_tv_kv','鱼汛KV参数（1=鱼名+重量，未确认前勿开）',0],
+  ['bite_probability','上鱼概率',1,'0~1。1=每竿必出；0.5=一半概率出鱼'],
+  ['bite_delay_fixed','固定咬钩秒',0,'填 0=按延迟倍率随机；填了以后咬钩时间固定'],
+  ['bite_delay_scale','咬钩延迟倍率',1,'整体加快或放慢咬钩：0.5=快一倍，2=慢一倍'],
+  ['bite_delay_max','咬钩上限秒',20,'等待超过这个秒数必定咬钩（路亚除外）'],
+  ['bite_delay_lure_max','路亚上限秒',6,'路亚钓法等待的秒数上限'],
+  ['bait_pref_scale','饵效强度',1,'0=鱼不看饵；1=标准效果，按饵料偏好筛鱼'],
+  ['bait_pref_weight_shift','饵效偏大体型',1,'越大越偏向个体大的鱼咬钩'],
+  ['fish_weight_scale','鱼体重倍率',1,'全地图鱼重整体缩放，2=两倍重'],
+  ['fish_weight_cap','鱼重受钓具上限',1,'1=超出钓具负重的鱼按上限截断；0=不限制'],
+  ['fight_power_scale','搏斗拉力倍率',1,'越低鱼挣扎越小、越不易断线；1=原版'],
+  ['xp_gain','经验倍率',1,'结算经验整体缩放，1.5=多 50% 经验'],
+  ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
 ];
 async function loadTunables(){
  const t=await api('/api/tunables');
- const groups=[['咬钩与鱼饵',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift']],['鱼体与搏斗',['fish_weight_scale','fish_weight_cap','hook_entry_cap','fight_power_scale']],['经验与结算',['xp_gain','release_xp_ratio','settle_scale_debug']],['鱼汛播报',['fish_tv_channel','fish_tv_kind','fish_tv_kv']]];
-
- $('#tunablesBody').innerHTML=groups.map(([title,keys])=>'<section class="tunable-group"><h3>'+title+'</h3><div class="tunable-fields">'+keys.map(key=>{
- const [,label,def]=TUNABLE_DEFS.find(x=>x[0]===key);
- return '<div class="tunable-field"><label for="tun_'+key+'">'+esc(label)+'</label><div><input type="number" step="any" id="tun_'+key+'" value="'+esc(String(t[key]??''))+'" placeholder="默认 '+def+'"><button class="btn alt sm" onclick="saveTunable(\''+key+'\')">保存</button></div>'+'</div>';
- }).join('')+'</div></section>').join('')
- +'<section class="tunable-group"><h3>通道测试（立即推送，探测 24..31 的客户端表现）</h3><div class="tunable-fields">'
- +'<div class="tunable-field"><label for="fvt_ch">通道</label><div><input type="number" id="fvt_ch" value="28" min="24" max="31" style="width:90px"><button class="btn alt sm" onclick="fishTVTest()">发送测试</button></div></div>'
- +'<div class="tunable-field"><label for="fvt_kind">类型</label><div><input type="number" id="fvt_kind" value="0" min="0" style="width:90px"></div></div>'
- +'<div class="tunable-field"><label for="fvt_text">文本</label><div><input type="text" id="fvt_text" value="鱼汛通道测试" style="width:220px"></div></div>'
- +'<div class="tunable-field"><label for="fvt_shape">KV形状</label><div><input type="number" id="fvt_shape" value="0" min="0" max="30" style="width:90px" title="30=官方KV数组"></div></div>'
- +'<div class="tunable-field"><label for="fvt_fish">鱼种key</label><div><input type="text" id="fvt_fish" value="g_tench" style="width:140px" title="如 g_tench / crucian"></div></div>'
- +'<div class="tunable-field"><label for="fvt_w">重量克</label><div><input type="number" id="fvt_w" value="3280" style="width:110px"></div></div>'
- +'</div></section>';
-}
-async function fishTVTest(){
-  const ch=parseInt($('#fvt_ch').value,10),kind=parseInt($('#fvt_kind').value,10),text=$('#fvt_text').value.trim();
-  const shape=parseInt($('#fvt_shape')?.value||'0',10)||0,fish=$('#fvt_fish')?.value?.trim()||'g_tench',w=parseInt($('#fvt_w')?.value||'0',10)||0;
-  if(!(ch>=24&&ch<=31)){toast('通道取值 24..31','bad');return}
-  await api('/api/fish_tv_test',{method:'POST',body:JSON.stringify({uid:0,channel:ch,kind:kind||0,text,kv_shape:shape,species:fish,weight_g:w})});
-  toast('已发送 ch='+ch+' kind='+(kind||0)+' shape='+shape+'（约 2 秒内到达）');
+ // 行式布局：左=标签+说明，右=数值+保存/恢复默认，双列排布
+ const field=key=>{
+  const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
+  return '<div class="tunable-field"><div><label for="tun_'+key+'">'+esc(label)+'</label><div class="tunable-hint">'+esc(hint)+'</div></div><div><input type="number" step="any" id="tun_'+key+'" value="'+esc(String(t[key]??''))+'" placeholder="默认 '+def+'"><button class="btn alt sm" onclick="saveTunable(\''+key+'\')">保存</button><button class="btn alt sm" title="回写代码默认值 '+def+'" onclick="resetTunable(\''+key+'\','+def+')">恢复默认</button></div></div>';
+ };
+ const group=(title,sub,keys)=>'<section class="tunable-group"><h3>'+esc(title)+'<small style="font-weight:400;margin-left:8px;color:var(--muted)">'+esc(sub)+'</small></h3><div class="tunable-fields">'+keys.map(field).join('')+'</div></section>';
+ $('#paramsBody').innerHTML=
+  group('玩法手感','咬钩快慢、饵料偏好、鱼的大小与挣扎力度',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift','fish_weight_scale','fish_weight_cap','fight_power_scale'])
+  +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio']);
 }
 async function saveTunable(key){
   const v=$('#tun_'+key).value.trim();
-  if(v===''){toast('请输入数值','bad');return}
+  if(v===''){toast('请输入数值后再保存','bad');return}
   await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:v})});
   toast('已保存，最多 30 秒生效');
   await loadTunables();
 }
+async function resetTunable(key,def){
+  $('#tun_'+key).value=def;
+  await saveTunable(key);
+}
+// 危险操作统一确认弹窗：标题说动作、正文说后果、固定提示写审计、确认键红底
+let CONFIRM_CB=null;
+function askConfirm(title,body,cb){
+  CONFIRM_CB=cb;
+  showModal(title,'危险操作',`<p style="margin:10px 0 4px;white-space:normal">${esc(body)}</p><p class="muted" style="margin:0 0 14px">此操作会记入审计日志。</p><div class="actions" style="justify-content:flex-end"><button class="btn alt" onclick="closeModal()">取消</button><button class="btn bad" onclick="runConfirm()">确认执行</button></div>`);
+}
+async function runConfirm(){const cb=CONFIRM_CB;CONFIRM_CB=null;closeModal();if(cb)await cb()}
 async function loadAudit(){
   const list=await api('/api/audit?limit=200');
   $('#auditTable').innerHTML=`<table><thead><tr><th>时间</th><th>管理员</th><th>动作</th><th>对象</th><th>详情</th></tr></thead><tbody>${list.map(e=>`<tr><td>${timeText(e.TS??e.ts)}</td><td>${esc(e.Admin??e.admin)}</td><td><span class="tag blue">${esc(e.Action??e.action)}</span></td><td class="mono">${esc(e.Target??e.target)}</td><td style="white-space:normal;max-width:430px">${esc(e.Detail??e.detail)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无记录</td></tr>'}</tbody></table>`;
@@ -220,7 +312,7 @@ function renderPlayerTab(){
       <div class="field"><label>银行（分）</label><input id="pf_bank" type="number" value="${p.bank}"></div>
       <div class="field"><label>会员</label><select id="pf_membership"><option value="0" ${p.membership? '':'selected'}>普通</option><option value="1" ${p.membership===1? 'selected':''}>限时高级会员</option><option value="2" ${p.membership===2? 'selected':''}>永久会员</option></select></div>
       <div class="field span2"><label>会员到期</label><input id="pf_membership_exp" type="datetime-local" value="${localInput(p.membership_exp)}"></div>
-    </div><p class="muted" id="playerHappyHour">欢乐时光：${p.happy_hour?.enabled?(p.happy_hour.active?'生效中':'暂停'):'已关闭'} · 今日剩余 ${Math.ceil((p.happy_hour?.remaining_seconds??3600)/60)} 分钟 · 离线暂停，上海时间每日重置</p><div class="actions"><button class="btn good" onclick="saveProfile()">保存档案与货币</button><button class="btn alt" onclick="selectPlayer(${p.uid})">撤销修改</button></div>`;
+    </div><p class="muted" id="playerHappyHour">欢乐时光：${p.happy_hour?.enabled?(p.happy_hour.active?'生效中':'暂停'):'已关闭'} · 今日剩余 ${Math.ceil((p.happy_hour?.remaining_seconds??3600)/60)} 分钟 · 离线暂停，上海时间每日重置</p><div class="actions"><button class="btn good" onclick="saveProfile()">保存档案与货币</button><button class="btn alt" onclick="selectPlayer(${p.uid})">放弃修改</button></div>`;
   }
   if(PLAYER_TAB==='items')renderItems();
   if(PLAYER_TAB==='keepnet')renderKeepnet();
@@ -241,7 +333,7 @@ async function saveProfile(){
     if(membership===1&&(!Number.isFinite(membership_exp)||membership_exp<=Date.now()/1000)){toast('请选择未来的到期时间','bad');return;}
     body.membership=membership;body.membership_exp=membership_exp;
   }
-  await api('/api/players/update',{method:'POST',body:JSON.stringify(body)});toast('档案已保存，在线玩家将收到 2/1 刷新');await sleep(400);await selectPlayer(PLAYER.uid);
+  await api('/api/players/update',{method:'POST',body:JSON.stringify(body)});toast('已保存，在线玩家立即收到刷新');await sleep(400);await selectPlayer(PLAYER.uid);
 }
 function renderItems(){
   $('#playerTabBody').innerHTML=`<div class="toolbar"><input class="grow" id="itemFilter" placeholder="筛选 item_id / 名称 / GUID" value="${esc(ITEM_FILTER)}" oninput="ITEM_FILTER=this.value;renderItemRows()"><button class="btn" onclick="showGrantItem()">+ 发放物品</button></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>物品</th><th>类型</th><th>容器</th><th>数量</th><th>耐久</th><th>GUID</th><th></th></tr></thead><tbody id="itemRows"></tbody></table></div>`;
@@ -249,35 +341,36 @@ function renderItems(){
 }
 function renderItemRows(){
   const q=ITEM_FILTER.toLowerCase();const rows=(PLAYER.items||[]).filter(x=>!q||`${x.item_id} ${x.name} ${x.guid}`.toLowerCase().includes(q));
-  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">没有物品</td></tr>';
+  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">没有物品，点上方「+ 发放物品」添加</td></tr>';
 }
 async function deletePlayerItem(guid){
-  if(!confirm('确定删除这件物品？操作会写入审计日志。'))return;
-  await api('/api/players/items/delete',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,guids:[guid]})});toast('删除指令已发送');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('items');
+  askConfirm('删除物品','把这件物品从该玩家的背包/装备中删除，不可恢复。',async()=>{
+    await api('/api/players/items/delete',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,guids:[guid]})});toast('已删除物品，见审计日志');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('items');
+  });
 }
 async function showGrantItem(){
   showModal('发放物品','搜索物品目录，选择后输入数量',`<input id="grantSearch" placeholder="物品 ID 或中文名" oninput="debounce('grantSearch',searchGrantItems)"><div class="results" id="grantResults"></div><div class="form-grid" style="grid-template-columns:1fr 110px;margin-top:12px"><div class="field"><label>已选物品</label><input id="grantItemId" placeholder="item_id"></div><div class="field"><label>数量</label><input id="grantQty" type="number" min="1" value="1"></div></div><div class="actions"><button class="btn good" onclick="grantItem()">确认发放</button></div>`);searchGrantItems();
 }
 async function searchGrantItems(){const q=$('#grantSearch').value.trim();const list=await api('/api/catalog/items?q='+encodeURIComponent(q));$('#grantResults').innerHTML=list.map(x=>`<div class="result" data-id="${esc(x.item_id)}" onclick="$('#grantItemId').value=this.dataset.id"><div><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)} · ${x.numeric_id}</div></div><span class="tag">cat ${x.category}</span></div>`).join('')||'<div class="empty">无结果</div>'}
-async function grantItem(){const item_id=$('#grantItemId').value.trim(),qty=+$('#grantQty').value||1;if(!item_id)return toast('请选择物品','bad');await api('/api/players/grant',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,item_id,qty})});closeModal();toast('发放指令已发送');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('items')}
+async function grantItem(){const item_id=$('#grantItemId').value.trim(),qty=+$('#grantQty').value||1;if(!item_id)return toast('请选择物品','bad');await api('/api/players/grant',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,item_id,qty})});closeModal();toast('已下发，约 2 秒内到达');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('items')}
 function renderKeepnet(){
   const rows=PLAYER.keepnet||[];
-  $('#playerTabBody').innerHTML=`<div class="toolbar"><div class="grow muted">共 ${rows.length} 条鱼，删除后统计/鱼市会同步更新</div><button class="btn" onclick="showAddKeepnet()">+ 添加鱼</button></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>鱼种</th><th>重量</th><th>档位</th><th>地点</th><th>饵</th><th>时间</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.name_zh||x.species)}</b><div class="muted mono">${esc(x.species)}</div></td><td>${fmt(x.weight_g)} g</td><td><span class="tag">G${x.cat}</span></td><td>${esc(x.keep_level||x.keep_loc)}</td><td>${esc(x.keep_bait)}</td><td>${timeText(x.ts)}</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.echo_guid)}" onclick="deleteKeepnet(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">护网为空</td></tr>'}</tbody></table></div>`;
+  $('#playerTabBody').innerHTML=`<div class="toolbar"><div class="grow muted">共 ${rows.length} 条鱼，删除后统计/鱼市会同步更新</div><button class="btn" onclick="showAddKeepnet()">+ 添加鱼</button></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>鱼种</th><th>重量</th><th>档位</th><th>地点</th><th>饵</th><th>时间</th><th></th></tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.name_zh||x.species)}</b><div class="muted mono">${esc(x.species)}</div></td><td>${fmt(x.weight_g)} g</td><td><span class="tag">G${x.cat}</span></td><td>${esc(x.keep_level||x.keep_loc)}</td><td>${esc(x.keep_bait)}</td><td>${timeText(x.ts)}</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.echo_guid)}" onclick="deleteKeepnet(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">护网为空，点上方「+ 添加鱼」放入第一条</td></tr>'}</tbody></table></div>`;
 }
-async function deleteKeepnet(guid){if(!confirm('从护网删除这条鱼？'))return;await api('/api/players/keepnet/delete',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,guids:[guid]})});toast('删除指令已发送');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('keepnet')}
+async function deleteKeepnet(guid){askConfirm('删除护网鱼','从护网删除这条鱼，相关统计和鱼市同步更新，不可恢复。',async()=>{await api('/api/players/keepnet/delete',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,guids:[guid]})});toast('已删除护网鱼，见审计日志');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('keepnet')})}
 function showAddKeepnet(){showModal('添加护网鱼','可直接输入鱼种 key，或搜索鱼库填充',`<div class="form-grid"><div class="field span2"><label>鱼种 key</label><div class="toolbar"><input class="grow" id="knSpecies" placeholder="例如 c.roach"><button class="btn alt sm" onclick="searchFishForKeepnet()">搜索</button></div></div><div class="field"><label>重量（g）</label><input id="knWeight" type="number" min="1" value="500"></div><div class="field"><label>档位</label><select id="knCat"><option value="1">1 普通</option><option value="2">2 达标</option><option value="3">3 奖杯</option><option value="4">4 蓝冠</option></select></div><div class="field span2"><label>地点 level key</label><input id="knLevel" placeholder="level_001_lake"></div><div class="field"><label>场景 loc</label><input id="knLoc" placeholder="loc1_02"></div><div class="field"><label>钓点</label><input id="knSpot" type="number" value="0"></div><div class="field span2"><label>饵 item_id</label><input id="knBait" placeholder="worm_01"></div></div><div class="results" id="knFishResults"></div><div class="actions"><button class="btn good" onclick="addKeepnet()">加入护网</button></div>`)}
 async function searchFishForKeepnet(){const q=$('#knSpecies').value.trim();const list=await api('/api/fish/pool?q='+encodeURIComponent(q)+'&limit=40');$('#knFishResults').innerHTML=list.map(x=>`<div class="result" data-key="${esc(x.fish_key)}" onclick="$('#knSpecies').value=this.dataset.key"><div><b>${esc(x.name_zh)}</b><div class="muted mono">${esc(x.fish_key)}</div></div><span class="tag">${fmt(x.min_g)}-${fmt(x.max_g)}g</span></div>`).join('')||'<div class="empty">无结果</div>'}
-async function addKeepnet(){const body={uid:PLAYER.uid,species:$('#knSpecies').value.trim(),weight_g:+$('#knWeight').value,cat:+$('#knCat').value,keep_level:$('#knLevel').value.trim(),keep_loc:$('#knLoc').value.trim(),keep_spot:+$('#knSpot').value||0,keep_bait:$('#knBait').value.trim()};if(!body.species||body.weight_g<=0)return toast('请填写鱼种和重量','bad');await api('/api/players/keepnet/add',{method:'POST',body:JSON.stringify(body)});closeModal();toast('添加指令已发送');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('keepnet')}
+async function addKeepnet(){const body={uid:PLAYER.uid,species:$('#knSpecies').value.trim(),weight_g:+$('#knWeight').value,cat:+$('#knCat').value,keep_level:$('#knLevel').value.trim(),keep_loc:$('#knLoc').value.trim(),keep_spot:+$('#knSpot').value||0,keep_bait:$('#knBait').value.trim()};if(!body.species||body.weight_g<=0)return toast('请填写鱼种和重量','bad');await api('/api/players/keepnet/add',{method:'POST',body:JSON.stringify(body)});closeModal();toast('已下发，约 2 秒内到达');await sleep(2300);await selectPlayer(PLAYER.uid);setPlayerTab('keepnet')}
 function renderSkills(){
   const skills=PLAYER.skills||[];const avail=Number(PLAYER.available_points??0);
   $('#playerTabBody').innerHTML=`<div class="toolbar" style="margin-bottom:12px"><div class="grow"><b>未分配技能点：${avail}</b><div class="muted">等级累计 ${PLAYER.skill_total??0} · 已投入 ${PLAYER.skill_spent??0} · 偏移 ${PLAYER.skill_bonus??0}</div></div><input class="mini-input" id="skillAvail" type="number" min="0" step="1" value="${avail}" style="width:110px"><button class="btn sm" onclick="saveSkillAvail()">保存点数</button></div><div class="skills">${skills.map(s=>`<div class="skill"><div class="top"><div><b>${esc(s.name)}</b><div class="muted">大类 ${s.skill_id} · ${s.node_count} 个节点</div></div><span class="pill">${Number(s.points).toFixed(2)}%</span></div><div class="bar"><i style="width:${Math.min(100,Number(s.points))}%"></i></div><div class="edit"><input type="number" min="0" max="100" step="0.1" value="${s.points}" id="sk_${s.skill_id}"><button class="btn sm" onclick="saveSkill(${s.skill_id})">保存</button></div></div>`).join('')}</div><div class="actions"><button class="btn alt" onclick="resetSkills()">全部设为 0%</button></div>`;
 }
-async function saveSkillAvail(){const points=Math.max(0,Math.floor(+$('#skillAvail').value||0));await api('/api/players/skills/points',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,points})});toast('未分配技能点已更新');await sleep(500);await selectPlayer(PLAYER.uid);setPlayerTab('skills')}
-async function saveSkill(id){const points=+$('#sk_'+id).value;await api('/api/players/skills/update',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,skill_id:id,points})});toast('熟练度已更新');await sleep(500);await selectPlayer(PLAYER.uid);setPlayerTab('skills')}
-async function resetSkills(){if(!confirm('把所有技能大类熟练度设为 0%？'))return;for(const s of PLAYER.skills||[])await api('/api/players/skills/update',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,skill_id:s.skill_id,points:0})});toast('全部熟练度已清零');await selectPlayer(PLAYER.uid);setPlayerTab('skills')}
+async function saveSkillAvail(){const points=Math.max(0,Math.floor(+$('#skillAvail').value||0));await api('/api/players/skills/points',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,points})});toast('已保存，在线玩家立即收到刷新');await sleep(500);await selectPlayer(PLAYER.uid);setPlayerTab('skills')}
+async function saveSkill(id){const points=+$('#sk_'+id).value;await api('/api/players/skills/update',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,skill_id:id,points})});toast('已保存，在线玩家立即收到刷新');await sleep(500);await selectPlayer(PLAYER.uid);setPlayerTab('skills')}
+async function resetSkills(){askConfirm('清空技能熟练度','把该玩家所有钓鱼技能熟练度设为 0%，不可恢复。',async()=>{for(const s of PLAYER.skills||[])await api('/api/players/skills/update',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,skill_id:s.skill_id,points:0})});toast('已清空熟练度，见审计日志');await selectPlayer(PLAYER.uid);setPlayerTab('skills')})}
 function renderPlayerMail(){const rows=PLAYER.mails||[];$('#playerTabBody').innerHTML=`<div class="table-wrap"><table><thead><tr><th>ID</th><th>正文</th><th>类型</th><th>状态</th><th>时间</th></tr></thead><tbody>${rows.map(m=>`<tr><td>${m.id}</td><td style="white-space:normal">${esc(m.text||'(附件邮件)')}</td><td>${m.kind?'附件':'文本'}</td><td>${m.read?'<span class="pill">已读</span>':'<span class="pill ok">未读</span>'}</td><td>${timeText(m.created_ts)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">邮箱为空</td></tr>'}</tbody></table></div><div class="actions"><button class="btn" onclick="prefillMail(${PLAYER.uid})">给该玩家发邮件</button></div>`}
-async function kickPlayer(){if(!confirm('踢下线？'))return;await api('/api/players/kick',{method:'POST',body:JSON.stringify({uid:PLAYER.uid})});toast('已发送踢下线指令')}
-async function toggleBan(){const banned=!PLAYER.banned;if(!confirm(banned?'封禁该玩家？':'解除封禁？'))return;await api('/api/players/ban',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,banned})});toast(banned?'已封禁':'已解封');await selectPlayer(PLAYER.uid)}
+async function kickPlayer(){askConfirm('踢下线','把该玩家从服务器断开，可随时重新登录。',async()=>{await api('/api/players/kick',{method:'POST',body:JSON.stringify({uid:PLAYER.uid})});toast('已踢下线，见审计日志')})}
+async function toggleBan(){const banned=!PLAYER.banned;askConfirm(banned?'封禁玩家':'解除封禁',banned?'该玩家将无法登录游戏。':'该玩家恢复登录资格。',async()=>{await api('/api/players/ban',{method:'POST',body:JSON.stringify({uid:PLAYER.uid,banned})});toast(banned?'已封禁，见审计日志':'已解封，见审计日志');await selectPlayer(PLAYER.uid)})}
 const debounceTimers={};
 function debounce(key,fn,ms=240){clearTimeout(debounceTimers[key]);debounceTimers[key]=setTimeout(fn,ms)}
 async function loadStores(){
@@ -295,49 +388,55 @@ async function loadStoreItems(){
   renderStoreTable();
 }
 function renderStoreTable(){
-  $('#storeTable').innerHTML=`<table><thead><tr><th>商品</th><th>类别</th><th>原价 / 原库存</th><th>有效银价</th><th>有效金币</th><th>有效库存</th><th></th></tr></thead><tbody>${STORE_ITEMS.map((x,i)=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td class="muted">${fmt(x.base_silver)} / ${fmt(x.base_gold)} / ${fmt(x.base_stock)}</td><td><input class="mini-input" id="ss_${i}" type="number" min="0" value="${x.silver}"></td><td><input class="mini-input" id="sg_${i}" type="number" min="0" value="${x.gold}"></td><td><input class="mini-input" id="st_${i}" type="number" min="0" value="${x.stock}"></td><td class="right"><button class="btn sm ${x.has_override?'good':''}" onclick="saveStoreRow(${i})">${x.has_override?'更新覆盖':'保存'}</button>${x.has_override?` <button class="btn alt sm" onclick="resetStoreRow(${i})">恢复静态</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">该商店没有货架商品</td></tr>'}</tbody></table>`;
+  $('#storeTable').innerHTML=`<table><thead><tr><th>商品</th><th>类别</th><th>原价 / 原库存</th><th>有效银价</th><th>有效金币</th><th>有效库存</th><th></th></tr></thead><tbody>${STORE_ITEMS.map((x,i)=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td class="muted">${fmt(x.base_silver)} / ${fmt(x.base_gold)} / ${fmt(x.base_stock)}</td><td><input class="mini-input" id="ss_${i}" type="number" min="0" value="${x.silver}"></td><td><input class="mini-input" id="sg_${i}" type="number" min="0" value="${x.gold}"></td><td><input class="mini-input" id="st_${i}" type="number" min="0" value="${x.stock}"></td><td class="right"><button class="btn sm ${x.has_override?'good':''}" onclick="saveStoreRow(${i})">${x.has_override?'更新覆盖':'保存'}</button>${x.has_override?` <button class="btn alt sm" onclick="resetStoreRow(${i})">恢复默认</button>`:''}</td></tr>`).join('')||'<tr><td colspan="7" class="empty">该商店没有货架商品</td></tr>'}</tbody></table>`;
 }
 async function saveStoreRow(i){
   const x=STORE_ITEMS[i];const body={store_id:x.store_id,item_id:x.item_id,silver:+$('#ss_'+i).value,gold:+$('#sg_'+i).value,stock:+$('#st_'+i).value};
-  await api('/api/stores/items/update',{method:'POST',body:JSON.stringify(body)});toast('货架覆盖已保存：'+x.item_id);await loadStoreItems();
+  await api('/api/stores/items/update',{method:'POST',body:JSON.stringify(body)});toast('已保存并立即生效：'+x.item_id);await loadStoreItems();
 }
 async function resetStoreRow(i){
-  const x=STORE_ITEMS[i];if(!confirm('恢复该商品的静态价格与库存？'))return;
-  await api('/api/stores/items/reset',{method:'POST',body:JSON.stringify({store_id:x.store_id,item_id:x.item_id})});toast('已恢复静态货架：'+x.item_id);await loadStoreItems();
+  const x=STORE_ITEMS[i];askConfirm('恢复默认货架','「'+(x.name||x.item_id)+'」的价格与库存将回到基础目录值。',async()=>{await api('/api/stores/items/reset',{method:'POST',body:JSON.stringify({store_id:x.store_id,item_id:x.item_id})});toast('已恢复默认货架：'+x.item_id+'，见审计日志');await loadStoreItems()});
 }
 let FISH_AREAS=[];
 const FISH_RULE_SWITCHES={
-  ecology:{key:'fish_ecology_enabled',prefix:'fishEcology',enabled:null,on:'按鱼种水层、温度、季节、昼夜、底质、水流与动作偏好修正鱼口。',off:'关闭逐鱼种生态修正，沿用原来的判鱼流程。'},
   weather:{key:'fish_weather_enabled',prefix:'fishWeather',enabled:null,on:'按游戏内温度、天气和鱼种习性影响吃口；底钓、浮钓会间歇试口。',off:'关闭天气鱼口修正，沿用原来的一次判鱼流程。'},
   distribution:{key:'fish_distribution_enabled',prefix:'fishDistribution',enabled:null,on:'按地图鱼种、所在区域和游戏昼夜变化鱼口，每四个游戏小时重新分布。',off:'沿用现有分布，各处水域可出鱼，不增加点位限制。'},
   bait:{key:'fish_bait_rules_enabled',prefix:'fishRules',enabled:null,on:'根据钩上饵料筛选鱼种。',off:'沿用现有吃饵逻辑，不增加吃饵限制。'},
-  happy:{key:'happy_hour_enabled',prefix:'happyHour',default:true,enabled:null,on:'每天累计60分钟在线钓鱼：经验额外50%、鱼口提高10%、熟练度增长触发率提高25%。',off:'暂停欢乐时光，已使用时长保留。'},
   happy:{key:'happy_hour_enabled',prefix:'happyHour',default:true,enabled:null,on:'每天累计60分钟在线钓鱼：经验额外50%、鱼口提高10%、熟练度增长触发率提高25%。',off:'暂停欢乐时光，已使用时长保留。'}
 };
 async function loadFishRules(){
-  for(const x of Object.values(FISH_RULE_SWITCHES))$('#'+x.prefix+'Toggle').disabled=true;
+  for(const x of Object.values(FISH_RULE_SWITCHES)){const el=$('#'+x.prefix+'Switch');if(el){el.disabled=true;el.checked=false;}}
   try{
     const values=await api('/api/tunables');
     for(const x of Object.values(FISH_RULE_SWITCHES)){
       x.enabled=values[x.key]===undefined?!!x.default:values[x.key]==='1';
-      $('#'+x.prefix+'Badge').textContent=x.enabled?'已开启':'已关闭';
-      const button=$('#'+x.prefix+'Toggle');button.textContent=x.enabled?'关闭':'开启';button.setAttribute('aria-pressed',String(x.enabled));button.disabled=false;
+      const el=$('#'+x.prefix+'Switch');el.checked=x.enabled;el.disabled=false;
       $('#'+x.prefix+'Message').textContent=x.enabled?x.on:x.off;
     }
-  }catch(e){for(const x of Object.values(FISH_RULE_SWITCHES)){x.enabled=null;$('#'+x.prefix+'Badge').textContent='读取失败';$('#'+x.prefix+'Message').textContent=e.message;$('#'+x.prefix+'Toggle').textContent='暂不可用';}}
+    $('#rulesStatus').textContent='';
+  }catch(e){
+    for(const x of Object.values(FISH_RULE_SWITCHES)){x.enabled=null;const el=$('#'+x.prefix+'Switch');if(el)el.disabled=true;}
+    $('#rulesStatus').textContent='读取失败：'+e.message;
+  }
 }
-async function toggleFishRules(kind){
-  const x=FISH_RULE_SWITCHES[kind];if(!x||x.enabled===null)return;
-  for(const item of Object.values(FISH_RULE_SWITCHES))$('#'+item.prefix+'Toggle').disabled=true;
+function toggleRulesHelp(){const h=$('#rulesHelp'),b=$('#rulesHelpBtn');h.hidden=!h.hidden;b.setAttribute('aria-expanded',String(!h.hidden));b.textContent=h.hidden?'说明 ⌄':'收起 ⌃';}
+async function toggleFishRules(kind,el){
+  const x=FISH_RULE_SWITCHES[kind];if(!x||x.enabled===null||el.disabled)return;
+  el.disabled=true;
   try{
     await api('/api/tunables',{method:'POST',body:JSON.stringify({key:x.key,value:x.enabled?'0':'1'})});
     await loadFishRules();toast('已保存，最多 30 秒影响后续判鱼');
-  }catch(e){toast(e.message,'bad');for(const item of Object.values(FISH_RULE_SWITCHES))$('#'+item.prefix+'Toggle').disabled=item.enabled===null;}
+  }catch(e){toast(e.message,'bad');el.checked=x.enabled;el.disabled=false;}
 }
 async function loadFishAreas(){
   await loadFishRules();
   FISH_AREAS=await api('/api/fish/areas');renderFishAreas();
-  if(!FISH_AREA&&FISH_AREAS.length){await selectFishArea(FISH_AREAS[0].loc)}
+  // 默认选中展示顺序（游戏地图序）的第一个水域，而不是接口返回顺序的第一个
+  if(!FISH_AREA&&FISH_AREAS.length){
+    const orderOf=x=>{const i=FISH_AREA_ORDER.indexOf(x.loc);return i<0?FISH_AREA_ORDER.length:i};
+    const first=[...FISH_AREAS].sort((a,b)=>orderOf(a)-orderOf(b))[0];
+    await selectFishArea(first.loc,true);
+  }
 }
 // 水域展示顺序：与游戏客户端地图选择顺序一致，未列出的水域排在最后（保持原有相对顺序）。
 const FISH_AREA_ORDER=['克马羚诺也湖','埃尔克湖','惟有诺克河','旧奥斯特罗格湖','白河','廓里湖','梅德韦杰湖','沃尔霍夫河','北顿涅茨河','苏拉河','拉多加湖','琥珀湖','拉多加湖群岛','阿赫图巴河','铜湖','下通古斯卡河','亚马河','挪威海'];
@@ -346,30 +445,74 @@ function renderFishAreas(){
   const orderOf=x=>{const i=FISH_AREA_ORDER.indexOf(x.loc);return i<0?FISH_AREA_ORDER.length:i;};
   const rows=FISH_AREAS.filter(x=>x.loc.toLowerCase().includes(q)).map((x,i)=>({x,i})).sort((a,b)=>orderOf(a.x)-orderOf(b.x)||a.i-b.i).map(e=>e.x);
   $('#fishAreas').innerHTML=rows.map(x=>`<div class="player-row ${FISH_AREA===x.loc?'on':''}" data-loc="${esc(x.loc)}" onclick="selectFishArea(this.dataset.loc)"><div><div class="n mono">${esc(x.loc)}</div><div class="id">${x.fish_count} 个鱼种</div></div></div>`).join('')||'<div class="empty">没有匹配水域</div>';
+  // 选中项不在列表可视区时滚过去，避免“编辑器显示 A、列表里 A 不可见”
+  const sel=$('#fishAreas .player-row.on');if(sel)sel.scrollIntoView({block:'nearest'});
 }
-async function selectFishArea(loc){FISH_AREA=loc;renderFishAreas();FISH_CFG=await api('/api/fish/config?loc='+encodeURIComponent(loc));renderFishEditor()}
+async function selectFishArea(loc,force=false){
+  // 未保存守卫：有改动时切换水域先确认，避免静默丢编辑
+  if(!force&&FISH_DIRTY&&loc!==FISH_AREA){
+    askConfirm('放弃未保存的修改','「'+FISH_AREA+'」的鱼口修改尚未保存，切换水域后将丢失。',async()=>{await selectFishArea(loc,true)});
+    return;
+  }
+  FISH_DIRTY=false;FISH_AREA=loc;renderFishAreas();
+  FISH_CFG=await api('/api/fish/config?loc='+encodeURIComponent(loc));
+  renderFishEditor();
+}
 function renderFishEditor(){
   if(!FISH_CFG)return;const c=FISH_CFG,s=c.setting;
+  const keepFilter=$('#fishFilter')?.value||'';
+  const fixedText=Number(s.bite_delay_fixed)>0?s.bite_delay_fixed+' 秒':'随机';
   $('#fishEditor').innerHTML=`<div class="section-head"><div><h2 class="mono">${esc(c.area)}</h2><small>${c.fish.length} 个鱼种 · 权重 0 或关闭即排除</small></div><button class="btn" onclick="showAddFish()">+ 添加鱼种</button></div>
-    <div class="form-grid"><div class="field"><label>上鱼概率 (0-1)</label><input id="fishProb" type="number" min="0" max="1" step="0.01" value="${s.bite_probability}"></div><div class="field"><label>固定延迟秒（0=不用）</label><input id="fishFixed" type="number" min="0" step="0.1" value="${s.bite_delay_fixed}"></div><div class="field"><label>延迟倍率</label><input id="fishScale" type="number" min="0" step="0.05" value="${s.bite_delay_scale}"></div><div class="field"><label>普通竿延迟上限</label><input id="fishMax" type="number" min="1" step="0.5" value="${s.bite_delay_max}"></div><div class="field"><label>路亚延迟上限</label><input id="fishLureMax" type="number" min="0.5" step="0.5" value="${s.bite_delay_lure_max}"></div></div>
-    <div class="toolbar" style="margin:16px 0 10px"><input class="grow" id="fishFilter" placeholder="筛选当前水域鱼种" oninput="renderFishRows()"><button class="btn alt sm" onclick="fishSetAll(true)">全部启用</button><button class="btn alt sm" onclick="fishSetAll(false)">全部关闭</button></div><div id="fishRows"></div><div class="actions"><button class="btn good" onclick="saveFishConfig()">保存鱼口配置</button><button class="btn alt" onclick="selectFishArea(FISH_AREA)">撤销修改</button><button class="btn bad" onclick="resetFishConfig()">恢复静态鱼口</button></div>`;
+    <div class="params-bar"><span class="tag blue">咬钩</span><span class="vals">概率 <b>${s.bite_probability}</b> · 延迟 <b>${fixedText}</b> · 倍率 <b>×${s.bite_delay_scale}</b> · 上限 <b>${s.bite_delay_max}s</b> / 路亚 <b>${s.bite_delay_lure_max}s</b></span><button class="btn alt sm" id="paramsToggle" aria-expanded="false" onclick="toggleFishParams()">调整</button></div>
+    <div class="params-form" id="fishParamsForm" hidden><div class="form-grid" style="grid-template-columns:repeat(5,minmax(0,1fr))"><div class="field"><label for="fishProb">上鱼概率 (0-1)</label><input id="fishProb" type="number" min="0" max="1" step="0.01" value="${s.bite_probability}" onchange="FISH_DIRTY=true"><div class="tunable-hint">1=每竿必出；0.5=一半概率出鱼</div></div><div class="field"><label for="fishFixed">固定延迟秒（0=不用）</label><input id="fishFixed" type="number" min="0" step="0.1" value="${s.bite_delay_fixed}" onchange="FISH_DIRTY=true"><div class="tunable-hint">填 0=按延迟倍率随机</div></div><div class="field"><label for="fishScale">延迟倍率</label><input id="fishScale" type="number" min="0" step="0.05" value="${s.bite_delay_scale}" onchange="FISH_DIRTY=true"><div class="tunable-hint">0.5=快一倍，2=慢一倍</div></div><div class="field"><label for="fishMax">普通竿延迟上限</label><input id="fishMax" type="number" min="1" step="0.5" value="${s.bite_delay_max}" onchange="FISH_DIRTY=true"><div class="tunable-hint">等待超过该秒数必定咬钩</div></div><div class="field"><label for="fishLureMax">路亚延迟上限</label><input id="fishLureMax" type="number" min="0.5" step="0.5" value="${s.bite_delay_lure_max}" onchange="FISH_DIRTY=true"><div class="tunable-hint">路亚钓法等待的秒数上限</div></div></div></div>
+    <div class="toolbar" style="margin:0 0 10px"><input class="grow" id="fishFilter" placeholder="筛选当前水域鱼种" value="${esc(keepFilter)}" oninput="renderFishRows()"><button class="btn alt sm" id="fishAllOn" onclick="fishSetAll(true)">全部启用</button><button class="btn alt sm" id="fishAllOff" onclick="fishSetAll(false)">全部关闭</button></div><div id="fishRows"></div><div class="actions"><button class="btn good" onclick="saveFishConfig()">保存鱼口配置</button><button class="btn alt" onclick="selectFishArea(FISH_AREA,true)">放弃修改</button><button class="btn bad" onclick="resetFishConfig()">恢复默认鱼口</button></div>`;
   renderFishRows();
+}
+function toggleFishParams(){
+  const f=$('#fishParamsForm'),b=$('#paramsToggle');
+  f.hidden=!f.hidden;b.textContent=f.hidden?'调整':'收起';b.setAttribute('aria-expanded',String(!f.hidden));
+  if(!f.hidden)$('#fishProb').focus();
 }
 function syncFishRows(){
   if(!FISH_CFG)return;
-  FISH_CFG.fish.forEach((f,i)=>{const w=$('#fw_'+i),e=$('#fe_'+i);if(w)f.weight=+w.value;if(e)f.enabled=e.checked});
+  // 权重留空/非法时回退基础权重而不是存 0（0 = 排除该鱼种，静默生效太危险）
+  FISH_CFG.fish.forEach((f,i)=>{const w=$('#fw_'+i),e=$('#fe_'+i);
+    if(w){const raw=w.value.trim();const num=Number(raw);f.weight=raw!==''&&Number.isFinite(num)?num:f.base_weight}
+    if(e)f.enabled=e.checked});
+  FISH_DIRTY=true;
 }
 function renderFishRows(){
   if(!FISH_CFG)return;const q=($('#fishFilter')?.value||'').toLowerCase();
   const rows=FISH_CFG.fish.map((f,i)=>({f,i})).filter(x=>!q||`${x.f.fish_key} ${x.f.name_zh}`.toLowerCase().includes(q));
   $('#fishRows').innerHTML=`<div class="table-wrap"><table class="fish-table"><thead><tr><th>启用</th><th>鱼种</th><th>基础权重</th><th>覆盖权重</th><th>来源</th></tr></thead><tbody>${rows.map(({f,i})=>`<tr><td><input class="switch" type="checkbox" id="fe_${i}" ${f.enabled?'checked':''} onchange="syncFishRows()"></td><td><b>${esc(f.name_zh||f.fish_key)}</b><div class="muted mono">${esc(f.fish_key)}</div></td><td>${Number(f.base_weight).toFixed(2)}</td><td><input class="mini-input" id="fw_${i}" type="number" min="0" step="0.1" value="${f.weight}" onchange="syncFishRows()"></td><td>${f.has_override?'<span class="tag gold">覆盖</span>':'<span class="tag">静态</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">没有匹配鱼种</td></tr>'}</tbody></table></div>`;
+  const filtered=q.length>0;
+  const on=$('#fishAllOn'),off=$('#fishAllOff');
+  if(on)on.textContent=filtered?'启用筛选结果':'全部启用';
+  if(off)off.textContent=filtered?'关闭筛选结果':'全部关闭';
 }
-function fishSetAll(on){syncFishRows();FISH_CFG.fish.forEach(f=>f.enabled=on);renderFishRows()}
+function fishSetAll(on){
+  syncFishRows();
+  // 有筛选词时只作用于筛选出的可见行，避免“只想关一类鱼却清了全表”
+  const q=($('#fishFilter')?.value||'').toLowerCase();
+  const hit=f=>!q||`${f.fish_key} ${f.name_zh}`.toLowerCase().includes(q);
+  FISH_CFG.fish.forEach(f=>{if(hit(f))f.enabled=on});
+  renderFishRows();
+}
 async function saveFishConfig(){
-  syncFishRows();const s=FISH_CFG.setting;FISH_CFG.setting={...s,bite_probability:+$('#fishProb').value,bite_delay_fixed:+$('#fishFixed').value,bite_delay_scale:+$('#fishScale').value,bite_delay_max:+$('#fishMax').value,bite_delay_lure_max:+$('#fishLureMax').value};
-  await api('/api/fish/config',{method:'POST',body:JSON.stringify({area:FISH_CFG.area,setting:FISH_CFG.setting,fish:FISH_CFG.fish})});toast('鱼口配置已保存并热生效');await selectFishArea(FISH_AREA);
+  syncFishRows();const s=FISH_CFG.setting;
+  // 保存前校验五个咬钩参数；失败聚焦到出错字段并按模板提示怎么改
+  const read=id=>{const v=$('#'+id).value.trim();const n=Number(v);return v!==''&&Number.isFinite(n)?n:null};
+  const bad=(id,msg)=>{toast(msg,'bad');const el=$('#'+id);el.focus();el.select()};
+  const p=read('fishProb'),fx=read('fishFixed'),sc=read('fishScale'),mx=read('fishMax'),lm=read('fishLureMax');
+  if(p===null||p<0||p>1)return bad('fishProb','上鱼概率有问题：请填 0~1 之间的小数');
+  if(fx===null||fx<0)return bad('fishFixed','固定延迟秒有问题：填 0 或正小数');
+  if(sc===null||sc<0)return bad('fishScale','延迟倍率有问题：填 0 或正小数');
+  if(mx===null||mx<1)return bad('fishMax','普通竿延迟上限有问题：至少填 1 秒');
+  if(lm===null||lm<=0)return bad('fishLureMax','路亚延迟上限有问题：填正数秒');
+  FISH_CFG.setting={...s,bite_probability:p,bite_delay_fixed:fx,bite_delay_scale:sc,bite_delay_max:mx,bite_delay_lure_max:lm};
+  await api('/api/fish/config',{method:'POST',body:JSON.stringify({area:FISH_CFG.area,setting:FISH_CFG.setting,fish:FISH_CFG.fish})});toast('已保存，立即生效');await selectFishArea(FISH_AREA,true);
 }
-async function resetFishConfig(){if(!confirm('清除该水域的全部鱼口覆盖并恢复静态配置？'))return;await api('/api/fish/config/reset',{method:'POST',body:JSON.stringify({area:FISH_AREA})});toast('已恢复静态鱼口');await selectFishArea(FISH_AREA)}
+async function resetFishConfig(){askConfirm('恢复默认鱼口','清除「'+FISH_AREA+'」的全部人工覆盖，回到按鱼库静态权重出鱼。',async()=>{await api('/api/fish/config/reset',{method:'POST',body:JSON.stringify({area:FISH_AREA})});toast('已恢复默认鱼口，见审计日志');await selectFishArea(FISH_AREA)})}
 async function showAddFish(){showModal('添加鱼种到水域','搜索鱼库后添加到当前覆盖列表',`<input id="fishAddSearch" placeholder="中文名或 fish_key" oninput="debounce('fishAdd',searchFishPool)"><div class="results" id="fishAddResults"></div>`);searchFishPool()}
 async function searchFishPool(){const q=$('#fishAddSearch').value.trim();const list=await api('/api/fish/pool?q='+encodeURIComponent(q)+'&limit=80');$('#fishAddResults').innerHTML=list.map(x=>`<div class="result" data-key="${esc(x.fish_key)}" data-name="${esc(x.name_zh)}" onclick="addFishFromPool(this.dataset.key,this.dataset.name)"><div><b>${esc(x.name_zh)}</b><div class="muted mono">${esc(x.fish_key)}</div></div><span class="tag">${fmt(x.min_g)}-${fmt(x.max_g)}g</span></div>`).join('')||'<div class="empty">无结果</div>'}
 function addFishFromPool(key,name){syncFishRows();if(FISH_CFG.fish.some(f=>f.fish_key===key)){closeModal();return toast('该鱼种已在列表','bad')}FISH_CFG.fish.push({fish_key:key,name_zh:name,base_weight:0,weight:1,enabled:true,has_override:true});closeModal();renderFishRows();toast('已加入，记得保存')}
@@ -379,11 +522,11 @@ function addAttachment(){showModal('添加邮件附件','搜索物品目录',`<i
 async function searchAttachItems(){const q=$('#attachSearch').value.trim();const list=await api('/api/catalog/items?q='+encodeURIComponent(q));$('#attachResults').innerHTML=list.map(x=>`<div class="result" data-id="${esc(x.item_id)}" data-name="${esc(x.name)}" onclick="pickAttachment(this.dataset.id,this.dataset.name)"><div><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></div><span class="tag">cat ${x.category}</span></div>`).join('')||'<div class="empty">无结果</div>'}
 function pickAttachment(id,name){if(!MAIL_ATTACH.some(x=>x.item_id===id))MAIL_ATTACH.push({item_id:id,name,qty:1});closeModal();renderAttachments();toast('已添加 '+name)}
 function renderAttachments(){
-  $('#attachments').innerHTML=MAIL_ATTACH.map((x,i)=>`<div class="attach-row"><div class="toolbar"><input value="${esc(x.name||x.item_id)}" disabled><div class="muted mono">${esc(x.item_id)}</div></div><input type="number" min="1" value="${x.qty}" onchange="MAIL_ATTACH[${i}].qty=+this.value"><button class="btn bad sm" onclick="MAIL_ATTACH.splice(${i},1);renderAttachments()">×</button></div>`).join('')||'<div class="muted">无附件</div>';
+  $('#attachments').innerHTML=MAIL_ATTACH.map((x,i)=>`<div class="attach-row"><div class="toolbar"><input value="${esc(x.name||x.item_id)}" disabled><div class="muted mono">${esc(x.item_id)}</div></div><input type="number" min="1" value="${x.qty}" onchange="MAIL_ATTACH[${i}].qty=+this.value"><button class="btn bad sm" aria-label="移除附件" onclick="MAIL_ATTACH.splice(${i},1);renderAttachments()">×</button></div>`).join('')||'<div class="muted">无附件</div>';
 }
 async function sendMail(){
   const uid=+$('#mailUid').value,text=$('#mailText').value.trim();if(!uid)return toast('请填写收件人 UID','bad');if(!text&&!MAIL_ATTACH.length)return toast('正文和附件不能都为空','bad');
-  await api('/api/mail/send',{method:'POST',body:JSON.stringify({uid,text,items:MAIL_ATTACH.map(x=>({item_id:x.item_id,qty:+x.qty||1}))})});toast('邮件已进入投递队列');MAIL_ATTACH=[];renderAttachments();
+  await api('/api/mail/send',{method:'POST',body:JSON.stringify({uid,text,items:MAIL_ATTACH.map(x=>({item_id:x.item_id,qty:+x.qty||1}))})});toast('已下发，约 2 秒内到达');MAIL_ATTACH=[];renderAttachments();
 }
 function previewMail(){const uid=$('#mailUid').value||'未填写';$('#mailPreview').className='';$('#mailPreview').innerHTML=`<div style="padding:14px;border:1px solid var(--line);border-radius:12px;background:#0b1623"><div class="muted">收件人 UID ${esc(uid)}</div><div style="margin:10px 0;white-space:pre-wrap">${esc($('#mailText').value||'(无正文)')}</div><hr style="border:0;border-top:1px solid var(--line)"><div class="muted">附件 ${MAIL_ATTACH.length} 件</div>${MAIL_ATTACH.map(x=>`<div class="pill" style="margin:5px 5px 0 0">${esc(x.name||x.item_id)} × ${x.qty}</div>`).join('')}</div>`}
 function mailTemplate(name){const map={'补偿':'管理员补偿\n\n因近期服务器问题给您带来的不便，特此补偿以下物品，请查收。','活动奖励':'活动奖励\n\n感谢参与本次服务器活动！奖励已随邮件附上。','测试':'测试邮件\n\n这是一封来自管理后台的测试邮件。'};$('#mailText').value=map[name]||map['测试'];previewMail()}
@@ -393,6 +536,7 @@ function prefillMail(uid){go('mail');$('#mailUid').value=uid;$('#mailText').focu
 if(TOKEN)boot();else logout();
 </script>
 <script>
+/* 公告横幅：文案以混淆形式内嵌，运行时解码，避免明文出现在源码里 */
 (function(){
   var bar=document.getElementById('noticeBar');if(!bar)return;
   var K=[114,70,52,35,50,48,50,54];
