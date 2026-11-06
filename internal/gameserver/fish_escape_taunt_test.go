@@ -94,12 +94,23 @@ func TestFishEscapeOfficialFallback(t *testing.T) {
 	}
 }
 
-// TestFishEscapeWithoutPendingFish 无可播报鱼体时不能 panic，仍发提示。
+// TestFishEscapeWithoutPendingFish 无可播报鱼体时回退到原因对应的官方模板，
+// 不能拼出“你的 ，跑掉了”或附带 0 克重量。
 func TestFishEscapeWithoutPendingFish(t *testing.T) {
 	srv, sess, gc := newEscapeProbeServer(t)
 	srv.notifyFishEscape(sess, nil, "断主线")
 	env := awaitPushEnvelope(t, gc)
 	if env.Main != 24 || env.Sub != 27 {
 		t.Fatalf("跑鱼提示应走 24/27，实得 %d/%d", env.Main, env.Sub)
+	}
+	dec, _, err := proto.DecodeValue(env.Body, 0, srv.Table())
+	if err != nil {
+		t.Fatalf("推送 body 不可解码: %v", err)
+	}
+	if f0 := dec.Items[0].Field(0).Num; f0 == nil || *f0 != 6 {
+		t.Fatalf("断主线无鱼体时应回退官方模板 6，实得 %v", f0)
+	}
+	if f4 := dec.Items[0].Field(4).Val; f4 != nil && f4.Kind != proto.KindNull {
+		t.Fatalf("官方模板不应附带 KV 参数: %+v", f4)
 	}
 }

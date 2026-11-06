@@ -1939,13 +1939,17 @@ var fishEscapeTaunts = []string{
 
 // notifyFishEscape 跑鱼提示：类型3（蓝色 KV 模板），文案带随机语气词，
 // 重量走键2（客户端模板句尾自动显示“X 克/公斤”）。
-// fish_escape_taunt=0 时回退官方类型7模板（“鱼脱钩了”）。
+// fish_escape_taunt=0 或没有在途鱼体时回退官方原因模板。
 func (s *Server) notifyFishEscape(sess *Session, f *RolledFish, reason string) {
 	if s == nil || sess == nil {
 		return
 	}
-	if s.tunableF("fish_escape_taunt", 1) == 0 {
-		sess.pushChatProbe(27, 7, "", nil)
+	officialKind := 7
+	if kind, ok := escapeTemplateKind[reason]; ok {
+		officialKind = kind
+	}
+	if f == nil || s.tunableF("fish_escape_taunt", 1) == 0 {
+		sess.pushChatProbe(27, officialKind, "", nil)
 		return
 	}
 	weight := int64(0)

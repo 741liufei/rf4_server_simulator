@@ -20,14 +20,14 @@ test('grouped dashboard preserves edits and upstream embedded API routing',async
    await page.clock.install();
    await page.goto('http://127.0.0.1:19214'+prefix+'/');
    await page.locator('#tun_xp_gain').waitFor();
-   assert.equal(await page.locator('.tunable-group').count(),3);
+   assert.equal(await page.locator('.tunable-group').count(),6);
    await page.locator('#tun_xp_gain').fill('2.5');
    await page.clock.fastForward(8100);
    await page.waitForTimeout(100);
    assert.equal(await page.locator('#tun_xp_gain').inputValue(),'2.5');
    for(const text of ['', '最长合理业务参数名称与说明'.repeat(10), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(15)]){
     if(text)await page.locator('.tunable-field label').first().evaluate((e,t)=>e.textContent=t,text);
-    const m=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth,fields:[...document.querySelectorAll('.tunable-field')].map(e=>{
+    const m=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth,fields:[...document.querySelectorAll('.tunable-field')].filter(e=>e.querySelector('input')&&e.querySelector('button')).map(e=>{
      const input=e.querySelector('input').getBoundingClientRect(),button=e.querySelector('button').getBoundingClientRect(),label=e.querySelector('label');
      return {input:input.width,button:button.width,height:button.height,gap:button.x-input.right,labelScroll:label.scrollWidth,labelWidth:label.clientWidth,font:getComputedStyle(label).fontSize};
     })}));
