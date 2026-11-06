@@ -23,7 +23,8 @@ func hProfile(ctx *Ctx) ([]byte, bool) {
 	if !ctx.Sess.Srv.requireDB(ctx) {
 		return nil, false
 	}
-	p, err := ctx.Sess.Srv.BuildProfile307(ctx.Sess.pushCtx(), ctx.Sess.Userid)
+	p, err := ctx.Sess.Srv.BuildProfile307W(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+		worldTotalGameMin(time.Now()))
 	if err != nil {
 		ctx.Log.Warn("3/1 构造失败", "err", err)
 		return nil, false
@@ -208,6 +209,7 @@ func hSkillsGet(ctx *Ctx) ([]byte, bool) {
 	}
 	tree, err := srv.BuildSkillTree311(ctx.Sess.pushCtx(), ctx.Sess.Userid, ^uint64(0))
 	if err != nil {
+		ctx.Log.Error("技能树构建失败（回兜底空包会卡客户端登录）", "err", err)
 		return nil, false
 	}
 	body, err := proto.EncodeValue(tree, ctx.Sess.Table())
@@ -370,7 +372,7 @@ func hPlaceBuyout(ctx *Ctx) ([]byte, bool) {
 		ctx.Log.Info("3/37 价格与静态表不符，不扣款", "place", place,
 			"packet", packet, "price", price, "tiers", tiers)
 	}
-	p, err := srv.BuildProfile307(cctx, uid)
+	p, err := srv.BuildProfile307W(cctx, uid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		ctx.Log.Warn("3/37 档案构造失败", "err", err)
 		return nil, false
@@ -425,7 +427,7 @@ func hPlace(ctx *Ctx) ([]byte, bool) {
 	}
 	key = travelLevelKey(key)
 	nowUnix := time.Now().Unix()
-	body, err := ctx.Sess.Srv.buildMapDobBody(key, nowUnix)
+	body, err := ctx.Sess.Srv.buildMapDobBody(ctx.Sess.Userid, key, nowUnix)
 	if err != nil {
 		ctx.Log.Warn("1/12 dob 构造失败", "level", key, "err", err)
 		return nil, false
@@ -448,6 +450,15 @@ func hTravel(ctx *Ctx) ([]byte, bool) {
 	}
 	key = travelLevelKey(key)
 	sess := ctx.Sess
+	// 凭证地图资格与 1/13 共用 tripLevelLocked 前置校验：无有效
+	// trip/buyout/house 的凭证地图拒绝切图且不得改写位置——1/14 曾无校验，
+	// 构造请求即可绕过购票/买断/房契直接进入凭证地图（审查 P1 实测复现）。
+	// 拒绝走业务失败回包，客户端停留在当前地图。
+	if sess.Srv.tripLevelLocked(sess.pushCtx(), sess.Userid, key) {
+		ctx.Log.Info("1/14 目标地图无有效访问，拒绝切图", "level", key)
+		ctx.ReplyFailure("System.InvalidOperationException", "该地点需要有效钓鱼游、买断或房屋")
+		return nil, true
+	}
 	nowUnix := time.Now().Unix()
 	body, err := sess.Srv.buildTravelBodyAt(sess, key, nowUnix)
 	if err != nil {
@@ -466,6 +477,14 @@ func hTravel(ctx *Ctx) ([]byte, bool) {
 	}
 	sess.Srv.setLevel(sess.Userid, key)
 	sess.rememberWeather(key, nowUnix)
+	// 兼容旧存档：只对 last_consume_ts=0 的历史已购行补启表；新购票已在
+	// 3/38 购买事务中启表。
+	if sess.Srv.startTripTimers(sess.pushCtx(), sess.Userid, key) {
+		sess.Push2_1()
+	}
+	// 装备包与地图同步：进入有效钓鱼游地图发放，切离的地图回收
+	// （官方生命周期"进图发放/离图回收"，见 trip_equip.go）。
+	sess.Srv.syncTripEquipment(sess.pushCtx(), sess.Userid, key)
 	ctx.Log.Info("1/14 travel", "level", key, "scene", scene, "spot", spot)
 	return body, true
 }
@@ -501,9 +520,15 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	if scene == "" {
 		scene = sceneForLevel(level)
 	}
+	// 钓鱼游/买断已失效的付费地图不能作为出生地图（钓鱼游到期即失去
+	// 进入资格），回退出生地图，避免到期后重连仍留在原地图。
+	if srv.tripLevelLocked(sess.pushCtx(), uid, level) {
+		ctx.Log.Info("1/13 目标地图无有效钓鱼游，回出生地图", "level", level)
+		level, scene, spot = spawnLevelKey, sceneForLevel(spawnLevelKey), 0
+	}
 
 	nowUnix := time.Now().Unix()
-	body, err := srv.buildSpawnLocatorBody(level, scene, nowUnix)
+	body, err := srv.buildSpawnLocatorBody(uid, level, scene, nowUnix)
 	if err != nil {
 		ctx.Log.Warn("1/13 出生点定位构造失败", "level", level, "err", err)
 		return nil, false
@@ -514,6 +539,12 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	}
 	srv.setLevel(uid, level)
 	sess.rememberWeather(level, nowUnix)
+	// 兼容旧存档：重登时补启 last_consume_ts=0 的历史已购行。
+	if srv.startTripTimers(sess.pushCtx(), uid, level) {
+		sess.Push2_1()
+	}
+	// 装备包与地图同步：落点=有效钓鱼游地图 → 发放；其他地图残留 → 回收。
+	srv.syncTripEquipment(sess.pushCtx(), uid, level)
 	ctx.Log.Info("1/13 下发出生地图", "level", level, "scene", scene, "spot", spot, "bytes", len(body))
 	return body, true
 }

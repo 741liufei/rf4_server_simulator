@@ -245,7 +245,7 @@ func TestSpawnLocatorBuild(t *testing.T) {
 	db := openMigratedTestDB(t)
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
 	srv.SetDB(db)
-	body, err := srv.buildSpawnLocatorBody(spawnLevelKey, spawnScene, time.Now().Unix())
+	body, err := srv.buildSpawnLocatorBody(1, spawnLevelKey, spawnScene, time.Now().Unix())
 	if err != nil {
 		t.Fatalf("构造失败: %v", err)
 	}

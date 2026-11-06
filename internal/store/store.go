@@ -57,6 +57,13 @@ func (d *DB) Migrate() error {
 		               'migrations/00025_bait_consumption.sql')`); err != nil {
 		return fmt.Errorf("兼容旧分支迁移编号: %w", err)
 	}
+	// 钓鱼游分支曾以 00036 登记 trip_grant，上游 00036 现为 fish_ecology：
+	// 按文件名把旧分支行重映射到 00039，让主线 00036 能正常补齐。
+	if _, err := d.SQL.Exec(`UPDATE schema_migrations
+		SET version=39, name='migrations/00039_trip_grant.sql'
+		WHERE name='migrations/00036_trip_grant.sql'`); err != nil {
+		return fmt.Errorf("兼容钓鱼游分支迁移编号: %w", err)
+	}
 	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return err

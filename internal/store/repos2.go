@@ -268,7 +268,10 @@ func (d *DB) CatchLogTotals(ctx context.Context, uid int64) (total, trophy, supe
 
 // ---- 地点买断 ----
 
-// PlaceAccessList 玩家已买断地点（档案 307 f22）。
+// PlaceAccessList 玩家已买断地点（档案 307 f22 与 placeOwned 买断判断同源）。
+// 只含 kind='buyout'：房屋走 HouseAccessList 进 f20（客户端据 f20 把已购
+// 房屋显示为"进入"），f22 一律渲染成"永久买断"——混入房屋会让仅有房契的
+// 玩家在地图上呈现买断态，也污染买断判断与地图免费准入（审查 P2）。
 func (d *DB) PlaceAccessList(ctx context.Context, uid int64) ([]string, error) {
 	rows, err := d.SQL.QueryContext(ctx, `SELECT place FROM place_access WHERE uid=? AND kind='buyout'`, uid)
 	if err != nil {
@@ -280,6 +283,9 @@ func (d *DB) PlaceAccessList(ctx context.Context, uid int64) ([]string, error) {
 		var p string
 		if err := rows.Scan(&p); err != nil {
 			return nil, err
+		}
+		if p == "" {
+			continue
 		}
 		out = append(out, p)
 	}

@@ -145,7 +145,7 @@ func TestWeatherScheduleMapAndSpawnWireMatchFishingPlan(t *testing.T) {
 	maps, _ := loadMapDefs()
 	now := weatherTimeAt(100*24 + 23)
 	for loc := range maps {
-		body, err := srv.buildMapDobBody(loc, now.Unix())
+		body, err := srv.buildMapDobBody(1, loc, now.Unix())
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +153,7 @@ func TestWeatherScheduleMapAndSpawnWireMatchFishingPlan(t *testing.T) {
 		if err != nil || end != len(body) {
 			t.Fatalf("map %s decode: %v, %d/%d", loc, err, end, len(body))
 		}
-		spawn, err := srv.buildSpawnLocatorBody(loc, "", now.Unix())
+		spawn, err := srv.buildSpawnLocatorBody(1, loc, "", now.Unix())
 		if err != nil {
 			t.Fatal(err)
 		}

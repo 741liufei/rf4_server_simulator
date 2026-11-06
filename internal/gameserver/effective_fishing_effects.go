@@ -2,6 +2,8 @@ package gameserver
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 
 	"rf4server/internal/proto"
@@ -79,6 +81,11 @@ func (s *Server) effectiveFishingSkills(ctx context.Context, uid int64, gears ..
 	}
 	rod, err := s.DB.GetItemByGUID(ctx, gear)
 	if err != nil {
+		// 钓位引用可能悬空（历史遗留/异常路径删除装备），按无竿处理而非
+		// 整个技能树失败——5/1 失败回兜底空包会让客户端卡登录。
+		if errors.Is(err, sql.ErrNoRows) {
+			return e, nil
+		}
 		return e, err
 	}
 	if rod == nil || rod.UID != uid || rod.Durability <= 0 {
