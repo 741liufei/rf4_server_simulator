@@ -35,11 +35,17 @@ const (
 	testDBRecipes
 )
 
-var testDBTemplates = [...]struct {
+// testDBTemplateSlot 缓存一份模板库的路径，每个 kind 只构建一次。
+type testDBTemplateSlot struct {
 	once sync.Once
 	path string
 	err  error
-}{}
+}
+
+// testDBTemplates 按 testDBTemplateKind 下标取槽位。必须显式按枚举长度分配：
+// 写成 [...]struct{...}{} 会得到长度为 0 的数组，任何 kind 都越界，
+// 依赖静态目录的用例会全部静默 SKIP 而不是失败（2026-11-06 实测）。
+var testDBTemplates = make([]testDBTemplateSlot, int(testDBRecipes)+1)
 
 func testDBTemplatePath(kind testDBTemplateKind) (string, error) {
 	if kind < 0 || int(kind) >= len(testDBTemplates) {
