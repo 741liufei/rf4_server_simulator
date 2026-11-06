@@ -380,6 +380,17 @@ func fishEcologyJSONMap(raw string) map[string]float64 {
 // 0xD0000000/0xD1000000 的高位是钓组阶段，不属于拟饵动作。
 const lureMotionStatusMask uint32 = 0x007FFFFF
 
+// 客户端 4.0.25034 把钓组动作定义成 23 个状态：托管元数据里的动作枚举
+// （fhiclnhgoge）取值 0x1..0x800000 共 23 个单位，resources.assets 的本地化表用
+// kRigAnimationType_* 给出这些状态的显示名：Hooking、UniformMotion、StopAndGo、
+// SpeedUp、Hanging、BottomTouch、Twitch、Splash、StreamMoving、JigStep、WalkDog、
+// LittleJerk、MediumJerk、FreshWaterLittleJerk、FreshWaterMediumJerk、
+// MotionlessInWaterColumn、MotionlessOnBottom、MotionlessOnWaterSurface、
+// MotionOnBottom、VerticalDive、VerticalAscend、Trolling、MotionInBottomLayer。
+// 本地化表按名称排列，不带位序，所以键名只能靠实机 14/7 上报对位：目前已确认
+// 0x40=StreamMoving、0x80=JigStep、0x4000=Trolling、0x200=MotionlessInWaterColumn、
+// 0x80000=VerticalDive；剩下 0x1、0x4、0x8000、0x20000、0x40000、0x100000 六位落在
+// Hooking、Hanging 和四个 Jerk 幅度键里，无法一一配对，只能按上报到的行为命名。
 // 攻略前置条件要用的三个客户端动作位（kRigAnimationType_*）：
 // 顺流移动、jig 阶梯，以及“饵在水中运动”对应的动到位集合。
 const (
