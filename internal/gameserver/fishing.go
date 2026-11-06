@@ -1526,6 +1526,13 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 		st.mu.Unlock()
 		return false
 	}
+	// 14/7 的“补排咬钩”只用于 14/14 尚未到达的场景。若当前鱼已经
+	// Pending、已推送或正在推送，绝不能再清空状态重排，否则会把第一条鱼
+	// 覆盖成新鱼，几秒后客户端收到第二条 14/14。
+	if !resetCast && (st.Pending != nil || st.PushSent || st.pushing != nil) {
+		st.mu.Unlock()
+		return false
+	}
 	st.cancelBiteTimerLocked()
 	st.cancelPendingTimerLocked()
 	st.castGeneration++
