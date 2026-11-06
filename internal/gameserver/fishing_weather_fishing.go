@@ -10,8 +10,15 @@ func (s *Server) weatherFishActivity(species string, c fishRollContext) float64 
 	if s.tunableF("fish_weather_enabled", 0) != 1 {
 		return 1
 	}
-	_, hour := worldDayAndHour(c.now.Unix())
-	return fishWeatherActivity(species, c.weather, hour, c.depthCM)
+	p := s.cachedFishEcology(s.dbCtx(), c, species)
+	water := fishWaterConditionsFor(p, c)
+	tolerance := math.Max(2.2, (p.TempMaxC-p.TempMinC)/2)
+	z := (water.WaterTempC - p.TempPrefC) / tolerance
+	thermal := .35 + .65*math.Exp(-.5*z*z)
+	activity := fishSeasonWeight(p, water.Season) *
+		fishWeatherKindWeight(p, c.weather.kind) * thermal *
+		(1 - math.Abs(p.ClarityPref-water.Clarity)*.20)
+	return clampFloat(activity*p.Activity, .15, 1.25)
 }
 
 // 等待节奏参考本水域鱼种；实际吃口仍逐鱼判定，不把低活跃归一化掉。
@@ -51,7 +58,6 @@ func (s *Server) weatherBiteDelayFactor(st *FishState, weather fishingWeather, n
 			weights[fish.species]++
 		}
 	}
-	_, hour := worldDayAndHour(now.Unix())
 	keys, values := make([]string, 0, len(weights)), make([]float64, 0, len(weights))
 	for species, weight := range weights {
 		keys, values = append(keys, species), append(values, weight)
@@ -63,12 +69,18 @@ func (s *Server) weatherBiteDelayFactor(st *FishState, weather fishingWeather, n
 		}
 		keys, values = s.filterFishBaitSet(baitLoc, baits, keys, values, now, fishRollContext{rigType: st.RigType})
 	}
+	rollCtx := fishRollContext{
+		rigType: st.RigType, depthCM: st.DepthCM, lureLayer: st.LureLayer,
+		lureAction: st.LureAction, now: now, weather: weather,
+		loc: st.Loc, spot: st.Spot, cache: newFishingRollCache(),
+	}
+	rollCtx.skill = st.Bonus
 	var total, active float64
 	for i, species := range keys {
 		weight := values[i]
 		if weight > 0 {
 			total += weight
-			active += weight * fishWeatherActivity(species, weather, hour, st.DepthCM)
+			active += weight * s.weatherFishActivity(species, rollCtx)
 		}
 	}
 	if total <= 0 || active <= 0 {

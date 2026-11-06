@@ -39,19 +39,23 @@ type fishingRollCache struct {
 	fishNamesLoaded      bool
 	fishNamesOK          bool
 	localEvidence        map[localBaitEvidenceKey]map[string]bool
+	fishEcology          map[string]fishEcologyProfile
+	fishEcologyLoaded    map[string]bool
 }
 
 func newFishingRollCache() *fishingRollCache {
 	return &fishingRollCache{
-		statLocs:       map[string]string{},
-		rosters:        map[string][]*store.FishRosterRow{},
-		gradeLines:     map[string]cachedGradeLines{},
-		settleStatics:  map[string][6]int64{},
-		lengthKP:       map[string][2]float64{},
-		baitTiers:      map[string]map[string]int64{},
-		baitTierLoaded: map[string]bool{},
-		baitDefs:       map[string]cachedBaitDef{},
-		localEvidence:  map[localBaitEvidenceKey]map[string]bool{},
+		statLocs:          map[string]string{},
+		rosters:           map[string][]*store.FishRosterRow{},
+		gradeLines:        map[string]cachedGradeLines{},
+		settleStatics:     map[string][6]int64{},
+		lengthKP:          map[string][2]float64{},
+		baitTiers:         map[string]map[string]int64{},
+		baitTierLoaded:    map[string]bool{},
+		baitDefs:          map[string]cachedBaitDef{},
+		localEvidence:     map[localBaitEvidenceKey]map[string]bool{},
+		fishEcology:       map[string]fishEcologyProfile{},
+		fishEcologyLoaded: map[string]bool{},
 	}
 }
 
@@ -275,4 +279,24 @@ func (s *Server) cachedSettleStatics(ctx context.Context, c fishRollContext, key
 	cache.settleStatics[key] = values
 	cache.mu.Unlock()
 	return values
+}
+
+func (s *Server) cachedFishEcology(ctx context.Context, c fishRollContext, key string) fishEcologyProfile {
+	cache := rollCache(c)
+	if cache == nil {
+		return s.fishEcology(ctx, key)
+	}
+	cache.mu.Lock()
+	if cache.fishEcologyLoaded[key] {
+		profile := cache.fishEcology[key]
+		cache.mu.Unlock()
+		return profile
+	}
+	cache.mu.Unlock()
+	profile := s.fishEcology(ctx, key)
+	cache.mu.Lock()
+	cache.fishEcology[key] = profile
+	cache.fishEcologyLoaded[key] = true
+	cache.mu.Unlock()
+	return profile
 }

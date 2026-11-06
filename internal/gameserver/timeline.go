@@ -4,6 +4,8 @@ package gameserver
 // 这些命令大多只需要返回结构合法的最小响应；响应类型错误会导致客户端解析失败。
 
 import (
+	"time"
+
 	"rf4server/internal/proto"
 	"rf4server/internal/wiregen"
 )
@@ -11,7 +13,7 @@ import (
 func registerTimelineHandlers(d *Dispatch) { // fire-and-forget：客户端不等响应，绝不回包
 	d.Register(1, 7, hNoReply)        // game/locale 区域上报
 	d.Register(1, 15, hNoReply)       // game/enter_place_notify 进入地图单向通知
-	d.Register(3, 10, hBoatUseLog)    // boat_use 上报类：当前只记录请求体，便于分析上船协议
+	d.Register(3, 10, hBoatUse)       // boat_use 上船/下船单向上报，据此维护在船状态
 	d.Register(3, 11, hCampfireStart) // campfire_start：保存到期时间并返回有效篝火状态
 	d.Register(1, 18, hBoolTrue)      // game/telemetry 设备指纹 → bool true
 
@@ -111,11 +113,53 @@ func hStoreRealList(ctx *Ctx) ([]byte, bool) {
 	return body, true
 }
 
-// hBoatUseLog 处理 3/10 boat_use。
-// 当前没有上船/载具实现，这里只记录请求体，便于分析客户端按 E 后发送的内容。
-func hBoatUseLog(ctx *Ctx) ([]byte, bool) {
+// 3/10 boat_use 的动作字节。协议契约里 3/10 没有 DTO（fallback_kinds 为 none），
+// 解码器会把请求体尾字节当结束标记吞掉，所以按尾字节判上下船。实机样本：
+// 0x0e 两次都紧跟在 3/7 验票通过之后 9~10 毫秒，即上船；0x0f 出现在玩家靠岸
+// 按 E 下船的瞬间，另有 6 条历史样本时机吻合。
+const (
+	boatUseBoard     byte = 0x0e
+	boatUseDisembark byte = 0x0f
+)
+
+// boatUseIsBoard 从 3/10 请求体取上下船结论。取值认不出时 ok=false，
+// 调用方只记日志不改状态，避免把“没证据”写成“已下船”。
+func boatUseIsBoard(body []byte) (board bool, ok bool) {
+	if len(body) == 0 {
+		return false, false
+	}
+	switch body[len(body)-1] {
+	case boatUseBoard:
+		return true, true
+	case boatUseDisembark:
+		return false, true
+	}
+	return false, false
+}
+
+// hBoatUse 处理 3/10 boat_use：单向上报，不回包。上船时 3/7 已经写过租期，
+// 这里补的是“下船瞬间”的实时证据，否则只能等租期到期才算下船。
+func hBoatUse(ctx *Ctx) ([]byte, bool) {
+	board, ok := boatUseIsBoard(ctx.Body)
+	if !ok {
+		if ctx.Log != nil {
+			ctx.Log.Info("3/10 boat_use", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 160))
+		}
+		return nil, true
+	}
+	srv := ctx.Sess.Srv
+	st := srv.stateFor(ctx.Sess.Userid)
+	if st != nil {
+		st.mu.Lock()
+		st.markBoatClientEventLocked(time.Now().Unix(), board)
+		st.mu.Unlock()
+	}
 	if ctx.Log != nil {
-		ctx.Log.Info("3/10 boat_use", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 160))
+		if board {
+			ctx.Log.Info("3/10 boat_use 已上船")
+		} else {
+			ctx.Log.Info("3/10 boat_use 已下船")
+		}
 	}
 	return nil, true
 }

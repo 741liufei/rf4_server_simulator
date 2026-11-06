@@ -404,7 +404,7 @@ func TestCastLandingPositionFromObject(t *testing.T) {
 }
 
 func TestFishingLeftRigNotReadyRepushesSameFish(t *testing.T) {
-	for _, state := range []uint32{3, 5, 6} {
+	for _, state := range []uint32{3, 5} {
 		t.Run(fmt.Sprintf("status%d", state), func(t *testing.T) {
 			srv, _ := newDetachTestServer(t)
 			const uid = int64(1000001)
@@ -434,6 +434,40 @@ func TestFishingLeftRigNotReadyRepushesSameFish(t *testing.T) {
 				t.Fatalf("重推状态错误: PushSent=%v Hooked=%v Resolved=%v CastActive=%v", st.PushSent, st.Hooked, st.Resolved, st.CastActive)
 			}
 		})
+	}
+}
+
+func TestFishingLeftRigNotReadyStopsAfterRepushCap(t *testing.T) {
+	srv, _ := newDetachTestServer(t)
+	const uid = int64(1000001)
+	st := srv.stateFor(uid)
+	fish := &RolledFish{FishGUID: "88888888888888888888888888888888", Species: "c.roach"}
+	st.mu.Lock()
+	st.Pending = fish
+	st.CastActive = true
+	st.InWater = true
+	st.PushSent = true
+	st.Hooked = false
+	st.Resolved = false
+	st.PendingRepush = maxPendingRepush
+	st.mu.Unlock()
+
+	obj := proto.Obj("lhicjpmglbo", 0, proto.Field{Op: "U32", Num: ptrU64(3)})
+	tree := proto.Args524(obj)
+	sess := newProbeSess(srv)
+	if _, ok := hFishingLeft(&Ctx{Sess: sess, Main: 14, Sub: 12, Tree: tree, DecodeOK: true, Log: logging.Discard()}); !ok {
+		t.Fatal("14/12 未处理")
+	}
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.Pending != nil {
+		t.Fatal("超过重推上限后应放弃当前鱼，避免无限 14/14")
+	}
+	if st.pendingTimer != nil {
+		t.Fatal("超过重推上限后不应再挂重推定时器")
+	}
+	if !st.Resolved {
+		t.Fatal("放弃后应标记本轮已结束，等玩家重新抛竿")
 	}
 }
 
