@@ -3,6 +3,7 @@ package gameserver
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"rf4server/internal/store"
 )
@@ -205,7 +206,8 @@ func (s *Server) resumeFishingState(st *FishState) {
 	}
 
 	st.mu.Lock()
-	if st.persist.sessionID != sess.ID {
+	resumed := st.persist.sessionID != sess.ID
+	if resumed {
 		st.persist.sessionID = sess.ID
 		if st.Pending != nil && st.CastActive && !st.Resolved {
 			st.persist.recoverPending = true
@@ -228,12 +230,21 @@ func (s *Server) resumeFishingState(st *FishState) {
 		st.mu.Unlock()
 		return
 	}
-
 	due := st.BiteAt
 	if due.IsZero() {
 		// 快照缺少 BiteAt 时从 CastTs 重新计算；
 		// onBiteTimer 的落水保护仍会阻止过早判鱼。
 		due = st.CastTs
+	}
+	if !resumed && due.Before(time.Now()) {
+		// 同一会话内 BiteAt 已过期，说明该咬钩时刻已被消费——典型是
+		// “饵未入水”到点自毁的 NeedBite 等待态，应等 14/7 补排重新排期。
+		// 用过期时刻重排会 arm 出立即触发的 timer，与补排赛跑：timer 先
+		// 判鱼推出，补排随后清场抹掉再排一枪——搏鱼中被推出第二尾不同
+		// 鱼种，入库与搏鱼所见不符（2026-11-06 23:57 日志实证）。
+		// 过期补枪只保留给重启/重连恢复（resumed 为真）。
+		st.mu.Unlock()
+		return
 	}
 	s.armBiteTimerLocked(st.persist.uid, st, due)
 	st.mu.Unlock()
