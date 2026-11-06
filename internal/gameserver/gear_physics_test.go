@@ -299,7 +299,7 @@ func TestFishingBonusUsesActualRigSkillCategory(t *testing.T) {
 		t.Fatalf("bottom bite_speed=%f", bottom.BiteSpeed)
 	}
 	if math.Abs(bottom.TrophyLuck-(1.5/10.0*0.012)) > 1e-9 {
-		t.Fatalf("bottom trophy_luck=%f", bottom.TrophyLuck)
+		t.Fatalf("bottom trophy_luck=%f rare=%f", bottom.TrophyLuck, bottom.RareFish)
 	}
 	if math.Abs(bottom.FightTolerance-(1.5/10.0*0.06)) > 1e-9 {
 		t.Fatalf("bottom fight_tolerance=%f", bottom.FightTolerance)

@@ -27,9 +27,25 @@ func TestFishEcologySeedsSpeciesAndMatchesWaterLayers(t *testing.T) {
 	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM fish_ecology`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count < 200 {
-		t.Fatalf("鱼种生态档案只初始化了 %d 条", count)
+	if count != 252 {
+		t.Fatalf("鱼种生态档案初始化 %d 条，期望 252", count)
 	}
+	if _, err := db.SQL.Exec(`UPDATE fish_ecology SET profile_version=1, layer_pref=.01 WHERE fish_key='n.pike'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.ensureFishEcology(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var version int
+	var layer float64
+	if err := db.SQL.QueryRow(`SELECT profile_version,layer_pref FROM fish_ecology WHERE fish_key='n.pike'`).Scan(&version, &layer); err != nil {
+		t.Fatal(err)
+	}
+	if version != fishEcologyProfileVersion || layer <= .01 {
+		t.Fatalf("旧版本生态行未自动升级: version=%d layer=%f", version, layer)
+	}
+	srv.tunCache = map[string]float64{"fish_ecology_enabled": 1}
+	srv.tunAt = time.Now()
 
 	surface := fishRollContext{rigType: 1, depthCM: 50, now: time.Now()}
 	bottom := fishRollContext{rigType: 12, depthCM: 500, now: time.Now()}
@@ -64,7 +80,7 @@ func TestEffectiveBaitDepthTracksFloatSinkingAndLureLayer(t *testing.T) {
 	if got := lureState.effectiveBaitDepthCMLocked(now); got != 400 {
 		t.Fatalf("路亚水层 0.8 应折算 400cm，实得 %d", got)
 	}
-	if got := classifyLureMotion(0x800); got != "bottom" {
+	if got := classifyLureMotion(0x800); got != "bottom_motionless" {
 		t.Fatalf("0x800 应识别为在水底无移动，实得 %q", got)
 	}
 	if got := lureLayerFromMotion(0x1000, .5); got != .08 {

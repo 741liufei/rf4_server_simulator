@@ -17,9 +17,19 @@ import (
 
 // fishingSkillBonus 保存钓鱼判定使用的三类技能增益。
 type fishingSkillBonus struct {
-	BiteSpeed      float64 // 咬钩等待倍率，<1 更快
-	TrophyLuck     float64 // 额外抽一次体重取较重者的概率
-	FightTolerance float64 // 默认鱼池体重上限的放宽比例
+	BiteSpeed         float64 // 咬钩等待倍率，<1 更快
+	TrophyLuck        float64 // 额外抽一次体重取较重者的概率
+	FightTolerance    float64 // 默认鱼池体重上限的放宽比例
+	EcologyInterest   float64
+	RareFish          float64
+	LureTolerance     float64
+	WeatherAdaptation float64
+	LayerAccuracy     float64
+	WormBoost         float64
+	PredatorBoost     float64
+	SalmonidBoost     float64
+	BottomBoost       float64
+	FloatBoost        float64
 }
 
 func neutralFishingSkillBonus() fishingSkillBonus {
@@ -332,7 +342,214 @@ func (s *Server) fishingBonus(ctx context.Context, uid, rigType int64, gears ...
 	}
 	b.TrophyLuck = effect / 10.0 * 0.012
 	b.FightTolerance = effect / 10.0 * 0.06
+	s.applyFishingNodeBonuses(ctx, cat, &b, effects, s.skillDefsOfCat(cat))
 	return b
+}
+
+type fishingSkillEffectDef struct {
+	NodeID    int64
+	EffectKey string
+	PerLevel  float64
+	Cap       float64
+}
+
+func (s *Server) ensureFishSkillEffects(ctx context.Context) (int, error) {
+	if s == nil || s.DB == nil {
+		return 0, nil
+	}
+	res, err := s.DB.SQL.ExecContext(ctx, `
+		INSERT INTO skill_fish_effect_def(
+			cat_id,node_id,effect_key,per_level,cap,source,confidence
+		)
+		SELECT cat_id,node_id,
+			CASE
+				WHEN cat_id=1 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'layer_accuracy' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'float_interest' WHEN 5 THEN 'worm_interest'
+					WHEN 6 THEN 'layer_accuracy' ELSE 'ecology_interest' END
+				WHEN cat_id=2 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'lure_tolerance' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'predator_interest' WHEN 5 THEN 'layer_accuracy'
+					WHEN 6 THEN 'lure_tolerance' ELSE 'ecology_interest' END
+				WHEN cat_id=3 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'layer_accuracy' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'benthic_interest' WHEN 5 THEN 'worm_interest'
+					WHEN 6 THEN 'layer_accuracy' ELSE 'ecology_interest' END
+				WHEN cat_id=11 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'lure_tolerance' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'predator_interest' WHEN 5 THEN 'layer_accuracy'
+					WHEN 6 THEN 'lure_tolerance' ELSE 'ecology_interest' END
+			END,
+			MIN(0.035,0.18/(CASE WHEN max_level>0 THEN max_level ELSE 1 END)),
+			0.20,'local-sim',0.45
+		FROM skill_def
+		WHERE cat_id IN (1,2,3,11) AND max_level>0
+		ON CONFLICT(cat_id,node_id) DO NOTHING`)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.normalizeFishSkillEffectGroups(ctx); err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (s *Server) normalizeFishSkillEffectGroups(ctx context.Context) error {
+	ident, err := s.DB.LoadSkillIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	type effectRow struct {
+		catID, nodeID int64
+		key           string
+		perLevel, cap float64
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT cat_id,node_id,effect_key,per_level,cap
+		FROM skill_fish_effect_def ORDER BY node_id,cat_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byRoot := map[int64][]effectRow{}
+	for rows.Next() {
+		var row effectRow
+		if err := rows.Scan(&row.catID, &row.nodeID, &row.key, &row.perLevel, &row.cap); err != nil {
+			return err
+		}
+		group := ident.Group(row.nodeID)
+		root := row.nodeID
+		if len(group) > 0 {
+			root = group[0]
+		}
+		byRoot[root] = append(byRoot[root], row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	tx, err := s.DB.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, groupRows := range byRoot {
+		canonical := groupRows[0]
+		for _, row := range groupRows[1:] {
+			if row.nodeID < canonical.nodeID {
+				canonical = row
+			}
+		}
+		for _, row := range groupRows {
+			if row.key == canonical.key && row.perLevel == canonical.perLevel && row.cap == canonical.cap {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE skill_fish_effect_def
+				SET effect_key=?,per_level=?,cap=?,source='local-sim:shared-group'
+				WHERE cat_id=? AND node_id=?`,
+				canonical.key, canonical.perLevel, canonical.cap, row.catID, row.nodeID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// applyFishingNodeBonuses 从可审计的效果表读取节点效果。表由迁移显式生成，
+// 可以在后台或后续版本按实机证据逐节点改写，不在业务代码里按 ID 猜语义。
+func (s *Server) applyFishingNodeBonuses(ctx context.Context, catID int64, b *fishingSkillBonus, effects effectiveFishingEffects, defs []skillNodeDef) {
+	if s == nil || s.DB == nil || b == nil {
+		return
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT node_id,effect_key,per_level,cap
+		FROM skill_fish_effect_def WHERE cat_id=? ORDER BY node_id`, catID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var effectDefs []fishingSkillEffectDef
+	for rows.Next() {
+		var effect fishingSkillEffectDef
+		if rows.Scan(&effect.NodeID, &effect.EffectKey, &effect.PerLevel, &effect.Cap) == nil {
+			effectDefs = append(effectDefs, effect)
+		}
+	}
+	if rows.Err() != nil {
+		return
+	}
+	ident, err := s.DB.LoadSkillIdentity(ctx)
+	if err != nil {
+		return
+	}
+	learned := ident.Project(effects.Learned)
+	gear := ident.Project(effects.GearNodes)
+	defByID := make(map[int64]skillNodeDef, len(defs))
+	for _, def := range defs {
+		defByID[def.NodeID] = def
+	}
+	processedGroups := map[int64]bool{}
+	for _, effect := range effectDefs {
+		def, ok := defByID[effect.NodeID]
+		if !ok || def.MaxLevel <= 0 {
+			continue
+		}
+		group := ident.Group(effect.NodeID)
+		groupKey := effect.NodeID
+		if len(group) > 0 {
+			groupKey = group[0]
+		}
+		if processedGroups[groupKey] {
+			continue // 共享技能身份只结算一次
+		}
+		processedGroups[groupKey] = true
+		level := learned[effect.NodeID] + gear[effect.NodeID]
+		if level <= 0 {
+			continue
+		}
+		if level > def.MaxLevel {
+			level = def.MaxLevel
+		}
+		value := math.Min(effect.Cap, float64(level)*effect.PerLevel)
+		switch effect.EffectKey {
+		case "ecology_interest":
+			b.EcologyInterest += value
+		case "rare_species":
+			b.RareFish += value
+		case "lure_tolerance":
+			b.LureTolerance += value
+		case "weather_tolerance":
+			b.WeatherAdaptation += value
+		case "layer_accuracy":
+			b.LayerAccuracy += value
+		case "worm_interest":
+			b.WormBoost += value
+		case "predator_interest":
+			b.PredatorBoost += value
+		case "salmonid_interest":
+			b.SalmonidBoost += value
+		case "benthic_interest":
+			b.BottomBoost += value
+		case "float_interest":
+			b.FloatBoost += value
+		}
+	}
+	b.EcologyInterest = clampFloat(b.EcologyInterest, 0, .22)
+	b.RareFish = clampFloat(b.RareFish, 0, .18)
+	b.LureTolerance = clampFloat(b.LureTolerance, 0, .20)
+	b.WeatherAdaptation = clampFloat(b.WeatherAdaptation, 0, .20)
+	b.LayerAccuracy = clampFloat(b.LayerAccuracy, 0, .18)
+	b.WormBoost = clampFloat(b.WormBoost, 0, .18)
+	b.PredatorBoost = clampFloat(b.PredatorBoost, 0, .20)
+	b.SalmonidBoost = clampFloat(b.SalmonidBoost, 0, .18)
+	b.BottomBoost = clampFloat(b.BottomBoost, 0, .20)
+	b.FloatBoost = clampFloat(b.FloatBoost, 0, .18)
 }
 
 func init() {

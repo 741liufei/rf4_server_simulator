@@ -2,38 +2,57 @@ package gameserver
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"math"
 	"strings"
+	"sync"
 	"time"
+)
+
+const fishEcologyProfileVersion = 3
+
+//go:embed assets/fish_ecology_defs.json
+var fishEcologyDefsJSON []byte
+
+var (
+	fishEcologyDefsOnce sync.Once
+	fishEcologyDefs     map[string]fishEcologyProfile
 )
 
 // fishEcologyProfile 是鱼口系统使用的鱼种生态基线。水层使用 0=水面、1=水底
 // 的归一化坐标，后续可叠加具体钓点水深，不把某条河的实际米数写死在鱼种上。
 type fishEcologyProfile struct {
-	FishKey     string
-	LayerMin    float64
-	LayerPref   float64
-	LayerMax    float64
-	TempMinC    float64
-	TempPrefC   float64
-	TempMaxC    float64
-	DielMask    int64
-	DietJSON    string
-	WeatherJSON string
-	ActionJSON  string
-	Aggression  float64
-	Enabled     bool
+	FishKey        string  `json:"fish_key"`
+	LayerMin       float64 `json:"layer_min"`
+	LayerPref      float64 `json:"layer_pref"`
+	LayerMax       float64 `json:"layer_max"`
+	TempMinC       float64 `json:"temp_min_c"`
+	TempPrefC      float64 `json:"temp_pref_c"`
+	TempMaxC       float64 `json:"temp_max_c"`
+	DielMask       int64   `json:"diel_mask"`
+	SeasonMask     int64   `json:"season_mask"`
+	DietJSON       string  `json:"diet_json"`
+	WeatherJSON    string  `json:"weather_json"`
+	ActionJSON     string  `json:"action_json"`
+	SubstrateJSON  string  `json:"substrate_json"`
+	ColorJSON      string  `json:"color_json"`
+	CurrentPref    float64 `json:"current_pref"`
+	Activity       float64 `json:"activity"`
+	LightPref      float64 `json:"light_pref"`
+	ClarityPref    float64 `json:"clarity_pref"`
+	Aggression     float64 `json:"aggression"`
+	RarityTier     int     `json:"rarity_tier"`
+	Enabled        bool    `json:"enabled"`
+	ProfileVersion int     `json:"profile_version"`
+	Source         string  `json:"-"`
 }
 
 func (s *Server) ensureFishEcology(ctx context.Context) (int, error) {
 	if s == nil || s.DB == nil {
 		return 0, nil
 	}
-	rows, err := s.DB.SQL.QueryContext(ctx, `
-		SELECT fish_key FROM species_weight
-		UNION
-		SELECT fish_key FROM loc_fish`)
+	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT fish_key FROM species_weight`)
 	if err != nil {
 		return 0, err
 	}
@@ -54,14 +73,32 @@ func (s *Server) ensureFishEcology(ctx context.Context) (int, error) {
 	for _, key := range keys {
 		p := defaultFishEcology(key)
 		res, ierr := s.DB.SQL.ExecContext(ctx, `
-			INSERT OR IGNORE INTO fish_ecology(
+			INSERT INTO fish_ecology(
 				fish_key, layer_min, layer_pref, layer_max,
 				temp_min_c, temp_pref_c, temp_max_c, diel_mask,
-				diet_json, weather_json, action_json, aggression, enabled, updated_ts
-			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+				season_mask, diet_json, weather_json, action_json, substrate_json,
+				color_json, current_pref, activity, light_pref, clarity_pref,
+				aggression, rarity_tier, enabled, profile_version, source, updated_ts
+			) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			ON CONFLICT(fish_key) DO UPDATE SET
+				layer_min=excluded.layer_min, layer_pref=excluded.layer_pref,
+				layer_max=excluded.layer_max, temp_min_c=excluded.temp_min_c,
+				temp_pref_c=excluded.temp_pref_c, temp_max_c=excluded.temp_max_c,
+				diel_mask=excluded.diel_mask, season_mask=excluded.season_mask,
+				diet_json=excluded.diet_json, weather_json=excluded.weather_json,
+				action_json=excluded.action_json, substrate_json=excluded.substrate_json,
+				color_json=excluded.color_json, current_pref=excluded.current_pref,
+				activity=excluded.activity, light_pref=excluded.light_pref,
+				clarity_pref=excluded.clarity_pref, aggression=excluded.aggression,
+				rarity_tier=excluded.rarity_tier,
+				profile_version=excluded.profile_version, source=excluded.source,
+				updated_ts=excluded.updated_ts
+			WHERE fish_ecology.profile_version < excluded.profile_version`,
 			p.FishKey, p.LayerMin, p.LayerPref, p.LayerMax,
 			p.TempMinC, p.TempPrefC, p.TempMaxC, p.DielMask,
-			p.DietJSON, p.WeatherJSON, p.ActionJSON, p.Aggression, boolInt(p.Enabled), now)
+			p.SeasonMask, p.DietJSON, p.WeatherJSON, p.ActionJSON, p.SubstrateJSON,
+			p.ColorJSON, p.CurrentPref, p.Activity, p.LightPref, p.ClarityPref,
+			p.Aggression, p.RarityTier, boolInt(p.Enabled), p.ProfileVersion, p.Source, now)
 		if ierr != nil {
 			return inserted, ierr
 		}
@@ -72,6 +109,57 @@ func (s *Server) ensureFishEcology(ctx context.Context) (int, error) {
 	return inserted, nil
 }
 
+func (s *Server) reloadFishEcologyCache(ctx context.Context) error {
+	if s == nil || s.DB == nil {
+		return nil
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT fish_key, layer_min, layer_pref, layer_max,
+		       temp_min_c, temp_pref_c, temp_max_c, diel_mask,
+		       season_mask, diet_json, weather_json, action_json, substrate_json,
+		       color_json, current_pref, activity, light_pref, clarity_pref,
+		       aggression, rarity_tier, enabled, profile_version, source
+		FROM fish_ecology`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	cache := make(map[string]fishEcologyProfile, 252)
+	for rows.Next() {
+		var p fishEcologyProfile
+		var enabled int
+		if err := rows.Scan(
+			&p.FishKey, &p.LayerMin, &p.LayerPref, &p.LayerMax,
+			&p.TempMinC, &p.TempPrefC, &p.TempMaxC, &p.DielMask,
+			&p.SeasonMask, &p.DietJSON, &p.WeatherJSON, &p.ActionJSON, &p.SubstrateJSON,
+			&p.ColorJSON, &p.CurrentPref, &p.Activity, &p.LightPref, &p.ClarityPref,
+			&p.Aggression, &p.RarityTier, &enabled, &p.ProfileVersion, &p.Source,
+		); err != nil {
+			return err
+		}
+		p.Enabled = enabled != 0
+		cache[p.FishKey] = p
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	s.fishEcologyMu.Lock()
+	s.fishEcologyCache = cache
+	s.fishEcologyCacheLoaded = true
+	s.fishEcologyMu.Unlock()
+	return nil
+}
+
+func (s *Server) invalidateFishEcologyCache() {
+	if s == nil {
+		return
+	}
+	s.fishEcologyMu.Lock()
+	s.fishEcologyCache = nil
+	s.fishEcologyCacheLoaded = false
+	s.fishEcologyMu.Unlock()
+}
+
 func boolInt(v bool) int {
 	if v {
 		return 1
@@ -80,78 +168,67 @@ func boolInt(v bool) int {
 }
 
 func defaultFishEcology(key string) fishEcologyProfile {
-	sp := strings.ToLower(key)
-	has := func(parts ...string) bool {
-		for _, part := range parts {
-			if strings.Contains(sp, part) {
-				return true
-			}
+	fishEcologyDefsOnce.Do(func() {
+		fishEcologyDefs = map[string]fishEcologyProfile{}
+		var profiles []fishEcologyProfile
+		if json.Unmarshal(fishEcologyDefsJSON, &profiles) != nil {
+			return
 		}
-		return false
+		for _, profile := range profiles {
+			fishEcologyDefs[profile.FishKey] = profile
+		}
+	})
+	if profile, ok := fishEcologyDefs[key]; ok {
+		if profile.Source == "" {
+			profile.Source = "local-sim:deterministic-v3"
+		}
+		return profile
 	}
-	p := fishEcologyProfile{
-		FishKey: key, LayerMin: 0, LayerPref: .55, LayerMax: 1,
-		TempMinC: 4, TempPrefC: 18, TempMaxC: 28, DielMask: 0b1111,
-		DietJSON:    `{"worm":1,"plant":1,"fish":1}`,
+	return fishEcologyProfile{
+		FishKey: key, LayerPref: .55, LayerMax: 1,
+		TempMinC: 5, TempPrefC: 17, TempMaxC: 27, DielMask: 0b1111,
+		SeasonMask: 0b1111, DietJSON: `{"worm":1,"plant":1,"fish":1}`,
 		WeatherJSON: `{"clear":1,"cloudy":1,"rain":1}`,
-		ActionJSON:  `{}`, Aggression: 1, Enabled: true,
+		ActionJSON:  `{"steady":1,"sinking":1}`, SubstrateJSON: `{"sand":1,"mud":1}`,
+		ColorJSON: `{"silver":1,"natural":1}`, CurrentPref: .5, Activity: 1,
+		LightPref: .5, ClarityPref: .5, Aggression: 1, RarityTier: 1, Enabled: true,
+		ProfileVersion: fishEcologyProfileVersion, Source: "local-sim:fallback",
 	}
-	switch {
-	case has("shark", "katran", "lamna", "cetorhinus", "somniosus", "tuna", "thynnus"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .15, .5, .95
-		p.Aggression = 1.45
-		p.DietJSON = `{"fish":1.6,"lure":1.5}`
-		p.ActionJSON = `{"steady":1.15,"twitch":1.2,"jerk":1.2,"hard_twitch":1.2}`
-	case has("catfish", "sturgeon", "beluga", "kaluga", "sterlet", "osetr", "burbot", "eel", "lamprey", "flounder", "kambala", "halibut", "cod"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .45, .9, 1
-		p.Aggression = 1.15
-		p.DietJSON = `{"fish":1.5,"worm":1.1}`
-		p.ActionJSON = `{"bottom":1.25,"bottom_move":1.22,"jig":1.2,"steady":1.05}`
-	case has("carp", "bream", "tench", "barbel", "buffalo", "crucian", "roach", "rudd", "dace", "chub", "gudgeon", "bleak"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .35, .8, 1
-		p.DietJSON = `{"plant":1.4,"worm":1.2,"boilie":1.3}`
-		p.ActionJSON = `{"bottom":1.25,"bottom_contact":1.15,"bottom_move":1.12,"sinking":1.08}`
-	case has("salmon", "trout", "char", "taimen", "lenok", "nelma", "omul", "muksun", "smelt", "vendace"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .1, .42, .9
-		p.Aggression = 1.2
-		p.DietJSON = `{"worm":1.1,"fish":1.2,"lure":1.3}`
-		p.ActionJSON = `{"steady":1.2,"trolling":1.2,"twitch":1.15,"sinking":1.05}`
-	case has("pike", "perch", "zander", "walleye", "asp", "bass", "barsch", "orfe"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .08, .45, .95
-		p.Aggression = 1.3
-		p.DietJSON = `{"fish":1.4,"worm":1.1,"lure":1.35}`
-		p.ActionJSON = `{"twitch":1.3,"jerk":1.35,"hard_twitch":1.35,"stop_go":1.2,"jig":1.25,"walk_dog":1.15,"steady":1.1}`
-	case has("herring", "mackerel", "makrel", "shad", "sabrefish", "smelt"):
-		p.LayerMin, p.LayerPref, p.LayerMax = .05, .38, .8
-		p.Aggression = 1.05
-		p.DietJSON = `{"plankton":1.3,"worm":1,"fish":1.1}`
-		p.ActionJSON = `{"steady":1.2,"trolling":1.15,"drift":1.1,"twitch":1.1,"stop_go":1.05}`
-	}
-	if low, high, known := fishWeatherTemperatureBand(key); known {
-		p.TempMinC, p.TempMaxC = low, high
-		p.TempPrefC = (low + high) / 2
-	}
-	return p
 }
 
 func (s *Server) fishEcology(ctx context.Context, key string) fishEcologyProfile {
 	if s == nil || s.DB == nil {
 		return defaultFishEcology(key)
 	}
+	s.fishEcologyMu.RLock()
+	if s.fishEcologyCacheLoaded {
+		profile, ok := s.fishEcologyCache[key]
+		s.fishEcologyMu.RUnlock()
+		if !ok {
+			return defaultFishEcology(key)
+		}
+		return profile
+	}
+	s.fishEcologyMu.RUnlock()
 	var p fishEcologyProfile
-	var enabled int
+	var enabled, profileVersion int
 	err := s.DB.SQL.QueryRowContext(ctx, `
 		SELECT fish_key, layer_min, layer_pref, layer_max,
 		       temp_min_c, temp_pref_c, temp_max_c, diel_mask,
-		       diet_json, weather_json, action_json, aggression, enabled
+		       season_mask, diet_json, weather_json, action_json, substrate_json,
+		       color_json, current_pref, activity, light_pref, clarity_pref,
+		       aggression, rarity_tier, enabled, profile_version, source
 		FROM fish_ecology WHERE fish_key=?`, key).Scan(
 		&p.FishKey, &p.LayerMin, &p.LayerPref, &p.LayerMax,
 		&p.TempMinC, &p.TempPrefC, &p.TempMaxC, &p.DielMask,
-		&p.DietJSON, &p.WeatherJSON, &p.ActionJSON, &p.Aggression, &enabled)
+		&p.SeasonMask, &p.DietJSON, &p.WeatherJSON, &p.ActionJSON, &p.SubstrateJSON,
+		&p.ColorJSON, &p.CurrentPref, &p.Activity, &p.LightPref, &p.ClarityPref,
+		&p.Aggression, &p.RarityTier, &enabled, &profileVersion, &p.Source)
 	if err != nil {
 		return defaultFishEcology(key)
 	}
 	p.Enabled = enabled != 0
+	p.ProfileVersion = profileVersion
 	return p
 }
 
@@ -178,10 +255,14 @@ func (s *Server) rigWaterLayer(c fishRollContext) float64 {
 // fishLayerWeight 按当前钓法水层与鱼种范围计算软匹配权重。
 // 底层杆对明显不属于底层水层的鱼保留极小杂口，而不是绝对删除。
 func (s *Server) fishLayerWeight(ctx context.Context, key string, c fishRollContext) float64 {
-	p := s.fishEcology(ctx, key)
+	p := s.cachedFishEcology(ctx, c, key)
 	if !p.Enabled {
 		return 0
 	}
+	return s.fishLayerWeightProfile(p, c)
+}
+
+func (s *Server) fishLayerWeightProfile(p fishEcologyProfile, c fishRollContext) float64 {
 	target := s.rigWaterLayer(c)
 	mid := p.LayerPref
 	half := math.Max(.08, (p.LayerMax-p.LayerMin)/2)
@@ -203,30 +284,64 @@ func (s *Server) fishBiteEnvironmentWeight(ctx context.Context, key string, c fi
 	if c.rigType == 0 && c.depthCM == 0 && c.lureLayer == 0 {
 		return 1
 	}
-	p := s.fishEcology(ctx, key)
+	if s.tunableF("fish_ecology_enabled", 0) != 1 {
+		return 1
+	}
+	p := s.cachedFishEcology(ctx, c, key)
 	if !p.Enabled {
 		return 0
 	}
-	factor := s.fishLayerWeight(ctx, key, c)
-	_, hour := worldDayAndHour(c.now.Unix())
-	factor *= fishDielWeight(p, hour)
-	if c.weather.known && finiteWeatherValue(c.weather.airTemp) {
-		// 初版水温由气温和水层估算；后续天气阶段会加入热惯性和季节。
-		layer := s.rigWaterLayer(c)
-		waterTemp := c.weather.airTemp - 1.5 + (layer-.5)*1.2
-		tolerance := math.Max(2.5, (p.TempMaxC-p.TempMinC)/2)
-		z := (waterTemp - p.TempPrefC) / tolerance
-		thermal := .35 + .65*math.Exp(-.5*z*z)
-		factor *= thermal
+	type weightedFactor struct {
+		value     float64
+		tolerance float64
 	}
+	factors := []weightedFactor{{
+		value: s.fishLayerWeightProfile(p, c), tolerance: c.skill.LayerAccuracy,
+	}}
+	_, hour := worldDayAndHour(c.now.Unix())
+	factors = append(factors, weightedFactor{fishDielWeight(p, hour), c.skill.EcologyInterest})
+	water := fishWaterConditionsFor(p, c)
+	factors = append(factors,
+		weightedFactor{fishSeasonWeight(p, water.Season), c.skill.WeatherAdaptation},
+		weightedFactor{fishWeatherKindWeight(p, c.weather.kind), c.skill.WeatherAdaptation},
+		weightedFactor{fishWeatherExtraWeight(p, c.weather), c.skill.WeatherAdaptation},
+	)
+	tolerance := math.Max(2.2, (p.TempMaxC-p.TempMinC)/2)
+	z := (water.WaterTempC - p.TempPrefC) / tolerance
+	factors = append(factors,
+		weightedFactor{.35 + .65*math.Exp(-.5*z*z), c.skill.WeatherAdaptation},
+		weightedFactor{1 - math.Abs(p.ClarityPref-water.Clarity)*.28, c.skill.EcologyInterest},
+		weightedFactor{1 - math.Abs(p.LightPref-water.Light)*.18, c.skill.EcologyInterest},
+		weightedFactor{fishSpotBiteWeight(p, c.spotEnv), c.skill.EcologyInterest},
+	)
 	if c.lureAction != "" {
 		if weights := fishEcologyJSONMap(p.ActionJSON); len(weights) > 0 {
 			if weight, ok := fishEcologyActionWeight(weights, c.lureAction); ok {
-				factor *= math.Max(.05, weight)
+				factors = append(factors, weightedFactor{weight, c.skill.LureTolerance})
 			}
 		}
 	}
-	return math.Max(.001, factor)
+	factors = append(factors,
+		weightedFactor{1 + c.skill.RareFish*float64(p.RarityTier)*.12, 0},
+		weightedFactor{s.fishLureWeight(p, c, water), c.skill.LureTolerance},
+		weightedFactor{fishSkillEnvironmentWeight(key, c), 0},
+	)
+	factor := 1.0
+	for i, raw := range factors {
+		if raw.value <= 0 || math.IsNaN(raw.value) || math.IsInf(raw.value, 0) {
+			continue
+		}
+		value := raw.value
+		if value < 1 && raw.tolerance > 0 {
+			value += (1 - value) * clampFloat(raw.tolerance, 0, .45)
+		}
+		floor, exponent := .25, .35
+		if i == 0 {
+			floor, exponent = .05, .60
+		}
+		factor *= math.Pow(clampFloat(value, floor, 2.0), exponent)
+	}
+	return clampFloat(factor, .08, 2.5)
 }
 
 // activityForDiel 将游戏小时映射到夜、晨、日、昏四段。
@@ -283,14 +398,16 @@ func classifyLureMotion(mask uint32) string {
 		return "trolling"
 	case mask&0x2000 != 0:
 		return "bottom_move"
+	case mask&0x80000 != 0:
+		return "vertical_dive"
 	case mask&0x20 != 0:
 		return "splash"
 	case mask&0x800 != 0:
-		return "bottom"
+		return "bottom_motionless"
 	case mask&0x200 != 0:
-		return "bottom_hang"
+		return "water_column_motionless"
 	case mask&0x1000 != 0:
-		return "surface"
+		return "surface_motionless"
 	case mask&0x40 != 0:
 		return "drift"
 	case mask&0x8 != 0:
@@ -299,10 +416,8 @@ func classifyLureMotion(mask uint32) string {
 		return "jerk"
 	case mask&0x2 != 0:
 		return "speed_up"
-	case mask&0x80000 != 0:
-		return "sinking"
 	case mask&0x200000 != 0:
-		return "vertical_rise"
+		return "vertical_ascend"
 	case mask&0x400 != 0:
 		return "steady"
 	case mask&0x1 != 0:
@@ -318,19 +433,30 @@ func fishEcologyActionWeight(weights map[string]float64, action string) (float64
 	if weight, ok := weights[action]; ok {
 		return weight, true
 	}
+	aliases := map[string][]string{
+		"bottom_motionless":       {"bottom", "bottom_hang"},
+		"surface_motionless":      {"surface"},
+		"vertical_dive":           {"sinking", "vertical_rise"},
+		"water_column_motionless": {"sinking", "bottom_hang"},
+	}
+	for _, candidate := range aliases[action] {
+		if weight, ok := weights[candidate]; ok {
+			return weight, true
+		}
+	}
 	var candidates []string
 	switch action {
 	case "steady", "speed_up", "trolling", "drift", "twitch", "jerk", "hard_twitch", "stop_go":
 		candidates = []string{"moving"}
-	case "bottom", "bottom_contact", "bottom_hang":
+	case "bottom_motionless", "bottom_contact", "water_column_motionless":
 		candidates = []string{"bottom_motionless"}
 	case "bottom_move", "bottom_layer_move":
 		candidates = []string{"bottom_motionless", "moving"}
 	case "jig", "walk_dog":
 		candidates = []string{"moving", "bottom_motionless"}
-	case "surface", "splash":
+	case "surface", "surface_motionless", "splash":
 		candidates = []string{"surface_motionless", "moving"}
-	case "sinking", "vertical_rise":
+	case "sinking", "vertical_rise", "vertical_dive", "vertical_ascend":
 		candidates = []string{"water_column_motionless", "moving"}
 	case "stir":
 		candidates = []string{"moving", "water_column_motionless"}
@@ -360,7 +486,7 @@ func lureLayerFromMotion(mask uint32, previous float64) float64 {
 	case mask&0x800 != 0:
 		return .92
 	case mask&0x200 != 0:
-		return .85
+		return .55
 	case mask&0x400 != 0:
 		return normalizeWaterLayer(previous + .03)
 	default:

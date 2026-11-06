@@ -34,6 +34,14 @@ func (s *Server) attachDB(db *store.DB, log *slog.Logger) {
 	} else if n > 0 {
 		s.log.Info("鱼种生态档案初始化", "inserted", n)
 	}
+	if err := s.reloadFishEcologyCache(context.Background()); err != nil {
+		s.log.Warn("鱼种生态缓存加载失败", "err", err)
+	}
+	if n, err := s.ensureFishSkillEffects(context.Background()); err != nil {
+		s.log.Warn("鱼口技能效果初始化失败", "err", err)
+	} else if n > 0 {
+		s.log.Info("鱼口技能效果初始化", "inserted", n)
+	}
 }
 
 // loadFightCurves 解析搏鱼曲线池，把 f0==100 的基础行放在首位。

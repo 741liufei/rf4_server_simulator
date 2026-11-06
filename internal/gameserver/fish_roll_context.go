@@ -10,6 +10,7 @@ type fishRollContext struct {
 	x, z       float64
 	hasPos     bool
 	spot       uint64
+	loc        string
 	now        time.Time
 	baits      []string
 	forRig     bool
@@ -23,6 +24,15 @@ type fishRollContext struct {
 	happyBite  float64
 	biteRoll   func() float64
 	cache      *fishingRollCache
+	skill      fishingSkillBonus
+	spotEnv    fishSpotEnvironment
+	runtime    *fishRollRuntime
+}
+
+type fishRollRuntime struct {
+	lure      lureAttributes
+	lureKnown bool
+	spotPref  map[string]float64
 }
 
 func rollContext(contexts []fishRollContext) fishRollContext {
@@ -32,6 +42,9 @@ func rollContext(contexts []fishRollContext) fishRollContext {
 	}
 	if c.now.IsZero() {
 		c.now = time.Now()
+	}
+	if c.cache == nil {
+		c.cache = newFishingRollCache()
 	}
 	return c
 }

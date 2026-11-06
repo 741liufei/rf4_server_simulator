@@ -47,6 +47,7 @@ type FishState struct {
 	LureAction      string  // 已识别的运动状态；未知时为空
 	LureLayer       float64 // 0=水面，1=水底；路亚实时水层
 	LureStateAt     time.Time
+	LureLayerAt     time.Time
 	LurePulseAt     time.Time
 	LurePulseCount  int
 	LureToggleAt    time.Time
@@ -144,10 +145,8 @@ func (st *FishState) updateLureActionLocked(now time.Time, previousMask, mask ui
 		st.LureAction = "stop_go"
 	case moving:
 		st.LureAction = "steady"
-	case st.LureLayer >= .82:
-		st.LureAction = "bottom"
 	default:
-		st.LureAction = "sinking"
+		st.LureAction = ""
 	}
 	if st.LureAction != previousAction {
 		st.LureStateAt = now
@@ -532,6 +531,7 @@ func (s *Server) rollFish(loc string, bait string) *RolledFish {
 // 再对静态鱼库和内置鱼池应用该上限及奖杯幸运。
 func (s *Server) rollFishForRig(ctx context.Context, uid int64, gearGUID, loc, bait string, bonus fishingSkillBonus, contexts ...fishRollContext) *RolledFish {
 	c := rollContext(contexts)
+	c.loc, c.skill = loc, bonus
 	c.forRig = s.tunableF("fish_bait_rules_enabled", 0) == 1 || s.tunableF("fish_weather_enabled", 0) == 1 || c.happyBite > 0
 	c.rigType = s.rigTypeForWrite(ctx, gearGUID)
 	if s.DB != nil && gearGUID != "" {
@@ -632,6 +632,7 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 	if statLoc == "" {
 		return nil
 	}
+	s.prepareFishRollRuntime(cctx, &c, statLoc)
 	roster, err := s.cachedLocRoster(cctx, c, statLoc)
 	if err != nil || len(roster) == 0 {
 		return nil
@@ -697,6 +698,9 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 	}
 	for i, key := range keys {
 		wts[i] *= s.fishBiteEnvironmentWeight(cctx, key, c)
+		if spot := c.runtime.spotPref[key]; spot > 0 {
+			wts[i] *= clampFloat(1+math.Log1p(spot)*.16, 1, 1.75)
+		}
 	}
 	if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
 		return nil
@@ -983,6 +987,8 @@ func (s *Server) rollFishPools(loc string) *RolledFish {
 
 func (s *Server) rollFishPoolsWithRules(loc string, gearCapKg float64, bonus fishingSkillBonus, contexts ...fishRollContext) *RolledFish {
 	c := rollContext(contexts)
+	c.loc, c.skill = loc, bonus
+	s.prepareFishRollRuntime(s.dbCtx(), &c, loc)
 	strict := s.tunableF("fish_bait_rules_enabled", 0) == 1
 	pool := fishPools[loc]
 	if len(pool) == 0 {

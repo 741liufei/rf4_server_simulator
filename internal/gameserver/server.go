@@ -53,10 +53,13 @@ type Server struct {
 	callSeq map[string]uint64 // token -> 已分配的最大推送 call_id
 
 	// 钓鱼/业务状态
-	fishStates map[int64]*FishState
-	fishMu     sync.Mutex
-	levelMap   map[int64]string
-	levelMu    sync.Mutex
+	fishStates             map[int64]*FishState
+	fishMu                 sync.Mutex
+	levelMap               map[int64]string
+	levelMu                sync.Mutex
+	fishEcologyMu          sync.RWMutex
+	fishEcologyCache       map[string]fishEcologyProfile
+	fishEcologyCacheLoaded bool
 
 	// 运行参数缓存
 	tunMu    sync.Mutex

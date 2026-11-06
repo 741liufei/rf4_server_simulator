@@ -646,6 +646,17 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 	if hasReelSetting {
 		st.ReelSetting = reelSetting
 	}
+	if rigTypeLureFamily[st.RigType] {
+		st.LureMotionMask = 0
+		st.LureAction = ""
+		st.LureLayer = .5
+		st.LurePulseCount = 0
+		st.LurePulseAt = time.Time{}
+		st.LureToggleCount = 0
+		st.LureToggleAt = time.Time{}
+		st.LureStateAt = time.Time{}
+		st.LureLayerAt = time.Time{}
+	}
 	depthCM := st.DepthCM
 	rigType := st.RigType
 	st.mu.Unlock()
@@ -946,8 +957,12 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 			previousMask := st.LureMotionMask
 			st.LureMotionMask = anim
 			if rigTypeLureFamily[st.RigType] {
-				st.LureLayer = lureLayerFromMotion(anim, st.LureLayer)
-				st.updateLureActionLocked(time.Now(), previousMask, anim)
+				now := time.Now()
+				if anim != previousMask || st.LureLayerAt.IsZero() || now.Sub(st.LureLayerAt) >= 1500*time.Millisecond {
+					st.LureLayer = lureLayerFromMotion(anim, st.LureLayer)
+					st.LureLayerAt = now
+				}
+				st.updateLureActionLocked(now, previousMask, anim)
 			}
 			// 0x200/0x400/0x800/0x1000 是不同水层与姿态的“在水中”位族；岸上不会出现。
 			enterWater := false
