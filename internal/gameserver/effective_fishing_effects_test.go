@@ -13,7 +13,8 @@ import (
 func effectiveSkillTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
 	db := connectTestDB(t)
-	importStaticForSkillsCraft(t, db, "item_def", "skill_def", "skill_cat_def")
+	// item_def 已由测试库模板导入，重复导入会撞唯一键。
+	importStaticForSkillsCraft(t, db, "skill_def", "skill_cat_def")
 	srv := NewServerForGearTest(t, db)
 	if _, err := db.EnsureProfile(context.Background(), 1000001); err != nil {
 		t.Fatal(err)
@@ -73,6 +74,11 @@ func TestEffectiveFishingSkillsUseOnlyCurrentOwnedRod(t *testing.T) {
 	}
 	if pts, _ := srv.DB.GetSkillPoints(ctx, uid, 11); pts != 60 {
 		t.Fatal("temporary mastery was written to permanent proficiency")
+	}
+	// 前面为验证“未知节点不产生通用加成”把永久等级写成了 0；
+	// 断竿只应丢失装备赠级，这里先恢复永久等级 2。
+	if err := srv.DB.SetSkillNode(ctx, uid, 1004, 2); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := srv.DB.SQL.Exec(`UPDATE item SET durability=0 WHERE guid=?`, gear); err != nil {
 		t.Fatal(err)

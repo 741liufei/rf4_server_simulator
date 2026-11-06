@@ -264,8 +264,12 @@ func (s *Server) buildSettle813(ctx context.Context, uid int64, f *RolledFish, r
 	silverCents := int64(math.Round(silverRate * math.Max(1, float64(f.WeightG))))
 
 	// 310 经验块：f0=总经验，f1=升级数，f2=钓法大类，f3=熟练度增量，f6=加成分解。
+	// 重放回执只还原事实，不能再次触发熟练度提示；满级后尤其会误弹旧的 +0.x = 100%。
 	levelsGained := int64(0)
-	if !r.replayed {
+	skillGain := r.skillGain
+	if r.replayed {
+		skillGain = 0
+	} else {
 		levelsGained = max64(0, r.levelsGained)
 	}
 	bonuses := proto.Args(proto.S("31"))
@@ -292,7 +296,7 @@ func (s *Server) buildSettle813(ctx context.Context, uid int64, f *RolledFish, r
 		0: proto.U64(uint64(r.totalXP)),
 		1: proto.U32(uint32(levelsGained)),
 		2: proto.U32(uint32(r.skillID)),
-		3: proto.F32(float32(r.skillGain)),
+		3: proto.F32(float32(skillGain)),
 		4: proto.Null(),
 		5: proto.U32(uint32(max64(0, r.levelsGained))),
 		6: bonuses,

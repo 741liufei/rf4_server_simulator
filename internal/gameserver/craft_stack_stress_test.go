@@ -239,7 +239,7 @@ func TestCraftStackExtreme(t *testing.T) {
 			qty  int64
 		}{
 			{"boiled_egg", 1, int64(2 * rounds)},
-			{"feedcompleted", 1, int64(rounds)},
+			{"feedcompleted", int64(rounds), int64(60 * rounds)},
 			{"pvas_b10", int64(rounds), int64(rounds)},
 		}
 		for _, e := range expect {
