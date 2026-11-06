@@ -40,11 +40,17 @@ func TestReelCastFrictionImprovesWithBearingOilAndDurability(t *testing.T) {
 }
 
 func TestCastWeightAndSkillFactors(t *testing.T) {
-	light := rodTestWeightFactor(7, 2, 10)
-	medium := rodTestWeightFactor(18, 2, 10)
-	heavy := rodTestWeightFactor(40, 2, 10)
-	if !(medium > light && heavy > medium) {
-		t.Fatalf("其他参数不变时载荷越重应抛得越远: 7g=%f 18g=%f 40g=%f", light, medium, heavy)
+	// 竿 Test 区间 2-10g：区间内越重越远，10g 达到峰值。
+	light := rodTestWeightFactor(4, 2, 10)
+	mid := rodTestWeightFactor(7, 2, 10)
+	peak := rodTestWeightFactor(10, 2, 10)
+	if !(mid > light && peak > mid) {
+		t.Fatalf("Test 区间内载荷越重应抛得越远: 4g=%f 7g=%f 10g=%f", light, mid, peak)
+	}
+	// 超过 Test 上限后竿梢带不动，距离必须回落。
+	over := rodTestWeightFactor(20, 2, 10)
+	if !(over < peak) {
+		t.Fatalf("超出 Test 上限后应衰减: 10g=%f 20g=%f", peak, over)
 	}
 	if !(castSkillFactor(100, 0) > castSkillFactor(50, 0) &&
 		castSkillFactor(50, 10) > castSkillFactor(50, 0)) {
@@ -52,15 +58,30 @@ func TestCastWeightAndSkillFactors(t *testing.T) {
 	}
 }
 
-func TestCastHeavierPayloadRemainsMonotonic(t *testing.T) {
-	eighteen := rodTestWeightFactor(18, 2, 10)
+func TestCastOverTestPayloadShortensDistance(t *testing.T) {
+	peak := rodTestWeightFactor(10, 2, 10)
+	twenty := rodTestWeightFactor(20, 2, 10)
 	forty := rodTestWeightFactor(40, 2, 10)
 	hundred := rodTestWeightFactor(100, 2, 10)
-	if !(eighteen < forty && forty < hundred) {
-		t.Fatalf("超 Test 后应继续单调增加: 18g=%f 40g=%f 100g=%f", eighteen, forty, hundred)
+	if !(peak > twenty && twenty > forty && forty > hundred) {
+		t.Fatalf("超 Test 后应单调衰减: 10g=%.4f 20g=%.4f 40g=%.4f 100g=%.4f",
+			peak, twenty, forty, hundred)
 	}
-	if hundred <= 1 {
-		t.Fatalf("重量系数不应在1.0封顶，100g实得%f", hundred)
+	if hundred < 0.15 {
+		t.Fatalf("超重 10 倍时系数过低，距离会被压到失去意义: %.4f", hundred)
+	}
+	if ratio := rodOverTestRatio(25, 10); math.Abs(ratio-2.5) > 1e-9 {
+		t.Fatalf("超重倍率应为 2.5，实得 %f", ratio)
+	}
+	if ratio := rodOverTestRatio(25, 0); ratio != 0 {
+		t.Fatalf("竿未登记 Test 时应返回 0，实得 %f", ratio)
+	}
+	// 同一条竿（Test 5-30g）：合规载荷必须比超重载荷抛得远。
+	underDistance := castCalibrationDistance(30, 5)
+	overDistance := castCalibrationDistance(120, 5)
+	if overDistance >= underDistance {
+		t.Fatalf("120g 配 30g 上限的竿不应抛得比 30g 更远: %.2fm vs %.2fm",
+			overDistance, underDistance)
 	}
 	for _, payload := range []float64{7, 18, 40, 400, 4000} {
 		d, factors := calculateCastDistance(CastDistanceContext{
@@ -76,7 +97,7 @@ func TestCastHeavierPayloadRemainsMonotonic(t *testing.T) {
 func castCalibrationDistance(payloadG float64, spoolSize int64) float64 {
 	d, _ := calculateCastDistance(CastDistanceContext{
 		RigType: 5, CastAction: 1, CastPower: 1,
-		RodLengthM: 3.0, RodTaper: 0.5, RodTestMinG: 5, RodTestMaxG: 30,
+		RodLengthM: 3.0, RodAction: 2, RodTestMinG: 5, RodTestMaxG: 30,
 		PayloadWeightG: payloadG, ReelEfficiency: 0.95, ReelType: 1,
 		SpoolSize: spoolSize, SpoolFill: 0.8, LineDiameterMM: 0.20,
 		LineStretch: 0.001, LineMaterial: 3,
@@ -105,7 +126,7 @@ func TestCastCalibrationBands(t *testing.T) {
 func TestCastHighEndGearCanReachFortyFiveMeters(t *testing.T) {
 	d, _ := calculateCastDistance(CastDistanceContext{
 		RigType: 5, CastAction: 1, CastPower: 1,
-		RodLengthM: 4.2, RodTaper: 1.0, RodTestMinG: 5, RodTestMaxG: 30,
+		RodLengthM: 4.2, RodAction: 4, RodTestMinG: 5, RodTestMaxG: 30,
 		PayloadWeightG: 8, ReelEfficiency: 0.95, ReelType: 1,
 		SpoolSize: 1, SpoolFill: 1.0, LineDiameterMM: 0.10,
 		LineStretch: 0.001, LineMaterial: 3,
@@ -133,7 +154,7 @@ func TestCastDynamicModifiersAreMonotonic(t *testing.T) {
 	if !(castLineMassFactor(1) > castLineMassFactor(20)) {
 		t.Fatal("更重的运行主线应缩短距离")
 	}
-	if !(castRodTaperFactor(0.9) > castRodTaperFactor(0.1)) {
+	if !(castRodActionFactor(4) > castRodActionFactor(3) && castRodActionFactor(3) > castRodActionFactor(1)) {
 		t.Fatal("快调竿梢应小幅提高能量传递")
 	}
 }
