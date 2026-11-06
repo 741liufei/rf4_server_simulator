@@ -93,9 +93,9 @@ func TestRigSetTypeRebuildsBaitMountFields(t *testing.T) {
 	if !s.rigSetType(ctx, 1000001, rod.GUID, 12) {
 		t.Fatal("rigSetType 失败")
 	}
-	// pop-up 选择不属于普通沉底的可选集：读取口判为未设置。
-	if v, ok := s.savedBaitMount(ctx, rod.GUID); ok {
-		t.Fatalf("换普通沉底后残留的 pop-up 选择应判为未设置，实得 %d/%v", v, ok)
+	// rig 12 的 wire f9 全开，持久化读取口使用同一可选集。
+	if v, ok := s.savedBaitMount(ctx, rod.GUID); !ok || v != 16384 {
+		t.Fatalf("普通沉底全开掩码下 pop-up 选择应保留，实得 %d/%v", v, ok)
 	}
 	row, err := db.GetItemByGUID(ctx, rod.GUID)
 	if err != nil || row == nil {
@@ -112,8 +112,8 @@ func TestRigSetTypeRebuildsBaitMountFields(t *testing.T) {
 	if sel, avail := rigBaitMountsOf(fields[idx].Val); sel != 16384 || avail != defaultBaitMountAvail {
 		t.Fatalf("实例 f8/f9 = %d/%d，期望 16384/%d", sel, avail, defaultBaitMountAvail)
 	}
-	if got := s.baitMountFor(ctx, rod.GUID); got != 0 {
-		t.Fatalf("渲染 f8 应为 0，实得 %d", got)
+	if got := s.baitMountFor(ctx, rod.GUID); got != 16384 {
+		t.Fatalf("渲染 f8 应保留 16384，实得 %d", got)
 	}
 	// 换回 pop-up 钓组（26）：族内选择仍有效。
 	if err := db.UpsertRodSetting(ctx, rod.GUID, baitMountSettingKey, "16384"); err != nil {

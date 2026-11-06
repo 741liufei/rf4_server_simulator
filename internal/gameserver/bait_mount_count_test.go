@@ -175,6 +175,28 @@ func TestBaitMountFullTakeClearsSourceRef(t *testing.T) {
 	}
 }
 
+func TestBottomSimpleFullMaskPersistsMountSelection(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 12) {
+		t.Fatal("rigSetType 失败")
+	}
+	saveMountTypeForTest(t, s, rod.GUID, 1024) // 玉米浮×2，超出旧 126 掩码
+	if got, ok := s.savedBaitMount(t.Context(), rod.GUID); !ok || got != 1024 {
+		t.Fatalf("BottomSimple 全开掩码下挂饵方式未持久化: got=%d ok=%v", got, ok)
+	}
+	corn, err := s.CreateItem(t.Context(), 1000001, "crn_cb_bfc", "backpack", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.baitHookCount(t.Context(), rod.GUID, corn); got != 2 {
+		t.Fatalf("玉米浮×2 应按挂饵方式拆 2 份，实得 %d", got)
+	}
+}
+
 func TestBaitMountBiteConsumesSingleUnitKeepsHookBaited(t *testing.T) {
 	s, db := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "tele_10112_5", "backpack", 1)

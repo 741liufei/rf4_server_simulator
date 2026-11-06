@@ -277,7 +277,7 @@ func (s *Server) savedBaitMount(ctx context.Context, rodGUID string) (int64, boo
 	if err != nil || row == nil {
 		return sel, true
 	}
-	if m, known := rigBaitMountAvail[s.rigTypeOfItem(ctx, row)]; known && sel&m != sel {
+	if m := baitMountAvailForRig(s.rigTypeOfItem(ctx, row), 0); sel&m != sel {
 		return 0, false
 	}
 	return sel, true
