@@ -99,9 +99,23 @@ func TestClassifyLureMotionUsesClientStatusBits(t *testing.T) {
 		{0xD1002000, "bottom_move"},
 		{0xD1004000, "trolling"},
 		{0xD1010000, "stop_go"},
-		{0xD1020000, "hard_twitch"},
+		{0xD1020000, "medium_jerk"},
+		{0xD1040000, "little_jerk"},
 		{0xD1400000, "bottom_layer_move"},
+		{0xD1000404, "retrieval_pause"},
 		{0xD1000400, "steady"},
+		{0xD1008000, ""},
+		{0xD1100000, ""},
+	}
+	for _, mask := range []uint32{0x4, 0x40, 0x80, 0x100, 0x2000, 0x4000, 0x20000, 0x40000} {
+		if lureMotionInWaterMask&mask == 0 {
+			t.Errorf("0x%X 应算饵在水中运动", mask)
+		}
+	}
+	for _, mask := range []uint32{0x8, 0x200, 0x800, 0x1000} {
+		if lureMotionInWaterMask&mask != 0 {
+			t.Errorf("0x%X 是静置或触底姿态，不应算饵在水中运动", mask)
+		}
 	}
 	for _, tc := range cases {
 		if got := classifyLureMotion(tc.mask); got != tc.want {

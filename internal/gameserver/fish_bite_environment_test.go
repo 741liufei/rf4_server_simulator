@@ -55,7 +55,9 @@ func TestFishEcologyAssetCoversAllSpeciesAndActions(t *testing.T) {
 
 func TestEveryLureMotionBitHasDistinctAction(t *testing.T) {
 	seen := map[string]uint32{}
-	unknown := map[uint]bool{15: true, 18: true, 20: true}
+	// 0x8000 与 0x100000 是淡水抽停候选位，实机未触发，保持不映射；
+	// 0x40000 已在海图铁板钓组上对位为 little_jerk。
+	unknown := map[uint]bool{15: true, 20: true}
 	for bit := uint(0); bit <= 22; bit++ {
 		mask := uint32(1) << bit
 		action := classifyLureMotion(mask)
@@ -74,8 +76,8 @@ func TestEveryLureMotionBitHasDistinctAction(t *testing.T) {
 		}
 		seen[action] = mask
 	}
-	if len(seen) != 20 {
-		t.Fatalf("已识别动作=%d，期望 20", len(seen))
+	if want := 23 - len(unknown); len(seen) != want {
+		t.Fatalf("已识别动作=%d，期望 %d", len(seen), want)
 	}
 }
 

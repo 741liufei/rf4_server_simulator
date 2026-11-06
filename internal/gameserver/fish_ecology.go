@@ -381,16 +381,32 @@ func fishEcologyJSONMap(raw string) map[string]float64 {
 const lureMotionStatusMask uint32 = 0x007FFFFF
 
 // 客户端 4.0.25034 把钓组动作定义成 23 个状态：托管元数据里的动作枚举
-// （fhiclnhgoge）取值 0x1..0x800000 共 23 个单位，resources.assets 的本地化表用
-// kRigAnimationType_* 给出这些状态的显示名：Hooking、UniformMotion、StopAndGo、
-// SpeedUp、Hanging、BottomTouch、Twitch、Splash、StreamMoving、JigStep、WalkDog、
-// LittleJerk、MediumJerk、FreshWaterLittleJerk、FreshWaterMediumJerk、
-// MotionlessInWaterColumn、MotionlessOnBottom、MotionlessOnWaterSurface、
-// MotionOnBottom、VerticalDive、VerticalAscend、Trolling、MotionInBottomLayer。
-// 本地化表按名称排列，不带位序，所以键名只能靠实机 14/7 上报对位：目前已确认
-// 0x40=StreamMoving、0x80=JigStep、0x4000=Trolling、0x200=MotionlessInWaterColumn、
-// 0x80000=VerticalDive；剩下 0x1、0x4、0x8000、0x20000、0x40000、0x100000 六位落在
-// Hooking、Hanging 和四个 Jerk 幅度键里，无法一一配对，只能按上报到的行为命名。
+// （fhiclnhgoge）取值 0x1..0x800000 共 23 个单位。resources.assets 偏移 0x12722da1
+// 起内嵌 kRigAnimationType_* 本地化表，每条 16 个语言列、第 15 列是简体，23 个显示名
+// 已全部提出：Hooking 鱼咬钩时抖竿、UniformMotion 收线、StopAndGo 搅动及静止、
+// SpeedUp 加收线速度、Hanging 大动作扯动、BottomTouch 接触底部、Twitch 搐动、Splash
+// 激溅、StreamMoving 顺水漂流、JigStep Jig梯阶、WalkDog 犬步、LittleJerk 轻微的抽停、
+// MediumJerk 强烈的抽动、FreshWaterLittleJerk 轻度抽停、FreshWaterMediumJerk 中度抽停、
+// MotionlessInWaterColumn 悬挂在水底深处、MotionlessOnBottom 在水底无移动、
+// MotionlessOnWaterSurface 水面上无移动、MotionOnBottom 在水底动、VerticalDive 下沉、
+// VerticalAscend 垂直上升、Trolling 拖钓、MotionInBottomLayer 底层的运动。
+// 本地化表按名称排列不带位序，键名仍需实机 14/7 上报对位。
+//
+// 已对位的位（实机 14/7 与客户端弹字互证，客户端 4.0.25034）：
+// 0x8=BottomTouch、0x10=Twitch、0x20=Splash、0x40=StreamMoving、0x80=JigStep、
+// 0x100=WalkDog、0x200=MotionlessInWaterColumn、0x400=UniformMotion、0x4000=Trolling、
+// 0x80000=VerticalDive；0x20000=MediumJerk、0x40000=LittleJerk，两者只在海图出现
+// （loc12_27 铁板钓组 rig=50 分别弹“强烈的抽动”“轻微抽停了”，铁板垂直抖法），
+// 官方英文原文是 Strong pirking / Pirking，中文名里的"抽停"与淡水抽停饵无关；
+// 0x4=Hanging，旧奥挂底时独亮且不伴 0x400，官方简体名“大动作扯动”、英俄德等语言
+// 均为“带停顿的收线”，按“收线中带停顿”理解，仍属于饵在水中运动。
+//
+// 未对位的位：0x1（权重表占位名 stir）、0x8000、0x100000（占位名 motion_15/motion_20）。
+// 2026-11-06 用抽停竿（竿型 12）加抽停饵（拟饵类型 7 jerkbait）在旧奥实测得到 rig=22，
+// 客户端只上报 0x400 收线、0x20 激溅和 0x100 犬步，淡水未触发 FreshWaterLittleJerk/
+// FreshWaterMediumJerk；两次刺鱼也只有 14/9 抬杆，未见 14/7 新位。这三位保持中性，
+// 不进攻略前置条件。
+//
 // 攻略前置条件要用的三个客户端动作位（kRigAnimationType_*）：
 // 顺流移动、jig 阶梯，以及“饵在水中运动”对应的动到位集合。
 const (
@@ -399,7 +415,8 @@ const (
 )
 
 // lureMotionInWaterMask 排除浮漂/水层/底部静置和触底姿态，剩下的都是饵在
-// 水里移动的状态位。
+// 水里移动的状态位。0x4 Hanging 是“带停顿的收线”、0x1000 水面静置不在其中，
+// 0x1/0x8000/0x100000 三个未对位位仍留在集合里，宁可多判在动也不误判静止。
 const lureMotionInWaterMask uint32 = lureMotionStatusMask &^ (0x1000 | 0x200 | 0x800 | 0x8)
 
 // lureMotionEvidence 判断本次判鱼是否真的拿到动作上报。没有上报时掩码为 0，
@@ -413,8 +430,10 @@ func lureMotionEvidence(mask uint32) bool {
 func classifyLureMotion(mask uint32) string {
 	mask &= lureMotionStatusMask
 	switch {
+	case mask&0x40000 != 0:
+		return "little_jerk"
 	case mask&0x20000 != 0:
-		return "hard_twitch"
+		return "medium_jerk"
 	case mask&0x10000 != 0:
 		return "stop_go"
 	case mask&0x10 != 0:
@@ -444,7 +463,7 @@ func classifyLureMotion(mask uint32) string {
 	case mask&0x8 != 0:
 		return "bottom_contact"
 	case mask&0x4 != 0:
-		return "jerk"
+		return "retrieval_pause"
 	case mask&0x2 != 0:
 		return "speed_up"
 	case mask&0x200000 != 0:
@@ -466,6 +485,9 @@ func fishEcologyActionWeight(weights map[string]float64, action string) (float64
 	}
 	aliases := map[string][]string{
 		"bottom_motionless":       {"bottom", "bottom_hang"},
+		"little_jerk":             {"jig", "hard_twitch", "motion_18"},
+		"medium_jerk":             {"hard_twitch", "jig", "motion_18"},
+		"retrieval_pause":         {"stop_go", "moving"},
 		"surface_motionless":      {"surface"},
 		"vertical_dive":           {"sinking", "vertical_rise"},
 		"water_column_motionless": {"sinking", "bottom_hang"},
@@ -478,7 +500,8 @@ func fishEcologyActionWeight(weights map[string]float64, action string) (float64
 	}
 	var candidates []string
 	switch action {
-	case "steady", "speed_up", "trolling", "drift", "twitch", "jerk", "hard_twitch", "stop_go":
+	case "steady", "speed_up", "trolling", "drift", "twitch", "jerk", "hard_twitch", "stop_go",
+		"little_jerk", "medium_jerk", "retrieval_pause":
 		candidates = []string{"moving"}
 	case "bottom_motionless", "bottom_contact", "water_column_motionless":
 		candidates = []string{"bottom_motionless"}
