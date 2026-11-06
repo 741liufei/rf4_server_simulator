@@ -712,7 +712,9 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 	if !srv.requireDB(ctx) {
 		return nil, false
 	}
-	// loc/spot：顶层 obj olieodeoaof 第一个非空 str = loc，第二个 u32 = spot
+	// loc/spot：顶层 obj olieodeoaof 第一个非空 str = loc，第二个 u32 存 spot。
+	// 协议注释里该槽典型取值是 0..16 的 float（按 U32 承载位型），
+	// 不能确认是钓点编号，判鱼不再拿它去对攻略点位；海图区号改用抛竿落点定位。
 	guids := deepGUIDs(ctx.Tree)
 	gear := ""
 	if len(guids) > 0 {

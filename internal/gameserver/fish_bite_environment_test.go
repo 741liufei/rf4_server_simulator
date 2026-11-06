@@ -1,6 +1,7 @@
 package gameserver
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"path/filepath"
@@ -155,6 +156,41 @@ func TestSpotEnvironmentUsesStableSubstrateCurrentAndDepth(t *testing.T) {
 	}
 }
 
+func TestApplyFishSpotBiasUsesObservedSpotWithoutHardBlacklist(t *testing.T) {
+	keys := []string{"perch", "c.roach", "n.pike"}
+	weights := []float64{1, 1, 1}
+	pref := map[string]float64{"perch": 12, "c.roach": 2}
+	applyFishSpotBias(keys, weights, pref, true)
+	if weights[0] <= weights[2] || weights[1] <= weights[2] {
+		t.Fatalf("钓点观测鱼种应高于非观测鱼种: %+v", weights)
+	}
+	if weights[2] <= 0 || weights[2] >= .4 {
+		t.Fatalf("非观测鱼种应保留低杂口而非封死: %f", weights[2])
+	}
+	neutral := []float64{1, 1, 1}
+	applyFishSpotBias(keys, neutral, pref, false)
+	if neutral[0] != 1 || neutral[1] != 1 || neutral[2] != 1 {
+		t.Fatal("无钓点数据时不应改变权重")
+	}
+}
+
+func TestFishMotionConditionWeightRecognizesJigDriftAndBoat(t *testing.T) {
+	profile := fishEcologyProfile{CurrentPref: .8, Activity: 1.25, ActionJSON: `{"jig":1.2,"drift":1.1,"trolling":1.2}`}
+	water := fishWaterConditions{Turbulence: .7}
+	jig := fishMotionConditionWeight(profile, fishRollContext{lureAction: "jig"}, water)
+	marineJig := fishMotionConditionWeight(profile, fishRollContext{lureAction: "marine_jig", rigType: 52}, water)
+	drift := fishMotionConditionWeight(profile, fishRollContext{lureAction: "drift"}, water)
+	boat := fishMotionConditionWeight(profile, fishRollContext{lureAction: "trolling", lureSpeed: 12}, water)
+	if jig <= 1 || marineJig <= jig || drift <= 1 || boat <= 1 {
+		t.Fatalf("jig/顺流/船上动作没有产生正权重: jig=%f marine=%f drift=%f boat=%f",
+			jig, marineJig, drift, boat)
+	}
+	slowCurrent := fishWaterConditions{Turbulence: .1}
+	if got := fishMotionConditionWeight(profile, fishRollContext{lureAction: "drift"}, slowCurrent); got >= 1 {
+		t.Fatalf("高偏好鱼种在低流速顺流应略降: %f", got)
+	}
+}
+
 func TestLureAttributesUseConfirmedTypeAndDerivedFields(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	staticPath := filepath.Join("..", "..", "server_data", "static.sqlite3")
@@ -254,5 +290,27 @@ func actionNamesForTest() []string {
 		"bottom_motionless", "surface_motionless", "bottom_move", "trolling",
 		"motion_15", "stop_go", "hard_twitch", "motion_18", "vertical_dive",
 		"motion_20", "vertical_ascend", "bottom_layer_move",
+	}
+}
+
+func TestLoadFishSpotPreferenceMatchesChartZone(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	seed := "INSERT INTO spot_fish(loc,spot,fish_key,catches) VALUES('chart-zone-test','120','atl_cod',9),('chart-zone-test','120:3','atl_haddock',7),('chart-zone-test','75','atl_mackerel',5)"
+	if _, err := db.SQL.Exec(seed); err != nil {
+		t.Fatal(err)
+	}
+	c := &fishRollContext{runtime: &fishRollRuntime{zoneKnown: true, zone: 120}}
+	pref, hasData := srv.loadFishSpotPreference(context.Background(), "chart-zone-test", c)
+	if !hasData || pref["atl_cod"] <= 0 {
+		t.Fatalf("当前海图区号的观测没有生效: %v has=%v", pref, hasData)
+	}
+	if _, ok := pref["atl_haddock"]; ok {
+		t.Fatal("攻略网格文本不该被当成海图区号观测")
+	}
+	if _, ok := pref["atl_mackerel"]; ok {
+		t.Fatal("其他区号的观测不能带进当前区号")
+	}
+	if _, has := srv.loadFishSpotPreference(context.Background(), "chart-zone-test", &fishRollContext{}); has {
+		t.Fatal("定位不到海图区号时不该启用钓点观测")
 	}
 }

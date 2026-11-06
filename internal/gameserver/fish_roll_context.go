@@ -32,7 +32,15 @@ type fishRollContext struct {
 type fishRollRuntime struct {
 	lure      lureAttributes
 	lureKnown bool
-	spotPref  map[string]float64
+	// levelChecked 保证一次判鱼只解析一次地点与海图区号。
+	levelChecked bool
+	// chartKnown 表示该地点有没有海图（目前只有挪威海）；zoneKnown 表示本次
+	// 落点能否定位到具体区号。两者共同决定海图条件算不算有证据。
+	chartKnown bool
+	zone       int
+	zoneKnown  bool
+	spotPref   map[string]float64
+	spotData   bool
 }
 
 func rollContext(contexts []fishRollContext) fishRollContext {

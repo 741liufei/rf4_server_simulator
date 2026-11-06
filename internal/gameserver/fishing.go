@@ -132,6 +132,9 @@ func (st *FishState) updateLureActionLocked(now time.Time, previousMask, mask ui
 	if action == "steady" || action == "speed_up" {
 		action = ""
 	}
+	if action == "jig" && st.RigType >= 50 && st.RigType <= 60 {
+		action = "marine_jig"
+	}
 	switch {
 	case action != "":
 		st.LureAction = action
@@ -698,10 +701,8 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 	}
 	for i, key := range keys {
 		wts[i] *= s.fishBiteEnvironmentWeight(cctx, key, c)
-		if spot := c.runtime.spotPref[key]; spot > 0 {
-			wts[i] *= clampFloat(1+math.Log1p(spot)*.16, 1, 1.75)
-		}
 	}
+	applyFishSpotBias(keys, wts, c.runtime.spotPref, c.runtime.spotData)
 	if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
 		return nil
 	}

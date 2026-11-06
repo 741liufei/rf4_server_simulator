@@ -212,3 +212,75 @@ func TestFishBaitRulesWithReadOnlyStaticAndExistingDatabase(t *testing.T) {
 		}
 	}
 }
+
+func TestFishBaitGuideConditionsParseChartAndMotion(t *testing.T) {
+	wrasse := fishBaitRules[ruleName("皱鳃鲨")]
+	if wrasse.chartAny || len(wrasse.chartZones) != 1 || wrasse.chartZones[0] != 120 {
+		t.Fatalf("皱鳃鲨海图条件 zones=%v any=%v", wrasse.chartZones, wrasse.chartAny)
+	}
+	tuna := fishBaitRules[ruleName("北方蓝鳍金枪鱼")]
+	if len(tuna.chartZones) != 2 || tuna.chartZones[0] != 75 || tuna.chartZones[1] != 80 {
+		t.Fatalf("金枪鱼海图条件 zones=%v", tuna.chartZones)
+	}
+	haddock := fishBaitRules[ruleName("大西洋鳕")]
+	if !haddock.chartAny || len(haddock.chartZones) != 0 {
+		t.Fatalf("大西洋鳕应只要求在海图上: zones=%v any=%v", haddock.chartZones, haddock.chartAny)
+	}
+	nase := fishBaitRules[ruleName("大鼻软口鱼")]
+	if !nase.needDrift {
+		t.Fatal("大鼻软口鱼应要求顺水漂流")
+	}
+	salmon := fishBaitRules[ruleName("大西洋鲑鱼")]
+	if !salmon.needMotion || salmon.needJig {
+		t.Fatalf("大西洋鲑鱼动作条件 jig=%v motion=%v", salmon.needJig, salmon.needMotion)
+	}
+	catfish := fishBaitRules[ruleName("花鲶")]
+	if !catfish.jigOrMotion || catfish.needJig || catfish.needMotion {
+		t.Fatalf("花鲶应是 jig 或水动的二选一: %+v", catfish)
+	}
+}
+
+func TestRuleConditionAllowsChartZoneAndMotionEvidence(t *testing.T) {
+	inSea := func(zone int, known bool) fishRollContext {
+		return fishRollContext{runtime: &fishRollRuntime{chartKnown: true, zone: zone, zoneKnown: known}}
+	}
+	zoneRule := fishBaitRule{chartZones: []int{75, 80}}
+	if !ruleConditionAllows(zoneRule, inSea(75, true)) {
+		t.Fatal("75号区应放行“海图75或80号区域”的鱼")
+	}
+	if ruleConditionAllows(zoneRule, inSea(120, true)) {
+		t.Fatal("120号区不该放行只写“海图75或80号区域”的鱼")
+	}
+	if !ruleConditionAllows(zoneRule, inSea(0, false)) {
+		t.Fatal("落点定位不到区号时应保持中性")
+	}
+	if ruleConditionAllows(zoneRule, fishRollContext{runtime: &fishRollRuntime{}}) {
+		t.Fatal("不在海图上时不该放行带海图前置条件的鱼")
+	}
+	if !ruleConditionAllows(zoneRule, fishRollContext{}) {
+		t.Fatal("没有地点证据时不该限制上鱼")
+	}
+	if !ruleConditionAllows(fishBaitRule{chartAny: true}, inSea(0, false)) {
+		t.Fatal("“海图，区域不限”在有海图的地点应放行")
+	}
+	drift := fishBaitRule{needDrift: true}
+	if !ruleConditionAllows(drift, fishRollContext{lureMask: 0}) {
+		t.Fatal("没有钓组动作上报时不该按顺流条件封鱼")
+	}
+	if !ruleConditionAllows(drift, fishRollContext{lureMask: lureMotionDriftBit}) {
+		t.Fatal("顺流移动应满足顺水漂流条件")
+	}
+	if ruleConditionAllows(drift, fishRollContext{lureMask: 0x400}) {
+		t.Fatal("已上报稳定收线且无顺流时不该放行顺水漂流条件")
+	}
+	either := fishBaitRule{jigOrMotion: true}
+	if !ruleConditionAllows(either, fishRollContext{lureMask: lureMotionJigBit}) {
+		t.Fatal("jig 阶梯应满足二选一条件")
+	}
+	if !ruleConditionAllows(either, fishRollContext{lureMask: 0x400}) {
+		t.Fatal("饵在水中运动应满足二选一条件")
+	}
+	if ruleConditionAllows(either, fishRollContext{lureMask: 0x200}) {
+		t.Fatal("水层静置既不 jig 也不水动，不该放行")
+	}
+}

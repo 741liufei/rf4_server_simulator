@@ -322,6 +322,9 @@ func (s *Server) fishBiteEnvironmentWeight(ctx context.Context, key string, c fi
 		}
 	}
 	factors = append(factors,
+		weightedFactor{fishMotionConditionWeight(p, c, water), c.skill.LureTolerance},
+	)
+	factors = append(factors,
 		weightedFactor{1 + c.skill.RareFish*float64(p.RarityTier)*.12, 0},
 		weightedFactor{s.fishLureWeight(p, c, water), c.skill.LureTolerance},
 		weightedFactor{fishSkillEnvironmentWeight(key, c), 0},
@@ -376,6 +379,23 @@ func fishEcologyJSONMap(raw string) map[string]float64 {
 // lureMotionStatusMask 覆盖客户端 Gmkegncajem 已知的 0..22 位动作状态。
 // 0xD0000000/0xD1000000 的高位是钓组阶段，不属于拟饵动作。
 const lureMotionStatusMask uint32 = 0x007FFFFF
+
+// 攻略前置条件要用的三个客户端动作位（kRigAnimationType_*）：
+// 顺流移动、jig 阶梯，以及“饵在水中运动”对应的动到位集合。
+const (
+	lureMotionDriftBit uint32 = 0x40
+	lureMotionJigBit   uint32 = 0x80
+)
+
+// lureMotionInWaterMask 排除浮漂/水层/底部静置和触底姿态，剩下的都是饵在
+// 水里移动的状态位。
+const lureMotionInWaterMask uint32 = lureMotionStatusMask &^ (0x1000 | 0x200 | 0x800 | 0x8)
+
+// lureMotionEvidence 判断本次判鱼是否真的拿到动作上报。没有上报时掩码为 0，
+// 不能当成“玩家没做这个动作”。
+func lureMotionEvidence(mask uint32) bool {
+	return mask&lureMotionStatusMask != 0
+}
 
 // classifyLureMotion 映射客户端 kRigAnimationType_* 状态位。优先级按
 // “瞬时主动作 > 水层姿态 > 收线兜底”排列，避免 0x400 收线盖住抽、跳等动作。
@@ -438,6 +458,7 @@ func fishEcologyActionWeight(weights map[string]float64, action string) (float64
 		"surface_motionless":      {"surface"},
 		"vertical_dive":           {"sinking", "vertical_rise"},
 		"water_column_motionless": {"sinking", "bottom_hang"},
+		"marine_jig":              {"jig"},
 	}
 	for _, candidate := range aliases[action] {
 		if weight, ok := weights[candidate]; ok {

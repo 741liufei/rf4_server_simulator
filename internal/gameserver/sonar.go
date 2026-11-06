@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,7 +31,10 @@ const (
 	sonarEchoArgCode   = "15005"
 )
 
+// sonarGrid 是一块水域的声呐网格几何。level 是该水域所属地图 key，
+// 用来把抛竿落点限制在同一张海图里找区号。
 type sonarGrid struct {
+	level    string
 	topLeftX float64
 	topLeftZ float64
 	width    float64
@@ -86,6 +91,7 @@ func loadSonarGrids() (map[string]sonarGrid, error) {
 				candidate.length <= 0 || candidate.cellSize <= 0 {
 				continue
 			}
+			candidate.level = asset.MapID
 			grids[systemID] = candidate
 		}
 		if len(grids) == 0 {
@@ -295,6 +301,71 @@ func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*p
 		0: proto.StrVal(systemID),
 		1: proto.Args(&code, items...),
 	})
+}
+
+// sonarChartLevel 判断该地图有没有海图网格。目前只有挪威海有声呐水域资源，
+// 内陆湖没有可核对的水域矩形，返回 false 表示"这里不存在海图区号"。
+func sonarChartLevel(levelKey string) bool {
+	if levelKey == "" {
+		return false
+	}
+	grids, err := loadSonarGrids()
+	if err != nil {
+		return false
+	}
+	for _, grid := range grids {
+		if grid.level == levelKey {
+			return true
+		}
+	}
+	return false
+}
+
+// sonarZoneNumber 取水域 systemID（loc12_215）里的数字段。攻略里的
+// "海图215号区域"和客户端的水域编号是同一个数字。
+func sonarZoneNumber(systemID string) (int, bool) {
+	i := strings.LastIndexByte(systemID, '_')
+	if i < 0 || i+1 >= len(systemID) {
+		return 0, false
+	}
+	zone, err := strconv.Atoi(systemID[i+1:])
+	if err != nil || zone <= 0 {
+		return 0, false
+	}
+	return zone, true
+}
+
+// sonarZoneForPoint 把抛竿落点换算成海图区号。矩形重叠时取面积最小的水域，
+// 结果只由静态资源决定，同一坐标重复查询稳定。落在海图之外返回 ok=false。
+func sonarZoneForPoint(levelKey string, x, z float64) (int, bool) {
+	if levelKey == "" {
+		return 0, false
+	}
+	grids, err := loadSonarGrids()
+	if err != nil {
+		return 0, false
+	}
+	zone, bestArea, found := 0, math.MaxFloat64, false
+	for systemID, grid := range grids {
+		if grid.level != levelKey {
+			continue
+		}
+		if x < grid.topLeftX || x >= grid.topLeftX+grid.width {
+			continue
+		}
+		if z > grid.topLeftZ || z <= grid.topLeftZ-grid.length {
+			continue
+		}
+		number, ok := sonarZoneNumber(systemID)
+		if !ok {
+			continue
+		}
+		area := grid.width * grid.length
+		if !found || area < bestArea || (area == bestArea && number < zone) {
+			zone, bestArea, found = number, area, true
+		}
+	}
+	return zone, found
 }
 
 func (s *Server) sonarResponse(ctx context.Context, systemID string) (*proto.Value, error) {

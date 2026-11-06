@@ -57,8 +57,16 @@ func (s *Server) prepareFishRollRuntime(ctx context.Context, c *fishRollContext,
 	if !c.spotEnv.Known {
 		c.spotEnv = fishSpotEnvironmentFor(c)
 	}
+	if !c.runtime.levelChecked {
+		c.runtime.levelChecked = true
+		levelKey := travelLevelKey(c.loc)
+		c.runtime.chartKnown = sonarChartLevel(levelKey)
+		if c.runtime.chartKnown && c.hasPos {
+			c.runtime.zone, c.runtime.zoneKnown = sonarZoneForPoint(levelKey, c.x, c.z)
+		}
+	}
 	if c.runtime.spotPref == nil {
-		c.runtime.spotPref = s.loadFishSpotPreference(ctx, statLoc, c)
+		c.runtime.spotPref, c.runtime.spotData = s.loadFishSpotPreference(ctx, statLoc, c)
 	}
 	if !c.runtime.lureKnown && c.rigType != 0 {
 		for _, id := range c.baits {
@@ -105,29 +113,50 @@ func fnvHash(s string) uint64 {
 	return h
 }
 
-func (s *Server) loadFishSpotPreference(ctx context.Context, statLoc string, c *fishRollContext) map[string]float64 {
+// loadFishSpotPreference 读取攻略钓点观测。挪威海的点位按海图区号记录，
+// 与客户端水域 systemID 的数字段同源，可以直接对上；内陆湖的点位是攻略地图
+// 上的网格文本（"67:57"），换不成客户端落点坐标，这里一律不启用，避免把
+// 别处的鱼种当成当前钓点的观测。
+func (s *Server) loadFishSpotPreference(ctx context.Context, statLoc string, c *fishRollContext) (map[string]float64, bool) {
 	out := map[string]float64{}
-	if s == nil || s.DB == nil || statLoc == "" || c == nil || c.spot == 0 {
-		return out
+	if s == nil || s.DB == nil || statLoc == "" || c == nil || c.runtime == nil || !c.runtime.zoneKnown {
+		return out, false
 	}
 	rows, err := s.DB.SQL.QueryContext(ctx,
 		`SELECT spot,fish_key,catches FROM spot_fish WHERE loc=?`, statLoc)
 	if err != nil {
-		return out
+		return out, false
 	}
 	defer rows.Close()
-	target := strconv.FormatUint(c.spot, 10)
+	target := strconv.Itoa(c.runtime.zone)
+	matched := false
 	for rows.Next() {
 		var spot, fish string
 		var catches int64
 		if rows.Scan(&spot, &fish, &catches) != nil || catches <= 0 {
 			continue
 		}
-		if spot == target || strings.HasPrefix(spot, target+":") {
+		if spot == target {
+			matched = true
 			out[fish] += math.Sqrt(float64(catches))
 		}
 	}
-	return out
+	return out, matched
+}
+
+// applyFishSpotBias 只在静态库对该地点存在钓点观测时启用。匹配到当前钓点的
+// 鱼种保留观测加权；其余鱼种仍留少量杂口，避免把攻略点位变成绝对黑名单。
+func applyFishSpotBias(keys []string, weights []float64, pref map[string]float64, hasData bool) {
+	if len(keys) != len(weights) || !hasData {
+		return
+	}
+	for i, key := range keys {
+		if value := pref[key]; value > 0 {
+			weights[i] *= clampFloat(1+math.Log1p(value)*.16, 1, 1.75)
+		} else {
+			weights[i] *= .35
+		}
+	}
 }
 
 func (s *Server) loadLureAttributes(ctx context.Context, id string) (lureAttributes, bool) {
@@ -577,6 +606,32 @@ func fishSpotBiteWeight(profile fishEcologyProfile, spot fishSpotEnvironment) fl
 	distance := 1 + (profile.Aggression-.95)*math.Log1p(spot.DistanceM)*.035
 	depth := 1 + math.Min(.2, spot.DepthM/220)*profile.LayerPref
 	return clampFloat(substrate*current*structure*distance*depth, .30, 1.60)
+}
+
+func fishMotionConditionWeight(profile fishEcologyProfile, c fishRollContext, water fishWaterConditions) float64 {
+	factor := 1.0
+	current := clampFloat(water.Turbulence, 0, 1)
+	switch c.lureAction {
+	case "marine_jig":
+		factor *= 1 + (profile.CurrentPref-.5)*clampFloat(current-.35, 0, 1)*.25
+		if c.rigType >= 50 && c.rigType <= 60 {
+			factor *= 1.08
+		}
+	case "jig":
+		factor *= 1 + (profile.CurrentPref-.5)*clampFloat(current-.35, 0, 1)*.18
+	case "drift":
+		if current > .5 {
+			factor *= 1 + (profile.CurrentPref-.5)*.22
+		} else if current < .2 && profile.CurrentPref > .5 {
+			factor *= .90
+		}
+	case "trolling":
+		if c.lureSpeed > 0 {
+			factor *= 1 + math.Min(.12, float64(c.lureSpeed)*.008)
+		}
+		factor *= 1 + (profile.Activity-1)*.15
+	}
+	return clampFloat(factor, .70, 1.45)
 }
 
 func (s *Server) fishLureWeight(profile fishEcologyProfile, c fishRollContext, water fishWaterConditions) float64 {

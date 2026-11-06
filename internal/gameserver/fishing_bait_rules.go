@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -18,6 +19,16 @@ type fishBaitRule struct {
 	allow, deny []string
 	bottomOnly  []string
 	condition   string
+	// 攻略前置条件里可核对的部分：海图区号列表（chartAny 表示只要求
+	// “在海图上，区域不限”），以及顺水漂流、jig 阶梯、饵在水中运动三个动作要求。
+	chartZones []int
+	chartAny   bool
+	needDrift  bool
+	needJig    bool
+	needMotion bool
+	// jigOrMotion 用于“出现 jig 阶梯，或采用路亚钓法且已上船、饵在水中运动”
+	// 这类二选一前置条件，不能拆成同时要求。
+	jigOrMotion bool
 }
 
 var fishBaitRules = parseFishBaitRules(fishBaitRuleText)
@@ -59,6 +70,15 @@ func parseFishBaitRules(raw string) map[string]fishBaitRule {
 		bait = strings.NewReplacer("（", "(", "）", ")").Replace(bait)
 		allowed, extra, _ := strings.Cut(bait, "(")
 		r := fishBaitRule{allow: strings.Split(strings.TrimSpace(allowed), "/"), condition: strings.TrimSpace(condition)}
+		r.chartZones, r.chartAny = fishChartCondition(r.condition)
+		r.needDrift = strings.Contains(r.condition, "顺水漂流")
+		needJig := strings.Contains(r.condition, "jig阶梯")
+		needMotion := strings.Contains(r.condition, "饵在水中运动")
+		if needJig && needMotion && strings.Contains(r.condition, "或") {
+			r.jigOrMotion = true
+		} else {
+			r.needJig, r.needMotion = needJig, needMotion
+		}
 		if _, denied, ok := strings.Cut(extra, "不吃"); ok {
 			denied = strings.FieldsFunc(denied, func(c rune) bool { return c == ')' || c == '；' || c == ';' })[0]
 			r.deny = strings.Split(denied, "/")
@@ -251,6 +271,9 @@ func (s *Server) filterFishBaitSet(loc string, ids []string, keys []string, weig
 			continue
 		}
 		r := fishBaitRules[ruleName(names[key])]
+		if !ruleConditionAllows(r, c) {
+			continue
+		}
 		denied := false
 		best := 0.0
 		preferred := 0
@@ -295,6 +318,73 @@ func (s *Server) filterFishBaitSet(loc string, ids []string, keys []string, weig
 		outWeights = append(outWeights, weights[i]*best)
 	}
 	return outKeys, outWeights
+}
+
+// fishChartCondition 解析攻略里的海图前置条件：“海图120号区域”给出区号列表，
+// “海图，区域不限”只要求当前在海图上。区号数字与客户端水域 systemID 编号同源。
+func fishChartCondition(condition string) ([]int, bool) {
+	if !strings.Contains(condition, "海图") {
+		return nil, false
+	}
+	var zones []int
+	for i := 0; i < len(condition); {
+		if condition[i] < '0' || condition[i] > '9' {
+			i++
+			continue
+		}
+		j := i
+		for j < len(condition) && condition[j] >= '0' && condition[j] <= '9' {
+			j++
+		}
+		zone, err := strconv.Atoi(condition[i:j])
+		if err == nil && zone > 0 {
+			zones = append(zones, zone)
+		}
+		i = j
+	}
+	return zones, len(zones) == 0
+}
+
+// ruleConditionAllows 只用客户端给得出的证据判断攻略前置条件：海图条件要有能
+// 定位的抛竿落点，动作条件要有钓组动作上报。拿不到证据时保持中性，避免把
+// 没有对应上报的钓法一律判成不合格。船票与上船状态仍未接入，不据此限制上鱼。
+func ruleConditionAllows(r fishBaitRule, c fishRollContext) bool {
+	if r.chartAny || len(r.chartZones) > 0 {
+		if c.runtime == nil {
+			return true
+		}
+		if !c.runtime.chartKnown {
+			return false
+		}
+		if len(r.chartZones) > 0 && c.runtime.zoneKnown {
+			inside := false
+			for _, zone := range r.chartZones {
+				if zone == c.runtime.zone {
+					inside = true
+					break
+				}
+			}
+			if !inside {
+				return false
+			}
+		}
+	}
+	if !lureMotionEvidence(c.lureMask) {
+		return true
+	}
+	if r.jigOrMotion && c.lureMask&lureMotionJigBit == 0 && c.lureMask&lureMotionInWaterMask == 0 {
+		return false
+	}
+	if r.needDrift && c.lureMask&lureMotionDriftBit == 0 {
+		return false
+	}
+	if r.needJig && c.lureMask&lureMotionJigBit == 0 {
+		return false
+	}
+	if r.needMotion && c.lureMask&lureMotionInWaterMask == 0 {
+		return false
+	}
+	return true
 }
 
 func (b ruleBait) matchesAny(terms []string) bool {

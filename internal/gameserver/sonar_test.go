@@ -43,10 +43,10 @@ func TestSonarGridAsset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := grids["loc12_01"]; got != (sonarGrid{268, 1148, 116, 72, 4}) {
+	if got := grids["loc12_01"]; got != (sonarGrid{level: "level_012_north_sea", topLeftX: 268, topLeftZ: 1148, width: 116, length: 72, cellSize: 4}) {
 		t.Fatalf("loc12_01 几何=%+v", got)
 	}
-	if got := grids["loc12_273"]; got != (sonarGrid{2480, -1340, 470, 210, 10}) {
+	if got := grids["loc12_273"]; got != (sonarGrid{level: "level_012_north_sea", topLeftX: 2480, topLeftZ: -1340, width: 470, length: 210, cellSize: 10}) {
 		t.Fatalf("loc12_273 几何=%+v", got)
 	}
 }
@@ -236,5 +236,45 @@ func TestSonarProfileLookup(t *testing.T) {
 	}
 	if got := srv.sonarProfileFor(context.Background(), "loc12_02"); got != nil {
 		t.Fatalf("无档案水域应回 nil，实得 %+v", got)
+	}
+}
+
+func TestSonarChartZoneUsesGuideZoneNumbers(t *testing.T) {
+	if !sonarChartLevel("level_012_north_sea") {
+		t.Fatal("挪威海应有海图水域网格")
+	}
+	if sonarChartLevel("level_001_lake") || sonarChartLevel("") {
+		t.Fatal("内陆湖不该被当成有海图")
+	}
+	for _, tt := range []struct {
+		name     string
+		x, z     float64
+		wantZone int
+	}{
+		{"75号区", 1020, 50, 75},
+		{"120号区", 3500, 700, 120},
+		{"215号区", 2300, -600, 215},
+	} {
+		zone, ok := sonarZoneForPoint("level_012_north_sea", tt.x, tt.z)
+		if !ok || zone != tt.wantZone {
+			t.Fatalf("%s: 实得 zone=%d ok=%v，期望 %d", tt.name, zone, ok, tt.wantZone)
+		}
+		if again, _ := sonarZoneForPoint("level_012_north_sea", tt.x, tt.z); again != zone {
+			t.Fatalf("%s: 同一坐标区号不稳定 %d != %d", tt.name, zone, again)
+		}
+	}
+	if _, ok := sonarZoneForPoint("level_012_north_sea", 9000, 9000); ok {
+		t.Fatal("海图网格之外不该定位到区号")
+	}
+	if _, ok := sonarZoneForPoint("level_001_lake", 1020, 50); ok {
+		t.Fatal("内陆湖不该定位到海图区号")
+	}
+	if zone, ok := sonarZoneNumber("loc12_215"); !ok || zone != 215 {
+		t.Fatalf("sonarZoneNumber(loc12_215)=%d,%v", zone, ok)
+	}
+	for _, bad := range []string{"", "loc12_", "loc12_x", "loc12_0", "tours"} {
+		if _, ok := sonarZoneNumber(bad); ok {
+			t.Fatalf("sonarZoneNumber(%q) 应为不可用", bad)
+		}
 	}
 }
