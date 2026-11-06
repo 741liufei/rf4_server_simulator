@@ -86,6 +86,20 @@ func TestEffectiveBaitDepthTracksFloatSinkingAndLureLayer(t *testing.T) {
 	if got := lureLayerFromMotion(0x1000, .5); got != .08 {
 		t.Fatalf("水面运动应映射到浅层，实得 %f", got)
 	}
+	// 水面系动作：犬步/激溅必须落到水面层，否则水面拟饵按中层判鱼，
+	// 只能抽到中层鱼种，客户端表现为"鱼来了但不咬"。
+	if got := lureLayerFromMotion(0xD1000100, .5); got != .06 {
+		t.Fatalf("犬步(walk_dog)应映射水面层 .06，实得 %f", got)
+	}
+	if got := lureLayerFromMotion(0x20, .5); got != .08 {
+		t.Fatalf("激溅(splash)应映射水面层 .08，实得 %f", got)
+	}
+	if got := lureLayerFromMotion(0x400, .5); got != .53 {
+		t.Fatalf("普通收线应仍按 +.03 变化，实得 %f", got)
+	}
+	if got := (&Server{}).rigWaterLayer(fishRollContext{rigType: 5, lureLayer: lureLayerFromMotion(0xD1000100, .5)}); got > .2 {
+		t.Fatalf("水面拟饵收线时水层应判水面，实得 %f", got)
+	}
 }
 
 func TestClassifyLureMotionUsesClientStatusBits(t *testing.T) {
