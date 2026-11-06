@@ -825,6 +825,16 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 		}
 		return nil, false
 	}
+	// 轮子耐久归零即损坏，但它不像断竿那样从手上消失，客户端仍会发 14/1。
+	// 这里必须拦住，否则损坏的轮子还能继续抛投上鱼。
+	// 不清 GearGuid：竿确实还在手上，留着它 14/2 才能回出"请先修理"的提示。
+	if reelGUID := srv.rigBrokenReelGUID(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear); reelGUID != "" {
+		ctx.Log.Info("14/1 被拒：渔线轮已损坏", "rod", shortGUID(gear), "reel", shortGUID(reelGUID))
+		if body := castReady158(ctx, "", depthCM, 0); body != nil {
+			return body, true
+		}
+		return nil, false
+	}
 
 	// 海杆的 Rod 实例由 4/22 竿线全量树构建；普通纺车杆通常已从库存树
 	// 实例化。海杆没有该对象时，客户端的 RUILoadIndicator 会一直显示 0。
@@ -902,6 +912,12 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 		st.mu.Unlock()
 		ctx.Log.Info("14/2 被拒：装备限制", "rod", shortGUID(gear), "reason", reason)
 		ctx.ReplyOperationResult(136) // kOperationResult_WrongRegion
+		return nil, true
+	}
+	// 14/1 给的是力度上限，客户端被拒后仍可能直发 14/2，这里再拦一道。
+	if reelGUID := srv.rigBrokenReelGUID(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear); reelGUID != "" {
+		ctx.Log.Info("14/2 被拒：渔线轮已损坏", "rod", shortGUID(gear), "reel", shortGUID(reelGUID))
+		ctx.ReplyFailure("System.InvalidOperationException", "渔线轮已损坏，请先修理")
 		return nil, true
 	}
 	// 14/1 给出的是满力度上限；14/2 才携带本次实际落点、动作和出手力度。

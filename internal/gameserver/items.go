@@ -488,10 +488,14 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 					changed = true
 				}
 			}
-			force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
-			si := fieldIdxByCS(sub.Class, csDragForce)
-			if setWireFloat(sub.Fields, sub.Class, si, force) {
-				changed = true
+			// csDragForce 是持久化的磨损状态：字段已存在（含 0=已磨穿）必须原样
+			// 下发，只在字段缺失（新物品/历史档）时用零件定义值初始化。旧实现
+			// 每次下发都重算，会把磨损悄悄刷回满值并随启动修复写回数据库。
+			if _, present, si := frictionWasherDrag(sub); !present && si >= 0 && si < len(sub.Fields) {
+				force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
+				if force > 0 && setWireFloat(sub.Fields, sub.Class, si, force) {
+					changed = true
+				}
 			}
 		}
 	}

@@ -38,8 +38,10 @@ const (
 type gearBreakOutcome struct {
 	LineBroken      bool
 	ReelDamaged     bool
+	ReelBroken      bool // 轮子耐久本次被打到 0：已损坏，须修理才能再抛投。
+	FrictionWorn    bool // 摩擦片(cat9)磨穿：泄力失效，最大泄力归零，需换摩擦片。
 	ComponentBroken bool
-	BreakPart       string // leader / line / reel / rod / component
+	BreakPart       string // hook / leader / line / reel / rod / component
 	LineLossM       int64
 	BrokenGUID      string
 	RemovedGUIDs    []string
@@ -53,6 +55,9 @@ type gearBreakDecision struct {
 	Part     string
 	GUID     string
 	Category int64
+	// ReelSlip 区分渔轮两种损坏：true=泄力打滑（磨摩擦片 csDragForce），
+	// false=锁轮超载（磨锁轮装置/本体耐久）。
+	ReelSlip bool
 }
 
 // lineBreakTerminalCategories 是断线时随线一起丢失的终端组件。
@@ -62,10 +67,19 @@ var lineBreakTerminalCategories = map[int64]bool{
 	catLure: true, catBait: true, catFloat: true,
 }
 
-// 子线断只损失钩组；浮漂挂在上方主线，不应跟着消失。
+// 断件不在钓组模板里时的兜底集合：子线断只损失钩组，浮漂挂在上方主线，
+// 不应跟着消失；铅芯前导(cat57)在鲤族钓组里位于子线上游，同样不能列入，
+// 只有铅芯自己断或主线断时才丢。模板能定位断件时一律走
+// downstreamLossCategories，不使用这张表。
 var leaderBreakLossCategories = map[int64]bool{
 	catHook: true, catLead: true, catLeaderLock: true, catWireLeader: true,
 	catLure: true, catBait: true,
+}
+
+// terminalConsumableCategories 是挂在钓组最末端的消耗件，无论断在哪一节都会
+// 随下游一起丢失。浮漂、铅坠、铅芯、子线等上游件不在此列。
+var terminalConsumableCategories = map[int64]bool{
+	catHook: true, catLure: true, catBait: true,
 }
 
 // mainLineLossCategories 是主线崩断/剪断时随线一起丢失的全部品类。
@@ -109,17 +123,62 @@ func buildMainLineLossCategories() map[int64]bool {
 	return lost
 }
 
-// sourceLineCategories 包含主线及前导/钢丝前导。断任何一项都按断线处理。
-var sourceLineCategories = map[int64]bool{
-	catLine: true, catLead: true, catLeaderLock: true, catWireLeader: true,
+// downstreamLossCategories 按断件在当前钓组模板中的位置给出"下游丢失"品类。
+//
+// rigSlotTemplates 的数组顺序就是主线往下的装配顺序，例如 24 号鲤族钓组是
+// 47 食笼 → 57 铅芯 → 29 铅坠 → 13 子线 → 12 钩。旧实现把同一张品类表同时
+// 用于子线、连接件和铅芯断裂，导致断子线时把上游仍在主线上的铅芯一起删掉。
+// 这里只取断件位置及其之后的品类，再并上永远挂在末端的消耗件（钩/饵/拟饵）。
+// 模板里同品类多槽位（如 13 出现两次）仍按品类处理：现有 rig_component
+// 只按 slot 分类，没有可靠的上下游序号，不去臆造顺序。
+func downstreamLossCategories(rigType, breakCategory int64) map[int64]bool {
+	lost := map[int64]bool{breakCategory: true}
+	for cat := range terminalConsumableCategories {
+		lost[cat] = true
+	}
+	tmpl := rigSlotTemplates[rigType]
+	pos := -1
+	for i, comp := range tmpl {
+		for _, cat := range comp.Cats {
+			if cat == breakCategory {
+				pos = i
+				break
+			}
+		}
+		if pos >= 0 {
+			break
+		}
+	}
+	if pos < 0 {
+		// 断件不在模板（如独立连接件 14）或钓组类型未知：沿用窄集合，
+		// 其中已不含上游的铅芯。
+		for cat := range leaderBreakLossCategories {
+			lost[cat] = true
+		}
+		return lost
+	}
+	for _, comp := range tmpl[pos:] {
+		for _, cat := range comp.Cats {
+			lost[cat] = true
+		}
+	}
+	return lost
 }
 
-// terminalBreakCategories 是不承力的终端消耗件：钩、拟饵、饵、浮漂。
-// 这类件由客户端在打斗中直接上报断裂（如钩被牙磨断、拟饵挂底拉断），
-// 上报可以采信：采信终端件损坏没有作弊收益，误判成本也只是消耗件本身。
-// 承力件（线/前导/竿/轮）仍走 resolveGearBreak 的物理裁决。
+// sourceLineCategories 是可上报的线源承力件：主线、前导/钢丝前导，以及已
+// 进入承力链的铅芯前导(cat57)。断任何一项都交给 resolveGearBreak 按最弱环
+// 裁决；breakLineTx 再按实际品类决定是否扣主线长度（57 不扣）。
+var sourceLineCategories = map[int64]bool{
+	catLine: true, catLead: true, catLeaderLock: true, catWireLeader: true,
+	gearCatLeadcore: true,
+}
+
+// terminalBreakCategories 是不承力的终端消耗件：拟饵、饵、浮漂。
+// 这类件由客户端在打斗中直接上报断裂，上报可以采信：没有作弊收益，误判
+// 成本也只是消耗件本身。钩已经进入承力链，不能在物理裁决前无条件采信，
+// 否则强钩配弱线只会丢钩、不会判弱线。
 var terminalBreakCategories = map[int64]bool{
-	catHook: true, catLure: true, catBait: true, catFloat: true,
+	catLure: true, catBait: true, catFloat: true,
 }
 
 func ptrFloat64(v float64) *float64 { return &v }
@@ -199,7 +258,8 @@ func (s *Server) itemBrokenForMount(ctx context.Context, row *store.Item) bool {
 
 // breakLineOrRod 处理 17/9：客户端只负责报告“已经超载”，承力件（竿、主线、
 // 子线、轮）由服务端重新比较真实强度决定断哪一件，不能直接相信客户端上报的
-// 断件。终端件（钩/拟饵/饵/漂）不承力，客户端上报的断裂直接采信。
+// 断件。终端件（拟饵/饵/漂）不承力，客户端上报的断裂直接采信；钩和铅芯
+// 前导已进承力链，同样交给 resolveGearBreak 按最弱环裁决。
 func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reportedGUID string) (*gearBreakOutcome, error) {
 	rodGUID = strings.TrimSpace(rodGUID)
 	reportedGUID = strings.TrimSpace(reportedGUID)
@@ -215,10 +275,19 @@ func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reporte
 		return nil, err
 	}
 	switch dec.Part {
-	case "leader", "line":
+	case "leader", "line", "leadcore", "connector":
+		// 前导/子线、铅芯前导、连接件都是终端承力件，断了走断子线逻辑：
+		// 主线长度不动，主线以下的终端件随断件丢失。
 		return s.breakLineTx(ctx, uid, rodGUID, dec.GUID, dec.Category)
+	case "hook":
+		// 钩被拉直/拉断：摘除该终端件，不动主线长度。
+		return s.breakComponentTx(ctx, uid, rodGUID, dec.GUID, dec.Category)
 	case "reel":
-		return s.damageReelOverload(ctx, uid, rodGUID, dec.GUID)
+		// 泄力打滑磨摩擦片（只能摩擦不能损坏），锁轮超载磨锁轮装置/本体。
+		if dec.ReelSlip {
+			return s.damageReelSlip(ctx, uid, rodGUID, dec.GUID)
+		}
+		return s.damageReelLockOverload(ctx, uid, rodGUID, dec.GUID)
 	default:
 		brokenGUID := dec.GUID
 		if report.embedded {
@@ -270,7 +339,10 @@ func (s *Server) validateBreakReport(ctx context.Context, uid int64, rodGUID, re
 		return validatedBreakReport{}, sql.ErrNoRows
 	}
 	terminal := terminalBreakCategories[def.Category]
-	if !terminal && !sourceLineCategories[def.Category] && def.Category != gearCatReel {
+	// 钩不再是无条件采信的终端件，但仍是客户端会主动上报的合法断件：
+	// 必须放行到 resolveGearBreak 做最弱环裁决，不能直接回"断件类型不支持"。
+	if !terminal && !sourceLineCategories[def.Category] &&
+		def.Category != catHook && def.Category != gearCatReel {
 		return validatedBreakReport{}, errors.New("断件类型不支持")
 	}
 
@@ -438,6 +510,22 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	if leaderGUID == "" {
 		leaderGUID = s.rigComponentGuidOf(ctx, rodGUID, gearCatLeader)
 	}
+	// 钩也承力：大鱼吃小钩时，断的是钩而不是主线。有独立物品行就断钩；
+	// 拟饵出厂钩没有物品行，退而断整个拟饵（客户端看到的是拟饵没了）。
+	hookGUID := ""
+	hookCat := int64(0)
+	if g := s.mountedHookGuid(ctx, rodGUID); g != "" {
+		if row, rerr := s.DB.GetItemByGUID(ctx, g); rerr == nil && row != nil && row.UID == uid {
+			hookGUID, hookCat = g, catHook
+		}
+	}
+	if hookGUID == "" {
+		if lure := s.mountedLureGUID(ctx, rodGUID); lure != "" {
+			if row, rerr := s.DB.GetItemByGUID(ctx, lure); rerr == nil && row != nil && row.UID == uid {
+				hookGUID, hookCat = lure, catLure
+			}
+		}
+	}
 
 	type candidate struct {
 		part     string
@@ -460,18 +548,43 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 		}
 		cs = append(cs, candidate{part: "leader", guid: leaderGUID, category: leaderCat, kg: spec.LeaderStrengthKg, priority: 0})
 	}
+	// 铅芯前导（57）与独立连接件（14）是并列的终端承力件，各自有拉力，
+	// 与前导/子线一样是短链短板，同强度时先断这些便宜件。
+	if ids.LeadcoreGUID != "" && spec.LeadcoreStrengthKg > 0 {
+		cs = append(cs, candidate{part: "leadcore", guid: ids.LeadcoreGUID, category: gearCatLeadcore,
+			kg: spec.LeadcoreStrengthKg, priority: 0})
+	}
+	if ids.ConnectorGUID != "" && spec.ConnectorStrengthKg > 0 {
+		cs = append(cs, candidate{part: "connector", guid: ids.ConnectorGUID, category: catLeaderLock,
+			kg: spec.ConnectorStrengthKg, priority: 0})
+	}
 	if spec.RodPowerKg > 0 {
 		cs = append(cs, candidate{part: "rod", guid: rodGUID, category: gearCatRod, kg: spec.RodPowerKg, priority: 3})
 	}
-	// 渔轮一项按当前摩擦档位的制动力参与比较：1~29 档一旦超过就打滑放线，
-	// 竿和线根本承受不到更高的张力，只有第 30 档锁轮才可能压断更硬的件。
-	reelKg := spec.ReelCurrentDragKg
-	if reelKg <= 0 {
-		reelKg = spec.ReelDragKg
+	// 钩与线组同级：同强度时先断子线，再断钩。
+	if hookGUID != "" && spec.HookStrengthKg > 0 {
+		cs = append(cs, candidate{part: "hook", guid: hookGUID, category: hookCat,
+			kg: spec.HookStrengthKg, priority: 1})
 	}
-	if spec.ReelPresent && ids.ReelGUID != "" && reelKg > 0 {
-		cs = append(cs, candidate{part: "reel", guid: ids.ReelGUID, category: gearCatReel,
-			kg: reelKg, priority: 2})
+
+	// 渔轮两种损坏：1~29 档是"泄力打滑"（磨摩擦片，泄力是张力上限，鱼逃窜）；
+	// 30 档锁轮后不再打滑，锁轮装置的拉力（锁轮承力）是损坏计算的一环——
+	// 硬拉超载时它像承力件一样参与比较，是最弱环就损坏锁轮装置/本体。
+	setting, hasSetting := s.rodReelDragSetting(ctx, rodGUID)
+	if !hasSetting {
+		setting = maxReelDragStop
+	}
+	dragCap := math.Inf(1) // 无轮 / 锁轮：没有泄力上限
+	if spec.ReelPresent && ids.ReelGUID != "" {
+		if setting < maxReelDragStop {
+			dragCap = spec.ReelCurrentDragKg
+			if dragCap <= 0 {
+				dragCap = spec.ReelDragKg
+			}
+		} else if spec.ReelDragKg > 0 {
+			cs = append(cs, candidate{part: "reel", guid: ids.ReelGUID, category: gearCatReel,
+				kg: spec.ReelDragKg, priority: 2})
+		}
 	}
 
 	if len(cs) > 0 {
@@ -481,16 +594,27 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 				best = c
 			}
 		}
-		setting, hasSetting := s.rodReelDragSetting(ctx, rodGUID)
-		if !hasSetting {
-			setting = maxReelDragStop
+		// 最弱承力件若强于泄力上限，说明鱼力先被泄力打滑化解、断不了任何件，
+		// 这是"泄力打滑"（摩擦片轻微磨损），不是断件、也不报"轮子损坏"。
+		if spec.ReelPresent && ids.ReelGUID != "" && best.kg > dragCap+1e-9 {
+			if s.log != nil {
+				kg2 := func(v float64) float64 { return math.Round(v*100) / 100 }
+				s.log.Info("17/9 泄力打滑", "rod", guidShort(rodGUID),
+					"drag_setting", setting, "drag_cap_kg", kg2(dragCap),
+					"weakest_part", best.part, "weakest_kg", kg2(best.kg),
+					"rod_kg", kg2(spec.RodPowerKg), "line_kg", kg2(spec.LineStrengthKg),
+					"leader_kg", kg2(spec.LeaderStrengthKg), "hook_kg", kg2(spec.HookStrengthKg),
+					"reel_lock_kg", kg2(spec.ReelDragKg), "reported", guidShort(reportedGUID))
+			}
+			return gearBreakDecision{Part: "reel", GUID: ids.ReelGUID, Category: gearCatReel, ReelSlip: true}, nil
 		}
 		if s.log != nil {
 			kg2 := func(v float64) float64 { return math.Round(v*100) / 100 }
 			s.log.Info("17/9 断件裁决", "rod", guidShort(rodGUID), "part", best.part,
 				"drag_setting", setting, "kg", kg2(best.kg), "rod_kg", kg2(spec.RodPowerKg),
 				"line_kg", kg2(spec.LineStrengthKg), "leader_kg", kg2(spec.LeaderStrengthKg),
-				"reel_kg", kg2(reelKg), "reel_lock_kg", kg2(spec.ReelDragKg),
+				"hook_kg", kg2(spec.HookStrengthKg),
+				"drag_cap_kg", kg2(dragCap), "reel_lock_kg", kg2(spec.ReelDragKg),
 				"reported", guidShort(reportedGUID))
 		}
 		return gearBreakDecision{Part: best.part, GUID: best.guid, Category: best.category}, nil
@@ -502,7 +626,12 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	}
 	if row, rerr := s.DB.GetItemByGUID(ctx, reportedGUID); rerr == nil && row != nil {
 		if def, derr := s.itemDefForRow(ctx, row); derr == nil && def != nil {
-			if sourceLineCategories[def.Category] {
+			switch {
+			case def.Category == catHook || def.Category == catLure:
+				return gearBreakDecision{Part: "hook", GUID: reportedGUID, Category: def.Category}, nil
+			case def.Category == gearCatLeadcore:
+				return gearBreakDecision{Part: "leadcore", GUID: reportedGUID, Category: def.Category}, nil
+			case sourceLineCategories[def.Category]:
 				return gearBreakDecision{Part: "line", GUID: reportedGUID, Category: def.Category}, nil
 			}
 		}
@@ -510,35 +639,78 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	return gearBreakDecision{Part: "rod", GUID: rodGUID, Category: gearCatRod}, nil
 }
 
-// damageReelOverload 在锁轮成为最弱环时让轮子按 20% 阶段掉耐久，最低保留 20%。
-// 轮子不会像线或子线一样从钓组删除；更新后的承力立即写入 reel_performance。
-func (s *Server) damageReelOverload(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
+// damageReelSlip 处理"泄力打滑"：鱼力超过泄力档时，摩擦片打滑放线、发热磨损，
+// 制动力 csDragForce 线性衰减（reelSlipWear=2%/次，约 50 次磨穿）→ 泄力失效。
+// 摩擦片是"只能摩擦不能损坏"的消耗件，磨穿只泄力失效、不伤本体，换片即恢复。
+func (s *Server) damageReelSlip(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
 	reel, err := s.DB.GetItemByGUID(ctx, reelGUID)
 	if err != nil || reel == nil || reel.UID != uid {
 		return nil, sql.ErrNoRows
 	}
 	before := reel.Durability
-	beforePerf, err := s.syncReelPerformance(ctx, reel)
-	if err != nil {
+
+	wornOut, found, derr := s.degradeFrictionWasher(ctx, reel)
+	if derr != nil {
+		return nil, derr
+	}
+	if !found {
+		// 旧档回退：没有独立摩擦片子件，磨本体耐久。
+		return s.damageReelLockOverload(ctx, uid, rodGUID, reelGUID)
+	}
+
+	perf, perr := s.syncReelPerformance(ctx, reel)
+	if perr != nil {
+		return nil, perr
+	}
+	if err := s.DB.AddItemDamageLog(ctx, store.ItemDamageLog{
+		UID: uid, ItemGUID: reel.GUID, ItemID: reel.ItemID, Event: damageEventReelOverload,
+		BeforeDurability: ptrFloat64(before), AfterDurability: ptrFloat64(reel.Durability),
+		DetailJSON: damageDetailJSON(map[string]any{
+			"rod_guid": rodGUID, "base_drag_kg": perf.BaseDragKg,
+			"locked_drag_kg": perf.LockedDragKg, "lock_multiplier": reelLockMultiplier(reel.Durability),
+			"bearing_quality": perf.BearingQuality, "oil_quality": perf.OilQuality,
+			"oil_wear_factor": perf.OilWearFactor, "friction_worn": wornOut,
+		}),
+	}); err != nil {
 		return nil, err
+	}
+	updated := s.loadUpdatedTrees(ctx, []string{rodGUID, reelGUID})
+	return &gearBreakOutcome{
+		ReelDamaged: true, FrictionWorn: wornOut,
+		BreakPart: "reel", BrokenGUID: reelGUID, UpdatedTrees: updated,
+	}, nil
+}
+
+// damageReelLockOverload 处理"锁轮超载"：30 档锁死后鱼力超过锁轮承力，锁轮装置
+// （本体）硬抗超载，本体耐久按 20% 档逐次下降，约 5 次超载磨穿 → 本体损坏。
+// 这是"锁轮装置拉力也是损坏计算一环"的落点，与泄力打滑磨摩擦片是两条独立通道。
+func (s *Server) damageReelLockOverload(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
+	reel, err := s.DB.GetItemByGUID(ctx, reelGUID)
+	if err != nil || reel == nil || reel.UID != uid {
+		return nil, sql.ErrNoRows
+	}
+	before := reel.Durability
+	beforePerf, perr := s.syncReelPerformance(ctx, reel)
+	if perr != nil {
+		return nil, perr
 	}
 	progress := beforePerf.WearProgress + reelDurabilityStep*beforePerf.OilWearFactor
 	after := before
-	for progress+1e-9 >= reelDurabilityStep && after > reelDurabilityStep {
-		after = math.Max(reelDurabilityStep, math.Round((after-reelDurabilityStep)*100)/100)
+	for progress+1e-9 >= reelDurabilityStep && after > 0 {
+		after = math.Round(math.Max(0, after-reelDurabilityStep)*100) / 100
 		progress -= reelDurabilityStep
 	}
-	if after <= reelDurabilityStep {
-		progress = 0
+	if after <= 0 {
+		after, progress = 0, 0
 	}
 	if after != before {
 		if err := s.persistItemDurability(ctx, reel, after); err != nil {
 			return nil, err
 		}
 	}
-	perf, err := s.syncReelPerformance(ctx, reel)
-	if err != nil {
-		return nil, err
+	perf, perr := s.syncReelPerformance(ctx, reel)
+	if perr != nil {
+		return nil, perr
 	}
 	perf.WearProgress = math.Max(0, progress)
 	if err := s.DB.UpsertReelPerformance(ctx, *perf); err != nil {
@@ -550,18 +722,39 @@ func (s *Server) damageReelOverload(ctx context.Context, uid int64, rodGUID, ree
 		DetailJSON: damageDetailJSON(map[string]any{
 			"rod_guid": rodGUID, "base_drag_kg": perf.BaseDragKg,
 			"locked_drag_kg": perf.LockedDragKg, "lock_multiplier": reelLockMultiplier(after),
-			"bearing_item_id": perf.BearingItemID, "bearing_quality": perf.BearingQuality,
-			"bearing_factor": perf.BearingFactor, "oil_item_id": perf.OilItemID,
-			"oil_quality": perf.OilQuality, "oil_wear_factor": perf.OilWearFactor,
-			"wear_progress": perf.WearProgress,
+			"bearing_quality": perf.BearingQuality, "oil_quality": perf.OilQuality,
+			"oil_wear_factor": perf.OilWearFactor, "wear_progress": perf.WearProgress,
+			"reel_broken": after <= 0,
 		}),
 	}); err != nil {
 		return nil, err
 	}
 	updated := s.loadUpdatedTrees(ctx, []string{rodGUID, reelGUID})
 	return &gearBreakOutcome{
-		ReelDamaged: true, BreakPart: "reel", BrokenGUID: reelGUID, UpdatedTrees: updated,
+		ReelDamaged: true, ReelBroken: after <= 0,
+		BreakPart: "reel", BrokenGUID: reelGUID, UpdatedTrees: updated,
 	}, nil
+}
+
+// rigBrokenReelGUID 返回竿上那只耐久归零的渔轮 GUID；没有轮子或轮子完好时返回空串。
+// 轮子损坏后仍留在竿上（不像线会从钓组消失），所以抛竿前必须单独校验，
+// 否则损坏的轮子还能继续上鱼。
+func (s *Server) rigBrokenReelGUID(ctx context.Context, uid int64, rodGUID string) string {
+	if s == nil || s.DB == nil || rodGUID == "" || rodGUID == zeroGUID {
+		return ""
+	}
+	ids := s.rigGearIDs(ctx, uid, rodGUID)
+	if strings.TrimSpace(ids.ReelGUID) == "" {
+		return ""
+	}
+	row, err := s.DB.GetItemByGUID(ctx, ids.ReelGUID)
+	if err != nil || row == nil || row.UID != uid {
+		return ""
+	}
+	if row.Durability > 0 {
+		return ""
+	}
+	return row.GUID
 }
 
 func (s *Server) storedRigItemGUID(ctx context.Context, rod *store.Item, csName string) (string, error) {
@@ -722,11 +915,16 @@ func (s *Server) lineLossTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		}
 	}
 
-	// 主线断了就按"挂在线上的东西全部没了"处理；只断前导时线上方的浮漂和
-	// 铅坠仍留在主线那段，沿用较窄的前导损失集合。
+	stored := protoFieldAt(rodFields, rod.WireClass, csRigObject)
+	// 主线断了就按"挂在线上的东西全部没了"处理；只断下游某一节时，按该节在
+	// 钓组模板中的位置取下游集合，线上方的浮漂、铅坠和铅芯必须留在主线上。
 	lossCategories := mainLineLossCategories
 	if !mainLineBreak {
-		lossCategories = leaderBreakLossCategories
+		_, rigType, typeOK := rigIdentity(stored)
+		if !typeOK {
+			rigType = s.defaultRigTypeForRod(ctx, rod.ItemID)
+		}
+		lossCategories = downstreamLossCategories(rigType, breakCategory)
 	}
 	var removed []string
 	terminalRows := map[string]*store.Item{}
@@ -755,7 +953,6 @@ func (s *Server) lineLossTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		}
 	}
 	// f5 中可能还有尚未投影到 rig_component 的组件，按类别一并清理。
-	stored := protoFieldAt(rodFields, rod.WireClass, csRigObject)
 	for _, comp := range rigCompsOf(stored) {
 		if comp.GUID == "" || !lossCategories[comp.Category] {
 			continue
