@@ -568,7 +568,7 @@ func (s *Server) rollFish(loc string, bait string) *RolledFish {
 // 再对静态鱼库和内置鱼池应用该上限及奖杯幸运。
 func (s *Server) rollFishForRig(ctx context.Context, uid int64, gearGUID, loc, bait string, bonus fishingSkillBonus, contexts ...fishRollContext) *RolledFish {
 	c := rollContext(contexts)
-	c.loc, c.skill = loc, bonus
+	c.loc, c.skill, c.uid = loc, bonus, uid
 	c.forRig = s.tunableF("fish_bait_rules_enabled", 0) == 1 || s.tunableF("fish_weather_enabled", 0) == 1 || c.happyBite > 0
 	c.rigType = s.rigTypeForWrite(ctx, gearGUID)
 	if s.DB != nil && gearGUID != "" {
@@ -737,6 +737,9 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 		wts[i] *= s.fishBiteEnvironmentWeight(cctx, key, c)
 	}
 	applyFishSpotBias(keys, wts, c.runtime.spotPref, c.runtime.spotData)
+	// 窝料吸引：把落点格子里那锅料的食性亲和乘到候选权重上。
+	// 关掉 groundbait_enabled 时这里一行都不执行。
+	s.applyGroundbaitWeight(cctx, &c, keys, wts)
 	if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
 		return nil
 	}
@@ -1656,19 +1659,21 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		st.mu.Unlock()
 		return
 	}
+	x, z, hasPos := st.CastPosX, st.CastPosZ, st.HasCastPos
+	if !hasPos {
+		x, z, hasPos = st.PosX, st.PosZ, st.HasPos
+	}
 	probability := s.biteProbabilityForLoc(st.Loc)
 	if s.tunableF("fish_bait_rules_enabled", 0) == 1 || s.tunableF("fish_weather_enabled", 0) == 1 {
 		probability = math.Min(.95, probability)
 	}
+	// 窝料死窝闸门：同一格子堆超过 15 份开始压开口率，22 份以上不排咬钩。
+	probability *= s.groundbaitBiteGate(s.dbCtx(), uid, st.Loc, x, z, hasPos, st.Spot, st.RigType)
 	if rand.Float64() >= probability {
 		s.log.Info("鱼口未命中，继续等待", "rod", shortGUID(st.GearGuid), "rig_type", st.RigType)
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()
 		return
-	}
-	x, z, hasPos := st.CastPosX, st.CastPosZ, st.HasCastPos
-	if !hasPos {
-		x, z, hasPos = st.PosX, st.PosZ, st.HasPos
 	}
 	baitDepthCM := st.effectiveBaitDepthCMLocked(now)
 	rigType := st.RigType
@@ -1687,6 +1692,8 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		st.mu.Unlock()
 		return
 	}
+	// 鱼吃口扣份：窝被吃薄，死窝会自己缓过来（设计稿第 6 节）。
+	s.groundbaitConsumeBite(s.dbCtx(), uid, st.Loc, x, z, hasPos, st.Spot, s.tunableF("groundbait_consume_bite", 0.20))
 	if !f.BaitsKnown {
 		f.BaitGUIDs, f.BaitsKnown = s.biteBaitSnapshot(s.dbCtx(), st.GearGuid)
 	}

@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 
@@ -59,12 +60,36 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 			break
 		}
 	}
+	// 弹弓抛饵前先把弹药格里的物品号取出来：投放账本要按它查窝料档案，
+	// 消耗完之后这个引用会被清掉，所以必须在扣料之前读。
+	baitItemID := ""
+	if handGUID != "" && handGUID != zeroGUID {
+		if loaded := srv.handitemLoadedGuid(ctx.Sess.pushCtx(), handGUID); loaded != "" && loaded != zeroGUID {
+			if row, rerr := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), loaded); rerr == nil && row != nil {
+				baitItemID = row.ItemID
+			}
+		}
+	}
 	var upserts []*proto.Value
 	var removed []string
 	if dist > 0 && handGUID != "" && handGUID != zeroGUID {
 		got := srv.consumeHanditemLoadedForThrow(ctx.Sess.pushCtx(), handGUID)
 		upserts = got.upserts
 		removed = got.removed
+	}
+	// 窝料系统：这一弹的饵落到落点格子里（通道=catapult）。落点只有距离，
+	// 世界坐标取服务端已经存下的本次抛竿落点。
+	if dist > 0 && handGUID != "" && handGUID != zeroGUID && baitItemID != "" {
+		if uid := ctx.Sess.Userid; uid != 0 {
+			st := srv.stateFor(uid)
+			if st != nil {
+				st.mu.Lock()
+				gbLoc, gbX, gbZ, gbHas, gbSpot := st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot
+				st.mu.Unlock()
+				srv.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot,
+					baitItemID, 1, "catapult", fmt.Sprintf("catapult:%s:%d", shortGUID(handGUID), ctx.CallID))
+			}
+		}
 	}
 	obj, err := wiregen.MakeObj("lmbomkliaad", map[int]*proto.Value{
 		0: proto.F32(float32(dist)),
