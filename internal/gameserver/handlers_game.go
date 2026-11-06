@@ -3,6 +3,7 @@ package gameserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -434,8 +435,92 @@ func hPlace(ctx *Ctx) ([]byte, bool) {
 	return body, true
 }
 
+// settleTravel 在响应体构造成功后，把「同图判定、免费资格、银币扣款、流水、
+// 位置写回」放进同一个数据库事务：任一步失败整体回滚，不会出现已扣旅费却
+// 仍在原地图的状态。charge=false 用于 1/13 空请求的登录恢复（不收费）。
+//
+// 返回 charged（本次是否实际扣款，决定是否需要 2/1 刷新档案）和 ok；ok=false
+// 时已回业务错误，调用方必须中止切图。事务内先取得 profile 写锁再读当前地图，
+// 并发的重复切图因此串行执行，后一个请求能看到前一个已提交的位置而不重复扣款。
+func settleTravel(ctx *Ctx, level, scene string, spot int64, charge bool) (charged, ok bool) {
+	srv := ctx.Sess.Srv
+	uid := ctx.Sess.Userid
+	cctx := ctx.Sess.pushCtx()
+	cost := int64(0)
+	if charge {
+		cost = placeTravelCost(level)
+	}
+
+	tx, err := beginEconomyTx(cctx, srv.DB)
+	if err != nil {
+		ctx.Log.Warn("切图开启事务失败", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// 先取写锁：DEFERRED 事务不能在读完旧位置后再升级，也不能让两个并发
+	// 切图都基于同一份旧位置各自扣款。
+	if _, err := tx.ExecContext(cctx, `UPDATE profile SET uid=uid WHERE uid=?`, uid); err != nil {
+		ctx.Log.Warn("切图锁定玩家档案失败", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	if err := ensureProfileTx(cctx, tx, uid); err != nil {
+		ctx.Log.Warn("切图建立玩家档案失败", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	var current string
+	if err := tx.QueryRowContext(cctx,
+		`SELECT COALESCE(last_level_key,'') FROM profile WHERE uid=?`, uid).Scan(&current); err != nil {
+		ctx.Log.Warn("切图读取当前地图失败", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	sameLevel := travelLevelKey(current) == level
+
+	if cost > 0 && !sameLevel {
+		free, err := hasFreeTravelAccessTx(cctx, tx, uid, level)
+		if err != nil {
+			ctx.Log.Warn("切图免费通行判定失败", "level", level, "err", err)
+			ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+			return false, false
+		}
+		if !free {
+			if err := applyWalletTx(cctx, tx, uid, -cost, 0,
+				"buy", level, "", "place_travel"); err != nil {
+				if errors.Is(err, errInsufficientFunds) {
+					ctx.Log.Info("切图银币不足，不切图", "level", level, "cost", cost)
+					ctx.ReplyFailure("System.InvalidOperationException", "银币不足，无法前往该水域")
+				} else {
+					ctx.Log.Warn("切图银币扣款失败", "level", level, "err", err)
+					ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+				}
+				return false, false
+			}
+			charged = true
+		}
+	}
+	if err := srv.DB.SetPlayerLocationTx(cctx, tx, uid, level, scene, spot); err != nil {
+		ctx.Log.Warn("切图位置落库失败，扣款已回滚", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	if err := tx.Commit(); err != nil {
+		ctx.Log.Warn("切图事务提交失败，扣款已回滚", "level", level, "err", err)
+		ctx.ReplyFailure("System.InvalidOperationException", "切图结算失败，请重试")
+		return false, false
+	}
+	if charged {
+		ctx.Log.Info("切图扣银币", "level", level, "silver", -cost)
+	}
+	return charged, true
+}
+
 // hTravel 处理 1/14 切图，返回 [dob(205), 护网快照(800), 玩家档案(307), null]。
-// 地图解锁由客户端的档案字段决定；本处理器负责切换当前地图和返回场景数据。
+// 先预构造响应体（构造失败不结算），再把扣款、流水和位置写回放进同一事务；
+// 提交成功后重新构造 307，使响应中的余额与实扣一致。
 func hTravel(ctx *Ctx) ([]byte, bool) {
 	if !ctx.Sess.Srv.requireDB(ctx) {
 		return nil, false
@@ -449,20 +534,30 @@ func hTravel(ctx *Ctx) ([]byte, bool) {
 	key = travelLevelKey(key)
 	sess := ctx.Sess
 	nowUnix := time.Now().Unix()
+	// 预构造只用于确认响应可用，避免扣款后才暴露构造失败。
 	body, err := sess.Srv.buildTravelBodyAt(sess, key, nowUnix)
 	if err != nil {
 		ctx.Log.Warn("1/14 travel 构造失败", "level", key, "err", err)
 		return nil, false
 	}
-	// 响应体成功构造后才提交位置，避免构造失败时把玩家记录已切图。
 	scene := sceneForLevel(key)
 	var spot int64
 	if ints := treeIntsDeep(ctx.Tree); len(ints) > 0 {
 		spot = int64(ints[0])
 	}
-	if err := sess.Srv.DB.SetPlayerLocation(sess.pushCtx(), sess.Userid, key, scene, spot); err != nil {
-		ctx.Log.Warn("1/14 位置落库失败", "level", key, "err", err)
-		return nil, false
+	charged, ok := settleTravel(ctx, key, scene, spot, true)
+	if !ok {
+		return nil, true
+	}
+	if charged {
+		// 307 必须反映实扣后的余额；重新构造是只读的，不会再改状态。极端
+		// 情况下构造失败时仍返回预构造响应，且切图已成功，才用 2/1 刷新档案。
+		if fresh, err := sess.Srv.buildTravelBodyAt(sess, key, nowUnix); err == nil {
+			body = fresh
+		} else {
+			ctx.Log.Warn("1/14 扣款后档案构造失败，改用 2/1 刷新", "level", key, "err", err)
+			sess.Push2_1()
+		}
 	}
 	sess.Srv.setLevel(sess.Userid, key)
 	sess.rememberWeather(key, nowUnix)
@@ -492,8 +587,10 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 		level, scene, spot = saved.LevelKey, saved.Scene, saved.Spot
 	}
 
-	// 1/13 若带地图 key，则以本次进入作为一次成功切图；空请求是登录恢复。
-	if requested != "" {
+	// 1/13 若带地图 key，则以本次进入作为一次成功切图；空请求是登录恢复，
+	// 只写回位置、不收旅费。
+	charge := requested != ""
+	if charge {
 		level = travelLevelKey(requested)
 		scene = sceneForLevel(level)
 	}
@@ -508,9 +605,13 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 		ctx.Log.Warn("1/13 出生点定位构造失败", "level", level, "err", err)
 		return nil, false
 	}
-	if err := srv.DB.SetPlayerLocation(sess.pushCtx(), uid, level, scene, spot); err != nil {
-		ctx.Log.Warn("1/13 位置落库失败", "level", level, "err", err)
-		return nil, false
+	charged, ok := settleTravel(ctx, level, scene, spot, charge)
+	if !ok {
+		return nil, true
+	}
+	if charged {
+		// 1/13 的 206 响应不含档案；切图事务提交成功后才推送 2/1 刷新余额。
+		sess.Push2_1()
 	}
 	srv.setLevel(uid, level)
 	sess.rememberWeather(level, nowUnix)
