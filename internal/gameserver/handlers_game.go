@@ -535,15 +535,9 @@ func hTravel(ctx *Ctx) ([]byte, bool) {
 	}
 	key = travelLevelKey(key)
 	sess := ctx.Sess
-	// 凭证地图资格与 1/13 共用 tripLevelLocked 前置校验：无有效
-	// trip/buyout/house 的凭证地图拒绝切图且不得改写位置——1/14 曾无校验，
-	// 构造请求即可绕过购票/买断/房契直接进入凭证地图（审查 P1 实测复现）。
-	// 拒绝走业务失败回包，客户端停留在当前地图。
-	if sess.Srv.tripLevelLocked(sess.pushCtx(), sess.Userid, key) {
-		ctx.Log.Info("1/14 目标地图无有效访问，拒绝切图", "level", key)
-		ctx.ReplyFailure("System.InvalidOperationException", "该地点需要有效钓鱼游、买断或房屋")
-		return nil, true
-	}
+	// 凭证地图不再在入口一律拒绝：settleTravel 在同一事务内判断有效
+	// trip/buyout/house 是否免票；无有效凭证时按普通切图费收费，余额不足
+	// 则整体回滚。这样票到期后可以重新付费进入，也不会无扣款绕过切图结算。
 	nowUnix := time.Now().Unix()
 	// 预构造只用于确认响应可用，避免扣款后才暴露构造失败。
 	body, err := sess.Srv.buildTravelBodyAt(sess, key, nowUnix)
