@@ -493,7 +493,13 @@ func (s *Server) groundbaitBiteGate(ctx context.Context, uid int64, loc string, 
 	if st.units <= 0 {
 		return 1
 	}
-	return s.groundbaitOverdoseP(st.units)
+	P := s.groundbaitOverdoseP(st.units)
+	// 这条日志是「窝到底有没有生效」的现场证据：投了多少份、还剩几小时、
+	// 强度多少、开口率被压到多少。只在真的投过窝的格子上打，量不会大。
+	s.log.Info("窝料影响咬钩", "loc", loc, "cell", fmt.Sprintf("%d,%d", bx, bz),
+		"portions", st.units, "hours_left", st.hoursLeft, "batches", st.batches,
+		"strength", s.groundbaitStrength(st.units), "bite_gate", P)
+	return P
 }
 
 // groundbaitConsumeBite 鱼吃口扣份：窝被吃薄，死窝也就自己缓过来了。
