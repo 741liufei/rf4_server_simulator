@@ -121,9 +121,9 @@ func TestFishingTickRecomputesSettledAndLocation(t *testing.T) {
 
 func TestKeepnetVersionTicksStrictlyIncreaseAndKeepMap(t *testing.T) {
 	e := &store.KeepnetEntry{EchoGUID: "11111111111111111111111111111111", Species: "c.roach", WeightG: 100, LengthM: 0.2, Cat: 1, KeepLevel: "level_019_american_pond"}
-	a := buildKeepnet25(e, "level_001_lake")
+	a := buildKeepnet25(e, "level_001_lake", 0)
 	time.Sleep(2 * time.Millisecond)
-	b := buildKeepnet25(e, "level_001_lake")
+	b := buildKeepnet25(e, "level_001_lake", 0)
 	fa, fb := a.Field(22), b.Field(22)
 	if fa.U64() == 0 || fb.U64() <= fa.U64() {
 		t.Fatalf("25.f22 必须非 0 且严格递增: %d -> %d", fa.U64(), fb.U64())

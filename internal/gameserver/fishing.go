@@ -1881,9 +1881,9 @@ func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) 
 	}
 	switch {
 	case f.Grade >= 4:
-		sess.pushChatProbe(27, 25, "", kv) // 超级稀有鱼 X 千克
+		sess.pushChatProbe(27, 25, "", kv) // 稀有奖杯（蓝冠）播报，模板 kDlg_Chat_EventFishCaughtRareTrophy
 	case f.Grade == 3:
-		sess.pushChatProbe(27, 26, "", kv) // 稀有鱼 X 千克
+		sess.pushChatProbe(27, 26, "", kv) // 奖杯播报，模板 kDlg_Chat_EventFishCaughtTrophy
 	case newRecord:
 		sess.pushChatProbe(27, 3, "", kv) // 玩家，鱼名 X 千克
 	}
