@@ -54,6 +54,46 @@ func TestCastSetsCastTsAndHookedSchedulePreservesIt(t *testing.T) {
 	st.mu.Unlock()
 }
 
+func TestFishingTickRepairKeepsPendingFish(t *testing.T) {
+	srv, _ := newDetachTestServer(t)
+	sess := newProbeSess(srv)
+	st := srv.stateFor(sess.Userid)
+	fish := &RolledFish{FishGUID: "11111111111111111111111111111111", Species: "m_scorpius"}
+
+	st.mu.Lock()
+	st.CastActive = true
+	st.InWater = false
+	st.NeedBite = true
+	st.Pending = fish
+	st.PushSent = true
+	st.Hooked = true
+	st.Resolved = false
+	const generation = uint64(7)
+	st.castGeneration = generation
+	st.mu.Unlock()
+
+	fields := make([]proto.Field, 7)
+	for i := range fields {
+		fields[i] = proto.Field{Op: "U32", Num: ptrU64(0)}
+	}
+	fields[5] = proto.Field{Op: "U32", Num: ptrU64(0x400)}
+	fields[6] = proto.Field{Op: "STR", Str: strPtr("loc1_02")}
+	tree := proto.Args524(proto.Obj("lobemkloehp", 0, fields...))
+	if _, ok := hFishingStep(&Ctx{Sess: sess, Main: 14, Sub: 7, Tree: tree, DecodeOK: true, Log: logging.Discard()}); !ok {
+		t.Fatal("14/7 未处理")
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.Pending != fish || !st.PushSent || st.biteTimer != nil || st.castGeneration != generation {
+		t.Fatalf("补排覆盖当前鱼: pending_same=%v pushed=%v timer=%v generation=%d->%d",
+			st.Pending == fish, st.PushSent, st.biteTimer != nil, generation, st.castGeneration)
+	}
+	if !st.InWater || st.NeedBite {
+		t.Fatalf("水中状态未正确更新: in_water=%v need_bite=%v", st.InWater, st.NeedBite)
+	}
+}
+
 func TestFindObjSecondU32ForCastSpot(t *testing.T) {
 	obj := proto.Obj("olieodeoaof", 0,
 		proto.Field{Op: "U32", Num: ptrU64(111)},
