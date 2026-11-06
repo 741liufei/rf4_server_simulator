@@ -1214,6 +1214,11 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	castActive := st.CastActive
 	resolved := st.Resolved
 	st.mu.Unlock()
+	fishGUID, species := "", ""
+	if pending != nil {
+		fishGUID, species = pending.FishGUID, pending.Species
+	}
+	ctx.Log.Info("14/11 中鱼", "fish", shortGUID(fishGUID), "species", species, "was_hooked", wasHooked)
 	if pending != nil {
 		if err := srv.consumeHookedBait(ctx.Sess, pending, gear); err != nil {
 			ctx.Log.Warn("中鱼后鱼饵扣减失败", "fish", pending.FishGUID, "err", err)

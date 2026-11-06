@@ -153,7 +153,7 @@ func TestFishHookedEscapeBroadcasts(t *testing.T) {
 		if got := mf0.Num; got == nil || *got != 3 {
 			t.Fatalf("f0=%d 已中鱼跑鱼应走蓝色模板 3，实得 %v", f0, got)
 		}
-		if !bytes.Contains(env.Body, []byte("跑掉了")) {
+		if !bytes.Contains(env.Body, []byte("你的")) {
 			t.Fatalf("f0=%d 推送缺少跑鱼文案: %x", f0, env.Body)
 		}
 	}
@@ -218,7 +218,7 @@ func TestFishTrueEscapeStillBroadcasts(t *testing.T) {
 	if got := mf0.Num; got == nil || *got != 3 {
 		t.Fatalf("真脱钩应走蓝色模板 3，实得 %v", got)
 	}
-	if !bytes.Contains(env.Body, []byte("跑掉了")) {
+	if !bytes.Contains(env.Body, []byte("你的")) {
 		t.Fatalf("推送缺少跑鱼文案: %x", env.Body)
 	}
 }
@@ -253,8 +253,11 @@ func TestFishEventChatTexts(t *testing.T) {
 	if got := srv.fishLandedText(tench(4, 6300), true); !strings.Contains(got, "（新纪录）") {
 		t.Fatalf("蓝冠破纪录播报不符: %q", got)
 	}
-	if got := srv.fishLandedText(tench(2, 800), true); !strings.Contains(got, "新纪录") || strings.Contains(got, "钓获") {
-		t.Fatalf("普通档破纪录播报不符: %q", got)
+	if got := srv.fishLandedText(tench(2, 800), true); !strings.Contains(got, "钓获达标") || !strings.Contains(got, "（新纪录）") {
+		t.Fatalf("达标破纪录播报不符: %q", got)
+	}
+	if got := srv.fishLandedText(tench(2, 800), false); !strings.Contains(got, "钓获达标") {
+		t.Fatalf("达标鱼应播报: %q", got)
 	}
 	if got := srv.fishLandedText(tench(3, 4100), false); !strings.Contains(got, "钓获奖杯") || !strings.Contains(got, "4.10kg") {
 		t.Fatalf("奖杯播报不符: %q", got)
