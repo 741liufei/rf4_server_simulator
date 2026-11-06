@@ -402,6 +402,51 @@ func TestRigExplicitTypeWinsOverComponents(t *testing.T) {
 	}
 }
 
+// TestBottomSimpleSharedSlotReplacesAlternative 验证沉子和喂食器共用槽位时
+// 安装新组件会替换旧组件，而不是在客户端同一槽位叠加两个实例。
+func TestBottomSimpleSharedSlotReplacesAlternative(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	feeder, err := srv.CreateItem(ctx, uid, "feeder_30037", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sinker, err := srv.CreateItem(ctx, uid, "flpsinker_30149", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	runRodSet(t, srv, sess, rod.GUID, feeder.GUID, 0)
+	runRodSet(t, srv, sess, rod.GUID, sinker.GUID, 0)
+
+	rt, found, err := db.GetRigType(ctx, rod.GUID)
+	if err != nil || !found || rt != 12 {
+		t.Fatalf("沉子替换喂食器后 rig_type=%d found=%v err=%v，期望 12", rt, found, err)
+	}
+	row, _ := db.GetItemByGUID(ctx, rod.GUID)
+	f5 := rigStoredF5(t, row)
+	if name := f5.Fields[0].StrOr(); name != "rig_BottomSimple" {
+		t.Fatalf("沉子替换后 f5.f0=%q，期望 rig_BottomSimple", name)
+	}
+	comps := rigCompsOf(f5)
+	if _, ok := comps[rigCompKey(29, 0)]; !ok {
+		t.Fatal("f5 缺少标准沉子29")
+	}
+	if _, ok := comps[rigCompKey(31, 0)]; ok {
+		t.Fatal("f5 不应同时保留喂食器31")
+	}
+	returned, err := db.GetItemByGUID(ctx, feeder.GUID)
+	if err != nil || returned == nil || returned.Container != "backpack" || returned.RigGUID != "" {
+		t.Fatalf("被替换的喂食器未退回背包: row=%+v err=%v", returned, err)
+	}
+}
+
 // TestRigMountKeepsTemplateCompatible 验证装配可自动选择兼容钓组，
 // 且后续玩家显式选择仍具有最高优先级。
 func TestRigMountKeepsTemplateCompatible(t *testing.T) {
@@ -421,13 +466,13 @@ func TestRigMountKeepsTemplateCompatible(t *testing.T) {
 	runRodSet(t, srv, sess, rod.GUID, cage.GUID, 0)
 
 	rt, found, err := db.GetRigType(ctx, rod.GUID)
-	if err != nil || !found || rt != 16 {
-		t.Fatalf("装食笼后 rig_type=%d found=%v err=%v，期望 16", rt, found, err)
+	if err != nil || !found || rt != 12 {
+		t.Fatalf("装食笼后 rig_type=%d found=%v err=%v，期望 12", rt, found, err)
 	}
 	row, _ := db.GetItemByGUID(ctx, rod.GUID)
 	f5 := rigStoredF5(t, row)
-	if name := f5.Fields[0].StrOr(); name != "rig_BottomMethod" {
-		t.Fatalf("装食笼后 f5.f0=%q，期望 rig_BottomMethod", name)
+	if name := f5.Fields[0].StrOr(); name != "rig_BottomSimple" {
+		t.Fatalf("装食笼后 f5.f0=%q，期望 rig_BottomSimple", name)
 	}
 	if _, ok := rigCompsOf(f5)[31]; !ok {
 		t.Fatal("f5 缺少刚安装的食笼31")

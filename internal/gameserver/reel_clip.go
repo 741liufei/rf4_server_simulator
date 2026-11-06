@@ -206,9 +206,13 @@ var rigBaitMountAvail = map[int64]int64{
 }
 
 // baitMountAvailForRig 返回该钓组类型应下发的 f9。
-// 已知钓组一律按表重算（客户端只照 f9 渲染，服务端是唯一权威，
-// 旧全开掩码不能外泄）；未知钓组沿用实例旧值，缺失时退回全开。
+// 飞德竿默认 BottomSimple(12)：上游 126 的窄掩码会让客户端自动选中活饵
+// 安装方式，切竿后表现为自动跳到活饵钓组；这里仅对 12 恢复旧版全开，
+// 其他钓组继续按上游编排表收窄，等上游修复后再去掉此特例。
 func baitMountAvailForRig(rigType, stored int64) int64 {
+	if rigType == 12 {
+		return defaultBaitMountAvail
+	}
 	if m, ok := rigBaitMountAvail[rigType]; ok {
 		return m
 	}
@@ -273,7 +277,7 @@ func (s *Server) savedBaitMount(ctx context.Context, rodGUID string) (int64, boo
 	if err != nil || row == nil {
 		return sel, true
 	}
-	if m, known := rigBaitMountAvail[s.rigTypeOfItem(ctx, row)]; known && sel&m != sel {
+	if m := baitMountAvailForRig(s.rigTypeOfItem(ctx, row), 0); sel&m != sel {
 		return 0, false
 	}
 	return sel, true

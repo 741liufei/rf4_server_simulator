@@ -130,7 +130,7 @@ var rigSlotTemplates = map[int64][]rigSlotTemplate{
 	9:  {{[]int64{29}, 200}, {[]int64{33}, 325}, {[]int64{13}, 150}, {[]int64{12}, 250}},                                         // Carolina
 	10: {{[]int64{29}, 200}, {[]int64{13}, 150}, {[]int64{12}, 250}},                                                             // ThreeWay
 	11: {{[]int64{13}, 150}, {[]int64{12}, 250}},                                                                                 // Wacky
-	12: {{[]int64{47}, 100}, {[]int64{12}, 250}},                                                                                 // BottomSimple
+	12: {{[]int64{47}, 100}, {[]int64{29, 31}, 200}, {[]int64{12}, 250}},                                                         // BottomSimple（沉子/喂食器共用槽，保持简易水底）
 	13: {{[]int64{47}, 100}, {[]int64{12}, 250}},                                                                                 // BottomPaternoster
 	14: {{[]int64{47}, 100}, {[]int64{12}, 250}},                                                                                 // BottomInline
 	15: {{[]int64{47}, 100}, {[]int64{12}, 250}},                                                                                 // BottomLoop（无食笼）
