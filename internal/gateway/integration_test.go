@@ -115,7 +115,8 @@ func TestGatewayReconnectResume(t *testing.T) {
 	fc.Dial(token, false)
 
 	fc.SendRequest(5, 1, 1)
-	if env := fc.WaitResponse(2 * time.Second); env.CallID != 5 {
+	fc.WaitAck(1, 5*time.Second)
+	if env := fc.WaitResponse(5 * time.Second); env.CallID != 5 {
 		t.Fatalf("首请求响应异常")
 	}
 	fc.Close()
@@ -124,7 +125,8 @@ func TestGatewayReconnectResume(t *testing.T) {
 	// 重连：客户端保留 RC4 流
 	fc.Dial(token, true)
 	fc.SendRequest(6, 1, 1)
-	env := fc.WaitResponse(3 * time.Second)
+	fc.WaitAck(2, 5*time.Second)
+	env := fc.WaitResponse(5 * time.Second)
 	if env.Marker != -2 || env.CallID != 6 {
 		t.Fatalf("重连后响应不符: marker=%d call_id=%d", env.Marker, env.CallID)
 	}
