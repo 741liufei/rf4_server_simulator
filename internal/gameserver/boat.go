@@ -12,7 +12,7 @@ package gameserver
 //
 // 因此带 GUID 的验票除了回票对象，还要写入租用状态：
 //   - knpoijanngk = 1（开关值，客户端据此计算剩余时间）
-//   - oieepfcgjgn = 租期分钟数
+//   - oieepfcgjgn = 世界纪元以来的总游戏分钟（与客户端世界时钟 W 同域）
 //   - bkmnbppciao = mbplhipcojh 时效对象 {类型 1, 起始分钟, 时长分钟}
 
 import (
@@ -78,6 +78,15 @@ func hCheckTicket(ctx *Ctx) ([]byte, bool) {
 		if tree := srv.activeRentalTicket(ctx, station); tree != nil {
 			body, err := proto.EncodeValue(tree, ctx.Sess.Table())
 			if err == nil {
+				// activeRentalTicket 可能修正旧版锚点；必须同步替换客户端
+				// 本地票对象，否则它会继续用缓存中的旧锚点判定过期。
+				for _, g := range deepGUIDs(tree) {
+					if !isZeroGUID(g) {
+						ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{g})))
+						ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
+						break
+					}
+				}
 				srv.markPlayerBoarded(ctx, tree)
 				ctx.Log.Info("3/7 复用有效期内的船票", "station", station)
 				return body, true
@@ -229,10 +238,12 @@ func (s *Server) startTicketRent(ctx *Ctx, row *store.Item, def *store.ItemDef) 
 			changed = true
 		}
 	}
-	// oieepfcgjgn 是"租用开始时的游戏时间"（客户端世界时钟 24 倍速、从登录起算），
-	// 不是时长！客户端公式：剩余 = 票时长 + min(oieepfcgjgn, W) - W，
-	// 只有当 oieepfcgjgn 是起始游戏时间时，剩余才会随时间递减。
-	gameMin := uint64(24 * time.Since(ctx.Sess.startedAt).Minutes())
+	// oieepfcgjgn 是租用开始时的世界总游戏分钟，不是时长，也不是本次
+	// 会话内的相对分钟。客户端公式：
+	// 剩余 = 票时长 + min(oieepfcgjgn, W) - W
+	// W 由 2/2 世界时钟拉回世界纪元坐标；若写会话相对值，W 会远大于
+	// 锚点，剩余立即变成负数，BoatWatchDog 会不停地重发 3/7。
+	gameMin := uint64(worldTotalGameMin(time.Now()))
 	if idx := fieldIdxByCS(row.WireClass, "oieepfcgjgn"); idx >= 0 && idx < len(fields) {
 		if u64Of(fields[idx].Num) != gameMin {
 			fields[idx].Num = ptrU64(gameMin)
@@ -336,6 +347,7 @@ func (s *Server) activeRentalTicket(ctx *Ctx, station uint64) *proto.Value {
 				continue // 已过期
 			}
 		}
+		fields = s.repairActiveTicketAnchor(ctx, row, fields)
 		if def, derr := s.DB.GetItemDef(cctx, row.NumericID); derr == nil && def != nil && station > 0 {
 			if st, ok := defAttrU64(def, boatTicketStationAttr); ok && st != station {
 				continue
@@ -349,11 +361,56 @@ func (s *Server) activeRentalTicket(ctx *Ctx, station uint64) *proto.Value {
 	return nil
 }
 
-// pushTicketRemaining 把已租用船票的"剩余分钟"写进票的数值字段并推送。
+// repairActiveTicketAnchor 修复旧版本写下的会话相对锚点。
 //
-// 客户端提示里的到期倒计时直接显示该字段（运行时验证：pioghgjeelp 的返回值
-// 恒等于它，且不随时间变化），所以只能由服务端周期性下发新的剩余值，
-// 提示才会随时间递减。
+// 旧数据把 oieepfcgjgn 写成登录后分钟数，而客户端用世界总游戏分钟 W
+// 计算剩余，导致有效票被立即判过期。租用开始时间保存在时效对象 f2
+// （Unix 分钟），据此反推同域锚点，同时保持原租期不续期。
+func (s *Server) repairActiveTicketAnchor(ctx *Ctx, row *store.Item, fields []proto.Field) []proto.Field {
+	anchorIdx := fieldIdxByCS(row.WireClass, "oieepfcgjgn")
+	rentIdx := fieldIdxByCS(row.WireClass, "bkmnbppciao")
+	if anchorIdx < 0 || anchorIdx >= len(fields) || rentIdx < 0 || rentIdx >= len(fields) {
+		return fields
+	}
+	rent := fields[rentIdx].Val
+	if rent == nil || rent.Kind != proto.KindObj || len(rent.Fields) < 3 || rent.Fields[2].Num == nil {
+		return fields
+	}
+	now := time.Now()
+	startUnixMin := u64Of(rent.Fields[2].Num)
+	nowUnixMin := uint64(now.Unix() / 60)
+	if startUnixMin == 0 || startUnixMin > nowUnixMin {
+		return fields
+	}
+	elapsedGameMin := int64(float64(nowUnixMin-startUnixMin) * gameMinutesPerRealSecond)
+	want := worldTotalGameMin(now) - elapsedGameMin
+	if want < 0 {
+		want = 0
+	}
+	oldAnchor := u64Of(fields[anchorIdx].Num)
+	if oldAnchor == uint64(want) {
+		return fields
+	}
+	fields[anchorIdx].Num = ptrU64(uint64(want))
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return fields
+	}
+	if err := s.DB.UpdateItemFields(ctx.Sess.pushCtx(), row.GUID, fj, row.Qty, row.Durability,
+		row.Workmanship, row.RigGUID); err != nil {
+		ctx.Log.Warn("3/7 修复船票世界时钟锚点失败", "guid", guidShort(row.GUID), "err", err)
+		return fields
+	}
+	row.FieldsJSON = fj
+	ctx.Log.Info("3/7 修复船票世界时钟锚点",
+		"guid", guidShort(row.GUID), "anchor", want, "old_anchor", oldAnchor)
+	return fields
+}
+
+// pushTicketRemaining 刷新已租用船票并记录当前剩余。
+//
+// oieepfcgjgn 必须保持为租用起始的世界总游戏分钟；客户端用
+// pioghgjeelp 根据 W 自行计算剩余，不能把剩余值写回锚点。
 func (s *Session) pushTicketRemaining() {
 	if s.Srv == nil || s.Srv.DB == nil {
 		return
@@ -400,9 +457,6 @@ func (s *Session) pushTicketRemaining() {
 		tree, terr := s.Srv.ItemToTree(cctx, row)
 		if terr != nil {
 			continue
-		}
-		if vi := fieldIdxByCS(row.WireClass, "oieepfcgjgn"); vi >= 0 && vi < len(tree.Fields) {
-			tree.Fields[vi].Num = ptrU64(remain)
 		}
 		// 先"移除"再"添加"，强制客户端替换物品对象并重建提示。
 		s.Push(4, 21, proto.Args524(proto.GuidArr([]string{g})))
