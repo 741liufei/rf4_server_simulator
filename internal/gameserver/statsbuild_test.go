@@ -53,9 +53,24 @@ func TestFishStats321FromCatchLog(t *testing.T) {
 	if got := f4.U32(); got != 4 {
 		t.Fatalf("f4 单日数量纪录=%d，期望4", got)
 	}
+	// f5 客户端 DTO cpenllldpnk 是 float（kg），必须按 F32 位型解码。
 	f5 := dec.Field(5)
 	if got := float64(proto.F32FromBits(f5.U32())); got < 2.1359 || got > 2.1361 {
 		t.Fatalf("f5 单日重量纪录=%f kg，期望2.136", got)
+	}
+	// f6 鱼列表：每鱼种最重一张 320 卡，按重量降序（c.roach 500 / bream 650 / perch 800）。
+	fishList := dec.Field(6).Val
+	if got := fishList.ArgCount(); got != 3 {
+		t.Fatalf("f6 鱼列表条数=%d，期望3（每鱼种一张卡）", got)
+	}
+	if got := fishList.Items[0].Field(0).Str; got == nil || *got != "perch" {
+		t.Fatalf("f6 首卡鱼种=%v，期望 perch（800g 最重）", got)
+	}
+	if got := fishList.Items[0].Field(2).Num; got == nil || *got != 800 {
+		t.Fatalf("f6 首卡重量=%v，期望800", got)
+	}
+	if got := fishList.Items[2].Field(0).Str; got == nil || *got != "c.roach" {
+		t.Fatalf("f6 末卡鱼种=%v，期望 c.roach（500g 最轻）", got)
 	}
 	card := dec.Field(7).Val
 	if card == nil || card.Class != "ippcfiphgfl" {

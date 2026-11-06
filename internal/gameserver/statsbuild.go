@@ -124,6 +124,28 @@ func (s *Server) buildStats321(ctx context.Context, uid int64) (*proto.Value, er
 		biggest = card("max_spin")
 	}
 
+	// f6 鱼列表：客户端 DTO ilhlknehckb.aknbobdjjnk 是 gillkjlbkje[]
+	// （320 纪录卡数组，Cpp2IL 元数据实证），不是空容器。发空数组时统计
+	// 面板的鱼列表一片空白。每鱼种取最重一条，按重量降序。
+	bestBySpecies := map[string]catchStatRow{}
+	for _, r := range rows {
+		if r.FishKey == "" {
+			continue
+		}
+		if prev, ok := bestBySpecies[r.FishKey]; !ok || r.WeightG > prev.WeightG {
+			bestBySpecies[r.FishKey] = r
+		}
+	}
+	fishArgs := proto.Args(proto.S("129"))
+	fishRows := make([]catchStatRow, 0, len(bestBySpecies))
+	for _, r := range bestBySpecies {
+		fishRows = append(fishRows, r)
+	}
+	sort.SliceStable(fishRows, func(i, j int) bool { return fishRows[i].WeightG > fishRows[j].WeightG })
+	for _, r := range fishRows {
+		fishArgs.Items = append(fishArgs.Items, recordCard320(r, true))
+	}
+
 	baitKeys := append([]string(nil), baitOrder...)
 	sort.SliceStable(baitKeys, func(i, j int) bool {
 		return baitCount[baitKeys[i]] > baitCount[baitKeys[j]]
@@ -156,13 +178,15 @@ func (s *Server) buildStats321(ctx context.Context, uid int64) (*proto.Value, er
 	}
 
 	return wiregen.MustMakeObj("jahbacemfof", map[int]*proto.Value{
-		0:  proto.U32(uint32(total)),
-		1:  proto.U32(uint32(rare)),
-		2:  proto.U32(uint32(superRare)), // 蓝冠（grade>=4）
-		3:  proto.U32(uint32(s.playerCounter(ctx, uid, "escapes"))),
-		4:  proto.U32(uint32(maxDailyCount)),
+		0: proto.U32(uint32(total)),
+		1: proto.U32(uint32(rare)),
+		2: proto.U32(uint32(superRare)), // 蓝冠（grade>=4）
+		3: proto.U32(uint32(s.playerCounter(ctx, uid, "escapes"))),
+		4: proto.U32(uint32(maxDailyCount)),
+		// 客户端反编译实证：DTO ilhlknehckb.cpenllldpnk 是 float（典型范围
+		// [0, 2.167] = kg 量纲），此处必须发 F32 位型。
 		5:  proto.F32(float32(maxDailyWeightG / 1000.0)),
-		6:  proto.Args(proto.S("129")),
+		6:  fishArgs,
 		7:  biggest,
 		8:  card("strongest"),
 		9:  proto.Null(),
