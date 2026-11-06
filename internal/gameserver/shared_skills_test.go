@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -303,17 +304,31 @@ func sharedSkillNodeForTest(t *testing.T, cat *proto.Value, node int64) *proto.V
 func TestSharedSkillEffectsCountOneGroup(t *testing.T) {
 	srv := sharedSkillTestServer(t, 10)
 	ctx := t.Context()
-	if err := srv.DB.SetSkillNode(ctx, sharedSkillUID, 501, 2); err != nil {
-		t.Fatal(err)
+	const level = int64(2)
+	for _, node := range []int64{501, 503} {
+		if err := srv.DB.SetSkillNode(ctx, sharedSkillUID, node, level); err != nil {
+			t.Fatal(err)
+		}
 	}
 	spent, err := srv.DB.SkillNodeLevelSum(ctx, sharedSkillUID)
 	if err != nil || spent != 2 {
 		t.Fatalf("shared group points=%d err=%v, want 2", spent, err)
 	}
-	// 节点效果含义尚未确认，合成技能只使用熟练度，不重复叠加节点通用效果。
+	// 节点效果来自 skill_fish_effect_def；501/503 共享同一技能身份，只结算一次。
 	_, mastery, effect := srv.castSkillStats(ctx, sharedSkillUID, 1)
 	bonus := srv.fishingBonus(ctx, sharedSkillUID, 1)
-	if mastery != 0 || effect != 0 || bonus != neutralFishingSkillBonus() {
-		t.Fatalf("shared skill gained an unconfirmed generic effect: mastery=%v effect=%v bonus=%+v", mastery, effect, bonus)
+	var perLevel, cap float64
+	if err := srv.DB.SQL.QueryRow(`
+		SELECT per_level,cap FROM skill_fish_effect_def
+		WHERE cat_id=1 AND node_id=501`).Scan(&perLevel, &cap); err != nil {
+		t.Fatal(err)
+	}
+	want := math.Min(cap, float64(level)*perLevel)
+	got := bonus.EcologyInterest + bonus.RareFish + bonus.LureTolerance +
+		bonus.WeatherAdaptation + bonus.LayerAccuracy + bonus.WormBoost +
+		bonus.PredatorBoost + bonus.SalmonidBoost + bonus.BottomBoost + bonus.FloatBoost
+	if mastery != 0 || effect != 0 || math.Abs(got-want) > 1e-9 {
+		t.Fatalf("shared skill effect counted incorrectly: mastery=%v effect=%v got=%v want=%v bonus=%+v",
+			mastery, effect, got, want, bonus)
 	}
 }

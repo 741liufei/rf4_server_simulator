@@ -15,7 +15,19 @@ import (
 
 type craftedMaterial struct {
 	row *store.Item
+	// def 决定成品里嵌套子物品的协议类别与模型 numeric_id。
 	def *store.ItemDef
+	// physical 是玩家真正消耗的材料定义。强度按它计算，避免"最接近的
+	// 前导线模型"把 60kg 编织线悄悄折算成 36kg。
+	physical *store.ItemDef
+}
+
+// strengthDef 返回计算强度应采用的定义：真实材料优先，其次模型定义。
+func (m craftedMaterial) strengthDef() *store.ItemDef {
+	if m.physical != nil {
+		return m.physical
+	}
+	return m.def
 }
 
 type craftedLeaderMaterials struct {
@@ -43,10 +55,16 @@ func (s *Server) leaderWireCatalog(ctx context.Context) ([]*store.ItemDef, error
 	return defs, err
 }
 
-// leaderWireDefForLine 找到普通主线对应的前导线定义。
-// 客户端把前导内线渲染成 haifiodldde 模型，普通主线模型是
-// hfblbgmohio；只改协议外壳而保留普通主线的 numeric_id 会在
-// 制作结果页触发 InvalidCastException。
+// leaderWireDefForLine 找到线材对应的前导线定义。
+//
+// 客户端把前导内线渲染成前导线模型，普通主线是另一套模型；只换协议外壳
+// 而保留普通主线的 numeric_id，会在制作结果页触发 InvalidCastException，
+// 所以成品内线必须落在真实的 category 15 定义上。
+//
+// 目录里只有 193 条前导线定义，而主线有 1044 条，其中 890 条没有四项参数
+// 逐一相同的孪生前导线（编织线几乎都没有）。旧实现只接受精确匹配，玩家用
+// 这些线做引线就直接失败。现在按"参数完全一致 → 拉力与线径最接近"分级选择，
+// 只有目录为空时才失败；成品强度另按玩家真实消耗的线材计算。
 func (s *Server) leaderWireDefForLine(ctx context.Context, lineDef *store.ItemDef) (*store.ItemDef, error) {
 	if lineDef == nil {
 		return nil, errors.New("缺少主线定义")
@@ -57,41 +75,112 @@ func (s *Server) leaderWireDefForLine(ctx context.Context, lineDef *store.ItemDe
 	if lineDef.Category != gearCatLine {
 		return nil, fmt.Errorf("线材品类=%d，不是普通主线或前导线", lineDef.Category)
 	}
-
-	target := defAttrs(lineDef)
-	for _, key := range leaderWireMatchAttrs {
-		if _, ok := target[key]; !ok {
-			return nil, fmt.Errorf("主线 %s 缺少匹配参数 %s", lineDef.ItemID, key)
-		}
-	}
 	candidates, err := s.leaderWireCatalog(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	var best *store.ItemDef
-	for _, candidate := range candidates {
-		attrs := defAttrs(candidate)
-		matched := true
-		for _, key := range leaderWireMatchAttrs {
-			if target[key] != attrs[key] {
-				matched = false
-				break
-			}
-		}
-		if !matched {
-			continue
-		}
-		if best == nil ||
-			(candidate.Kind == lineDef.Kind && best.Kind != lineDef.Kind) ||
-			(candidate.Kind == lineDef.Kind && best.Kind == lineDef.Kind && candidate.ItemID < best.ItemID) {
-			best = candidate
-		}
-	}
+	best := pickLeaderWireDef(lineDef, candidates)
 	if best == nil {
-		return nil, fmt.Errorf("主线 %s 没有参数一致的前导线定义", lineDef.ItemID)
+		return nil, fmt.Errorf("前导线目录为空，主线 %s 无法映射", lineDef.ItemID)
 	}
 	return best, nil
+}
+
+// leaderWirePick 是前导线映射中的一个候选及其评分。
+type leaderWirePick struct {
+	def      *store.ItemDef
+	exact    bool
+	sameKind bool
+	distance float64
+}
+
+// leaderWireDistance 用对数距离衡量两根线材在拉力和线径上的差距。
+// 线材参数以 F32 位型存放，必须先还原成物理量再比较。
+func leaderWireDistance(lineKg, lineDia, wireKg, wireDia float64) float64 {
+	score := 0.0
+	if lineKg > 0 && wireKg > 0 {
+		score += math.Abs(math.Log(wireKg / lineKg))
+	}
+	if lineDia > 0 && wireDia > 0 {
+		score += math.Abs(math.Log(wireDia / lineDia))
+	}
+	return score
+}
+
+// betterLeaderWirePick 报告 cand 是否优于 best：参数一致优先，其次物理距离
+// 更小，再用同厂牌和 numeric_id 保证结果稳定可复现。
+func betterLeaderWirePick(best, cand *leaderWirePick) bool {
+	if cand == nil {
+		return false
+	}
+	if best == nil {
+		return true
+	}
+	if best.exact != cand.exact {
+		return cand.exact
+	}
+	if best.distance != cand.distance {
+		return cand.distance < best.distance
+	}
+	if best.sameKind != cand.sameKind {
+		return cand.sameKind
+	}
+	return cand.def.NumericID < best.def.NumericID
+}
+
+// pickLeaderWireDef 在候选里挑一根最贴近线材的前导线定义。
+// 零拉力定义只会做出强度为 0 的引线，只有在没有其它候选时才会被选中。
+func pickLeaderWireDef(lineDef *store.ItemDef, candidates []*store.ItemDef) *store.ItemDef {
+	lineAttrs := defAttrs(lineDef)
+	targetComplete := true
+	for _, key := range leaderWireMatchAttrs {
+		if _, ok := lineAttrs[key]; !ok {
+			targetComplete = false
+			break
+		}
+	}
+	lineKg := itemDefF32(lineDef, gearAttrMaxLoad)
+	lineDia := itemDefF32(lineDef, gearAttrDiameter)
+
+	var usable, fallback *leaderWirePick
+	for _, candidate := range candidates {
+		if candidate == nil || candidate.Category != gearCatLeaderWire {
+			continue
+		}
+		attrs := defAttrs(candidate)
+		exact := targetComplete
+		if exact {
+			for _, key := range leaderWireMatchAttrs {
+				if lineAttrs[key] != attrs[key] {
+					exact = false
+					break
+				}
+			}
+		}
+		wireKg := itemDefF32(candidate, gearAttrMaxLoad)
+		pick := &leaderWirePick{
+			def:      candidate,
+			exact:    exact,
+			sameKind: candidate.Kind == lineDef.Kind,
+			distance: leaderWireDistance(lineKg, lineDia, wireKg,
+				itemDefF32(candidate, gearAttrDiameter)),
+		}
+		if betterLeaderWirePick(fallback, pick) {
+			fallback = pick
+		}
+		if lineKg <= 0 || wireKg > 0 {
+			if betterLeaderWirePick(usable, pick) {
+				usable = pick
+			}
+		}
+	}
+	if usable != nil {
+		return usable.def
+	}
+	if fallback != nil {
+		return fallback.def
+	}
+	return nil
 }
 
 // consumeLeaderCraftMaterialsTx 按配方需求扣除真实材料，并保留线材和连接件
@@ -237,8 +326,8 @@ func (s *Server) craftDemandMatchesTx(
 }
 
 // materializeCraftedLeaderTx 将真实线材与连接件写入成品引线的嵌套配置。
-// 根物品 ID 保持配方指定的引线家族/长度；子物品使用真实材料 numeric_id，
-// 因此模型引用与线径/拉力都不再落到固定模板。
+// 根物品 ID 保持配方指定的引线家族/长度；内线模型取最接近真实线材的前导线
+// 定义，强度仍按玩家真正消耗的那根线计算，既不套固定模板也不被模型削弱。
 func (s *Server) materializeCraftedLeaderTx(
 	ctx context.Context,
 	tx *sql.Tx,
@@ -252,7 +341,10 @@ func (s *Server) materializeCraftedLeaderTx(
 	if err != nil {
 		return err
 	}
+	// 模型与协议身份取前导线定义，强度仍按真实线材计算。
+	realLineDef := materials.line.def
 	materials.line.def = wireDef
+	materials.line.physical = realLineDef
 	def, err := itemDefByItemIDTx(ctx, tx, row.ItemID)
 	if err != nil || def == nil {
 		return fmt.Errorf("引线成品定义不存在: %s", row.ItemID)
@@ -362,7 +454,7 @@ func applyCraftedMaterialState(obj *proto.Value, material craftedMaterial, lengt
 			obj.Fields[idx].Num = ptrU64(uint64(lengthCM))
 		}
 	}
-	strength := itemDefF32(material.def, gearAttrMaxLoad) * material.row.Durability * material.row.Workmanship
+	strength := itemDefF32(material.strengthDef(), gearAttrMaxLoad) * material.row.Durability * material.row.Workmanship
 	if strength > 0 {
 		setWireFloat(obj.Fields, obj.Class, fieldIdxByCS(obj.Class, csStrength), strength)
 	}
@@ -370,7 +462,8 @@ func applyCraftedMaterialState(obj *proto.Value, material craftedMaterial, lengt
 }
 
 // repairCraftedLeaderWire 修复旧版本自制引线中内嵌的普通主线对象。
-// 返回 invalid 表示该物品没有可映射的前导线定义，必须从背包隔离。
+// 返回 invalid 表示这件引线根本没有可搬运的内嵌线材（或前导线目录为空），
+// 必须从背包隔离；参数不一致已不再算无效。
 func (s *Server) repairCraftedLeaderWire(
 	ctx context.Context,
 	it *store.Item,
@@ -427,6 +520,8 @@ func (s *Server) repairCraftedLeaderWire(
 			Durability:  readFloat(lineObj, csDurability),
 		},
 		def: wireDef,
+		// 强度仍按玩家原本那根线材计算。
+		physical: lineDef,
 	}
 	if material.row.Workmanship <= 0 {
 		material.row.Workmanship = it.Workmanship
