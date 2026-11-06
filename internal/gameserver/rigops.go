@@ -1200,6 +1200,14 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 		return res
 	}
 
+	// 拟饵的钩位在实例 f0 的出厂钩数组里，不走竿的 f5 组件表。
+	// 走通用装配路径只会把钩从背包摘走、拟饵仍显示原钩（换钩无效）。
+	if hasCat && itemCat == catHook {
+		if prow, perr := s.DB.GetItemByGUID(ctx, parentGUID); perr == nil && isLureRow(prow) {
+			return s.lureHookMount(ctx, uid, parentGUID, itemGUID, extra)
+		}
+	}
+
 	// 当前钓组模板没有该品类槽位时只记录告警，不拒绝装配。
 	// 饵、尖梢、线、轮和包装盒本来就不在模板槽中。
 	if hasCat && !templateExemptCats[itemCat] {
@@ -1736,6 +1744,10 @@ func (s *Server) rigRemoveComponent(ctx context.Context, uid int64, parentGUID s
 // rigRemoveComponentInstance 处理 17/3，优先按请求中的 GUID 或序号定位组件；
 // 两者都缺失时才拆该品类第一件，避免误删同品类其他实例。
 func (s *Server) rigRemoveComponentInstance(ctx context.Context, uid int64, parentGUID string, slot int64, itemGUID string, extra int64) *rigDetachResult {
+	// 拟饵钩位在实例 f0，不在 f5 组件表：按钩 GUID/序号直接改数组。
+	if prow, perr := s.DB.GetItemByGUID(ctx, parentGUID); perr == nil && isLureRow(prow) && (slot == catHook || slot == 0) {
+		return s.lureHookRemove(ctx, uid, parentGUID, itemGUID, extra)
+	}
 	comps := s.storedRigComponents(ctx, parentGUID)
 	if validRigGUID(itemGUID) {
 		if key, comp, ok := rigCompKeyForGUID(comps, itemGUID); ok && rigCompCategory(key) == slot {
@@ -2832,8 +2844,18 @@ func hRigRemoveCompFamily(ctx *Ctx) ([]byte, bool) {
 	if len(ints) > 1 {
 		slot = int64(ints[1])
 	}
+	// 请求带物品 GUID 时按 GUID 精确拆（15/2 换钩/拆钩必须拆指定那颗），
+	// 不带 GUID 时退回按槽位拆第一件。
+	itemGUID := ""
+	if len(guids) > 1 {
+		itemGUID = guids[1]
+	}
+	extra := int64(0)
+	if len(ints) > 2 {
+		extra = int64(ints[2])
+	}
 	cctx := ctx.Sess.pushCtx()
-	srv.rigRemoveComponent(cctx, ctx.Sess.Userid, guids[0], slot)
+	srv.rigRemoveComponentInstance(cctx, ctx.Sess.Userid, guids[0], slot, itemGUID, extra)
 	body, err := proto.EncodeValue(srv.buildRigSnapshotFull(cctx, ctx.Sess.Userid), ctx.Sess.Table())
 	if err != nil {
 		return nil, false
