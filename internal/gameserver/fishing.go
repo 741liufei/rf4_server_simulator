@@ -1701,7 +1701,7 @@ func (s *Server) notifyFishReleased(sess *Session, f *RolledFish) {
 // 客户端内置本地化模板：4=鱼线轮损坏 5=鱼竿损坏 6=鱼线拉断
 // 7=鱼脱钩 10=牙齿咬断钓组 30=引线(子线)断了。
 var escapeTemplateKind = map[string]int{
-	"脱钩": 7, "脱钩离开": 7, "咬钩未刺中": 7,
+	"脱钩离开": 7,
 	"断主线": 6, "断子线": 30,
 	"断竿":     5,
 	"渔线轮超载":  4,
