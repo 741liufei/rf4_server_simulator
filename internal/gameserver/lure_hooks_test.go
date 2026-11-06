@@ -140,3 +140,87 @@ func TestLureHookSwapLeavesNoRigComponentRow(t *testing.T) {
 		}
 	}
 }
+
+// 拟饵与鱼钩都必须属于当前玩家；否则可直接操作别人的物品。
+func TestLureHookRejectsForeignItems(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	const owner, stranger = int64(1000001), int64(1000002)
+
+	lure, err := s.CreateItem(t.Context(), owner, "spinnerbaits_1244", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreignHook, err := s.CreateItem(t.Context(), stranger, "c_hook_20712", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := s.rigSetComponent(t.Context(), owner, lure.GUID, catHook, foreignHook.GUID, 250,
+		rigSetOpts{ParentType: familyLure, EnforceCategory: true, SplitStack: true})
+	if !res.Rejected {
+		t.Fatalf("不应允许装配其他玩家的鱼钩: %+v", res)
+	}
+
+	foreignLure, err := s.CreateItem(t.Context(), stranger, "spinnerbaits_1244", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownHook, err := s.CreateItem(t.Context(), owner, "c_hook_20712", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res = s.rigSetComponent(t.Context(), owner, foreignLure.GUID, catHook, ownHook.GUID, 250,
+		rigSetOpts{ParentType: familyLure, EnforceCategory: true, SplitStack: true})
+	if !res.Rejected {
+		t.Fatalf("不应允许修改其他玩家的拟饵: %+v", res)
+	}
+	if det := s.rigRemoveComponentInstance(t.Context(), owner, foreignLure.GUID, catHook, "", 250); det != nil {
+		t.Fatalf("不应允许拆其他玩家拟饵的钩: %+v", det)
+	}
+}
+
+// 竿上拟饵的 bait_hook 关联以竿 GUID 为行、key=bait_hook:<拟饵GUID>；
+// 换钩要改成新钩，拆钩要删除旧关联。
+func TestLureHookSelectionTracksSwapAndRemove(t *testing.T) {
+	s, db := newRigTestServer(t)
+	const uid = int64(1000001)
+	lure, err := s.CreateItem(t.Context(), uid, "spinnerbaits_1244", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := lureTestHooks(t, s, lure.GUID)
+	if len(before) == 0 {
+		t.Fatal("测试拟饵没有出厂钩")
+	}
+	const rodGUID = "00112233445566778899aabbccddeeff"
+	key := "bait_hook:" + lure.GUID
+	if err := db.UpsertRodSetting(t.Context(), rodGUID, key, before[0]); err != nil {
+		t.Fatal(err)
+	}
+
+	hook, err := s.CreateItem(t.Context(), uid, "c_hook_20712", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res := s.rigSetComponent(t.Context(), uid, lure.GUID, catHook, hook.GUID, 250,
+		rigSetOpts{ParentType: familyLure, EnforceCategory: true, SplitStack: true}); res.Rejected {
+		t.Fatalf("拟饵换钩被拒: %+v", res)
+	}
+	var selected string
+	if err := db.SQL.QueryRow(`SELECT value FROM rod_setting WHERE guid=? AND key=?`, rodGUID, key).Scan(&selected); err != nil {
+		t.Fatal(err)
+	}
+	if selected != hook.GUID {
+		t.Fatalf("换钩后 bait_hook 应指向新钩 %s，实得 %s", hook.GUID, selected)
+	}
+
+	if det := s.rigRemoveComponentInstance(t.Context(), uid, lure.GUID, catHook, hook.GUID, 250); det == nil {
+		t.Fatal("拟饵拆钩失败")
+	}
+	var n int
+	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM rod_setting WHERE guid=? AND key=?`, rodGUID, key).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("拆钩后 bait_hook 关联应删除，实存 %d 行", n)
+	}
+}

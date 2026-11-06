@@ -125,12 +125,14 @@ func (s *Server) dropLureHookRows(ctx context.Context, lureGUID string) {
 func (s *Server) lureHookMount(ctx context.Context, uid int64, lureGUID, hookGUID string, extra int64) *rigSetResult {
 	res := &rigSetResult{UpdatedTrees: []*proto.Value{}}
 	lureRow, err := s.DB.GetItemByGUID(ctx, lureGUID)
-	if err != nil || !isLureRow(lureRow) {
+	if err != nil || !isLureRow(lureRow) || lureRow.UID != uid {
+		s.log.Warn("拟饵换钩被拒：拟饵不属于当前玩家", "lure", shortGUID(lureGUID), "uid", uid)
 		res.Rejected = true
 		return res
 	}
 	hookRow, err := s.DB.GetItemByGUID(ctx, hookGUID)
-	if err != nil || hookRow == nil {
+	if err != nil || hookRow == nil || hookRow.UID != uid || hookRow.Container != "backpack" || hookRow.RigGUID != "" {
+		s.log.Warn("拟饵换钩被拒：鱼钩不属于当前玩家或不在背包", "hook", shortGUID(hookGUID), "uid", uid)
 		res.Rejected = true
 		return res
 	}
@@ -204,12 +206,12 @@ func (s *Server) lureHookMount(ctx context.Context, uid int64, lureGUID, hookGUI
 	}
 
 	s.dropLureHookRows(ctx, lureGUID)
+	s.setLureHookSelection(ctx, lureGUID, hookGUID)
 	if lure, lerr := s.DB.GetItemByGUID(ctx, lureGUID); lerr == nil && lure != nil {
 		if t, terr2 := s.itemTree(ctx, lure); terr2 == nil {
 			res.UpdatedTrees = append(res.UpdatedTrees, t)
 		}
 	}
-	s.forgetLureHookSelection(ctx, lureGUID)
 	res.MountedGUID = hookGUID
 	s.log.Info("拟饵换钩", "lure", shortGUID(lureGUID), "hook", shortGUID(hookGUID), "ordinal", ordinal)
 	return res
@@ -219,7 +221,8 @@ func (s *Server) lureHookMount(ctx context.Context, uid int64, lureGUID, hookGUI
 // hookGUID 非空时按 GUID 定位，否则按 extra/活动钩定位。
 func (s *Server) lureHookRemove(ctx context.Context, uid int64, lureGUID, hookGUID string, extra int64) *rigDetachResult {
 	lureRow, err := s.DB.GetItemByGUID(ctx, lureGUID)
-	if err != nil || !isLureRow(lureRow) {
+	if err != nil || !isLureRow(lureRow) || lureRow.UID != uid {
+		s.log.Warn("拟饵拆钩被拒：拟饵不属于当前玩家", "lure", shortGUID(lureGUID), "uid", uid)
 		return nil
 	}
 	fields, err := FieldsFromJSON(lureRow.FieldsJSON)
@@ -259,7 +262,7 @@ func (s *Server) lureHookRemove(ctx context.Context, uid int64, lureGUID, hookGU
 
 	res := &rigDetachResult{CompGUID: removedGUID}
 	if removedGUID != "" {
-		if row, rerr := s.DB.GetItemByGUID(ctx, removedGUID); rerr == nil && row != nil {
+		if row, rerr := s.DB.GetItemByGUID(ctx, removedGUID); rerr == nil && row != nil && row.UID == uid {
 			s.returnToBackpack(ctx, row)
 			if fresh, ferr := s.DB.GetItemByGUID(ctx, removedGUID); ferr == nil && fresh != nil {
 				if t, terr := s.itemTree(ctx, fresh); terr == nil {
@@ -270,7 +273,7 @@ func (s *Server) lureHookRemove(ctx context.Context, uid int64, lureGUID, hookGU
 	}
 	s.dropLureHookRows(ctx, lureGUID)
 	// 选中钩关联指向旧钩时必须让位，否则上鱼判定仍按旧钩（甚至是不存在的 GUID）。
-	s.forgetLureHookSelection(ctx, lureGUID)
+	s.setLureHookSelection(ctx, lureGUID, "")
 
 	// 活动钩被拆后下标要留在有效范围内，否则下次读 f0 会越界。
 	if len(items) > 0 {
@@ -286,9 +289,18 @@ func (s *Server) lureHookRemove(ctx context.Context, uid int64, lureGUID, hookGU
 	return res
 }
 
-// forgetLureHookSelection 删除拟饵↔钩的选中关联（bait_hook 记录）。
-// 换钩/拆钩后旧记录指向的钩已不在钩位上，留着会让上鱼判定用错钩。
-func (s *Server) forgetLureHookSelection(ctx context.Context, lureGUID string) {
-	_, _ = s.DB.SQL.ExecContext(ctx, `DELETE FROM rod_setting WHERE guid=? AND key=?`,
-		lureGUID, "bait_hook:"+lureGUID)
+// setLureHookSelection 同步竿上拟饵的 bait_hook 关联。
+// 关联行以竿 GUID 为主键、key=bait_hook:<拟饵GUID>、value=当前钩 GUID；
+// hookGUID 为空时删除关联，由后续 baitHookAssignments 按新活动钩重建。
+func (s *Server) setLureHookSelection(ctx context.Context, lureGUID, hookGUID string) {
+	key := "bait_hook:" + lureGUID
+	var err error
+	if hookGUID == "" {
+		_, err = s.DB.SQL.ExecContext(ctx, `DELETE FROM rod_setting WHERE key=?`, key)
+	} else {
+		_, err = s.DB.SQL.ExecContext(ctx, `UPDATE rod_setting SET value=? WHERE key=?`, hookGUID, key)
+	}
+	if err != nil {
+		s.log.Warn("拟饵钩位关联同步失败", "lure", shortGUID(lureGUID), "hook", shortGUID(hookGUID), "err", err)
+	}
 }
