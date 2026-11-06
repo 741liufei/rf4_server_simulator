@@ -5,6 +5,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 
 	"rf4server/internal/store"
 )
@@ -170,6 +171,29 @@ func nestedF32(m map[string]any, key string) float64 {
 
 func rodPowerKg(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrMaxLoad) }
 func rodLengthM(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrLength) }
+
+// missingRodDataLogged 记录已经告警过"缺物理字段"的竿 itemID，每个竿只告警一次，
+// 避免每次抛竿/断件都刷日志。
+var missingRodDataLogged sync.Map
+
+// logMissingRodPhysics 竿有定义但缺 MaxLoad 或长度时告警一次。
+// 只观察、不改判定：缺 MaxLoad 的竿在 gearBreakLimitKg 里被静默跳过，
+// 等于这根竿永远不会成为最弱环（不会断）；缺长度则抛投距离拿不到竿长修正。
+func (s *Server) logMissingRodPhysics(rodItemID string, def *store.ItemDef) {
+	if s == nil || s.log == nil || strings.TrimSpace(rodItemID) == "" || def == nil {
+		return
+	}
+	power := rodPowerKg(def)
+	length := rodLengthM(def)
+	if power > 0 && length > 0 {
+		return
+	}
+	if _, dup := missingRodDataLogged.LoadOrStore(rodItemID, true); dup {
+		return
+	}
+	s.log.Warn("竿缺少物理字段，最弱环/抛投将静默跳过", "rod", rodItemID,
+		"max_load_kg", power, "length_m", length)
+}
 func lineStrengthKg(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrMaxLoad) }
 func lineDiameterMM(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrDiameter) }
 func lineLengthM(def *store.ItemDef) int64      { return itemDefInt(def, gearAttrLineLen) }
@@ -399,6 +423,7 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 		return v * durability
 	}
 	spec.RodPowerKg = applyDurability(rodPowerKg(load(ids.Rod)), ids.RodDurability)
+	s.logMissingRodPhysics(ids.Rod, load(ids.Rod))
 	spec.ReelPresent = strings.TrimSpace(ids.Reel) != ""
 	if spec.ReelPresent {
 		spec.ReelDragKg = reelDragMaxKg(load(ids.Reel)) * reelLockMultiplier(ids.ReelDurability)
