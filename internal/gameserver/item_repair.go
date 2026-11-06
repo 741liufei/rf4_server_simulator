@@ -54,6 +54,7 @@ func (s *Server) RepairItemPhysics(ctx context.Context) error {
 	changed := 0
 	rigsRepaired := 0
 	quarantined := 0
+	restored := 0
 	for _, guid := range guids {
 		it, err := s.DB.GetItemByGUID(ctx, guid)
 		if err != nil {
@@ -88,6 +89,27 @@ func (s *Server) RepairItemPhysics(ctx context.Context) error {
 			quarantined++
 			s.log.Warn("无效自制引线已隔离", "guid", guid, "item", it.ItemID)
 			continue
+		}
+		if it.Container == craftedLeaderQuarantineContainer {
+			// 旧版本把"找不到参数完全一致的前导线定义"的引线关进隔离区，
+			// 玩家从此看不见自己做出来的引线。映射放宽后必须把物品放回原容器。
+			restore := "backpack"
+			if it.RigGUID != "" {
+				restore = "rig"
+			}
+			if err := s.DB.UpdateItemContainer(ctx, it.GUID, restore); err != nil {
+				return fmt.Errorf("物品物理状态修复：解除引线隔离 %s: %w", guid, err)
+			}
+			if restore == "backpack" {
+				if slot, serr := s.DB.NextFreeSlot(ctx, it.UID, "backpack"); serr == nil && slot >= 0 {
+					if uerr := s.DB.SetItemSlot(ctx, it.GUID, slot); uerr != nil {
+						return fmt.Errorf("物品物理状态修复：分配引线背包槽位 %s: %w", guid, uerr)
+					}
+				}
+			}
+			restored++
+			it.Container = restore
+			s.log.Info("自制引线已解除隔离", "guid", guid, "item", it.ItemID, "container", restore)
 		}
 		before, _ := FieldsToJSON(fields)
 		obj := proto.Obj(it.WireClass, uint32(it.TypeID), fields...)
@@ -157,13 +179,13 @@ func (s *Server) RepairItemPhysics(ctx context.Context) error {
 		}
 	}
 
-	marker := fmt.Sprintf("done;version=%s;scanned=%d;changed=%d;rods=%d;quarantined=%d",
-		itemPhysicsRepairVersion, len(guids), changed, rigsRepaired, quarantined)
+	marker := fmt.Sprintf("done;version=%s;scanned=%d;changed=%d;rods=%d;quarantined=%d;leaders_restored=%d",
+		itemPhysicsRepairVersion, len(guids), changed, rigsRepaired, quarantined, restored)
 	if err := s.DB.KVSet(ctx, itemPhysicsRepairKey, marker); err != nil {
 		return fmt.Errorf("物品物理状态修复：写完成标记: %w", err)
 	}
 	s.log.Info("物品物理状态修复完成", "version", itemPhysicsRepairVersion,
 		"items_changed", changed, "rods_repaired", rigsRepaired,
-		"quarantined", quarantined, "total", len(guids))
+		"quarantined", quarantined, "leaders_restored", restored, "total", len(guids))
 	return nil
 }
