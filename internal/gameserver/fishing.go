@@ -69,6 +69,7 @@ type FishState struct {
 	castGeneration  uint64
 	biteTicket      uint64
 	pendingTicket   uint64
+	PendingRepush   int           // 14/12 f0=3/5/6 连续拒收鱼实体时的重推次数
 	BiteAt          time.Time     // 原定咬钩绝对时刻；硬重启后据此恢复 timer
 	Keepnet         []*RolledFish // 回退缓存（DB 权威）
 	Bait            string
@@ -227,6 +228,10 @@ func (s *Server) armPendingTimerLocked(uid int64, st *FishState, delay time.Dura
 	fish := st.Pending
 	st.pendingTimer = time.AfterFunc(delay, func() { s.repushPendingTicket(uid, ticket, fish) })
 }
+
+// maxPendingRepush 限制 14/12 f0=3/5/6 连续拒收鱼实体时的重推次数。
+// 超过后放弃这尾鱼，避免每 6 秒无限重发 14/14。
+const maxPendingRepush = 2
 
 // RolledFish 待结算/已结算的鱼。
 type RolledFish struct {
@@ -1502,6 +1507,7 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.CastActive = true
 	st.Resolved = false
 	st.Pending = nil
+	st.PendingRepush = 0
 	if !preserveHooked {
 		st.Hooked = false
 	}
@@ -1609,6 +1615,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		st.Armed = nil
 		f.LocLevel = s.currentLevel(uid)
 		st.Pending = f
+		st.PendingRepush = 0
 		gear, generation := st.GearGuid, st.castGeneration
 		st.mu.Unlock()
 		s.pushPendingBite(sess, st, f, gear, generation)
@@ -1656,6 +1663,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 	f.HappyHour, f.HappyHourKnown = sess.currentHappyHour().Active, true
 	f.LocLevel = s.currentLevel(uid)
 	st.Pending = f
+	st.PendingRepush = 0
 	gear, generation := st.GearGuid, st.castGeneration
 	st.mu.Unlock()
 

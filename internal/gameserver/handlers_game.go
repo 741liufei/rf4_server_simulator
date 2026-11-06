@@ -1076,8 +1076,16 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 		st.cancelBiteTimerLocked()
 		st.PushSent = false
 		st.Hooked = false
-		if st.CastActive && st.Pending != nil {
+		st.PendingRepush++
+		if st.PendingRepush <= maxPendingRepush && st.CastActive && st.Pending != nil {
 			srv.armPendingTimerLocked(ctx.Sess.Userid, st, 6*time.Second)
+		} else {
+			// 连续拒收说明当前钓组状态与鱼实体不兼容；继续重推只会每 6 秒
+			// 重新刷一次鱼。放弃这尾鱼，等玩家重新抛竿。
+			ctx.Log.Info("14/12 连续拒收鱼实体，停止重推", "f0", f0, "retries", maxPendingRepush)
+			st.Pending = nil
+			st.PendingRepush = 0
+			st.Resolved = true
 		}
 		st.mu.Unlock()
 		return nil, true
