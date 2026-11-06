@@ -20,12 +20,32 @@ func (d *DB) DeleteKeepnetTx(ctx context.Context, tx *sql.Tx, uid int64, guid st
 }
 
 // RemoveOwnedItems 让放生和普通物品删除在同一事务中保留玩家边界。
+//
+// RemoveOwnedItems releases fish and removes ordinary items in one transaction,
+// preserving the player's ownership boundary.
 func (d *DB) RemoveOwnedItems(ctx context.Context, uid int64, guids []string) (removed, fish []string, err error) {
 	tx, err := d.SQL.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer tx.Rollback()
+	removed, fish, err = d.RemoveOwnedItemsTx(ctx, tx, uid, guids)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, err
+	}
+	return removed, fish, nil
+}
+
+// RemoveOwnedItemsTx 在调用方事务中删除本人物品并返回实际删除和放生的 GUID。
+// 重复或非本人 GUID 不产生副作用；调用方负责提交或回滚及提交后的在线状态同步。
+//
+// RemoveOwnedItemsTx removes owned items in the caller's transaction and returns
+// the removed and released GUIDs. Duplicate or foreign GUIDs have no effect. The
+// caller owns commit/rollback and synchronizes online state only after commit.
+func (d *DB) RemoveOwnedItemsTx(ctx context.Context, tx *sql.Tx, uid int64, guids []string) (removed, fish []string, err error) {
 	seen := make(map[string]bool, len(guids))
 	for _, guid := range guids {
 		if seen[guid] {
@@ -52,9 +72,6 @@ func (d *DB) RemoveOwnedItems(ctx context.Context, uid int64, guids []string) (r
 		if count != 0 {
 			removed = append(removed, guid)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, nil, err
 	}
 	return removed, fish, nil
 }

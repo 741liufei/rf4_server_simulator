@@ -85,36 +85,8 @@ func (s *Server) prepareStoreGoods(ctx context.Context, uid int64, itemID string
 		return nil, false, fmt.Errorf("无定义 %s", itemID)
 	}
 	if def.Category == bundleCategory {
-		attrs := defAttrs(def)
-		contents, _ := attrs["nbkhfhenbag"].([]any)
-		for _, raw := range contents {
-			entry, _ := raw.(map[string]any)
-			inner, _ := entry["cemjmlpafmc"].(string)
-			if inner == "" {
-				return nil, true, fmt.Errorf("套盒内含物缺 item_id: %s", itemID)
-			}
-			qty := int64(1)
-			switch q := entry["ljnnpokapig"].(type) {
-			case float64:
-				qty = int64(q)
-			case int64:
-				qty = q
-			case int:
-				qty = int64(q)
-			}
-			if qty < 1 {
-				qty = 1
-			}
-			it, perr := s.prepareNewItem(ctx, uid, inner, "backpack", qty, "")
-			if perr != nil {
-				return nil, true, perr
-			}
-			items = append(items, it)
-		}
-		if len(items) == 0 {
-			return nil, true, fmt.Errorf("套盒没有可发放内含物: %s", itemID)
-		}
-		return items, true, nil
+		items, err = s.prepareBundleItems(ctx, uid, itemID, "backpack", 1)
+		return items, true, err
 	}
 	it, err := s.prepareNewItem(ctx, uid, itemID, "backpack", 1, "")
 	if err != nil {
