@@ -66,12 +66,29 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 		upserts = got.upserts
 		removed = got.removed
 	}
+	// f2 是姿态块 pmdcpeegbbd：客户端用它写全局时间与玩家生物特征；
+	// f4 是本次抛出的物件实例数组，客户端读到新实例才会生成飞行中的饵。
+	// 两个字段各由一个 tunable 控制，便于实机单变量验证（缺省都开）。
+	withPose := srv.tunableF("handitem_throw_pose", 1) != 0
+	withProj := srv.tunableF("handitem_throw_projectile", 1) != 0
+	var pose *proto.Value
+	if withPose {
+		pose = srv.buildPose308(ctx.Sess.pushCtx(), ctx.Sess.Userid)
+	} else {
+		pose = proto.Null()
+	}
+	thrown := proto.Args(proto.S("61"))
+	if pj := handitemThrowProjectile(upserts, handGUID); withProj && pj != nil {
+		thrown = proto.Args(proto.S("61"), pj)
+	}
+	ctx.Log.Info("805 落点与抛出物", "hand", shortGUID(handGUID), "dist_m", dist,
+		"upserts", len(upserts), "removed", len(removed), "pose", withPose, "projectile", thrown.ArgCount())
 	obj, err := wiregen.MakeObj("lmbomkliaad", map[int]*proto.Value{
 		0: proto.F32(float32(dist)),
 		1: proto.F32(5.0),
-		2: proto.Null(),
+		2: pose,
 		3: proto.Args(proto.S("61"), upserts...),
-		4: proto.Args(proto.S("61")),
+		4: thrown,
 		5: proto.GuidArr(removed),
 	})
 	if err != nil {
@@ -524,6 +541,40 @@ func (s *Server) reloadHanditemAfterThrow(ctx context.Context, uid int64, parent
 		return res
 	}
 	return nil
+}
+
+// handitemThrowProjectile 复制一份「这一发抛出去的饵」：沿用装填堆的实例记录，
+// 换成新 GUID、数量 1、父件为手持工具本身。805.f4 是物品实例数组，客户端读到
+// 新实例才会生成飞行物。这条记录不落库，紧随其后的 13/6 全量快照会把它清掉，
+// 不会留在背包里。
+func handitemThrowProjectile(upserts []*proto.Value, parentGUID string) *proto.Value {
+	var src *proto.Value
+	for _, u := range upserts {
+		if u != nil && u.Kind == proto.KindObj {
+			src = u
+			break
+		}
+	}
+	if src == nil {
+		return nil
+	}
+	out := *src
+	out.Fields = append([]proto.Field(nil), src.Fields...)
+	set := func(csName, op string, apply func(*proto.Field)) {
+		i := fieldIdxByCS(src.Class, csName)
+		if i < 0 || i >= len(out.Fields) {
+			return
+		}
+		if out.Fields[i].Op == "" {
+			out.Fields[i].Op = op
+		}
+		apply(&out.Fields[i])
+	}
+	set(csGUID, "GUID16", func(f *proto.Field) { f.Hex = NewItemGUID() })
+	set(csParent, "OPTGUID", func(f *proto.Field) { f.Hex = parentGUID })
+	set(csQty, "U32", func(f *proto.Field) { f.Num = ptrU64(1) })
+	set(csCreated, "U64", func(f *proto.Field) { f.Num = ptrU64(uint64(netTicksNow())) })
+	return &out
 }
 
 // throwDistance 从 olieodeoaof.f0 读取投掷距离。

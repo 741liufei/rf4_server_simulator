@@ -176,6 +176,34 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 		t.Fatalf("第一次抛投后剩 %d 份，期望 1", left)
 	}
 
+	// f2 姿态块与 f4 抛出物：客户端凭 f2 写全局时间，凭 f4 的新实例生成飞行中的饵。
+	if pose := dec.Field(2).Val; pose == nil || pose.Class != "pnbphpdmppe" {
+		t.Fatalf("13/5 f2 应为姿态块 pnbphpdmppe，实得 %#v", pose)
+	}
+	proj := dec.Field(4).Val
+	if proj == nil || proj.ArgCount() != 1 {
+		t.Fatalf("13/5 f4 应下发 1 个抛出物，实得 %#v", proj)
+	}
+	pj := proj.ArgItem(0)
+	gi := fieldIdxByCS(pj.Class, csGUID)
+	if gi < 0 {
+		t.Fatalf("抛出物类 %s 没有 GUID 槽", pj.Class)
+	}
+	pjID := pj.Field(gi)
+	g := pjID.GuidHex()
+	if g == "" || g == bait.GUID {
+		t.Fatalf("抛出物必须是新实例 GUID，实得 %q（装填物 %s）", g, bait.GUID)
+	}
+	if qi := fieldIdxByCS(pj.Class, csQty); qi >= 0 {
+		pjQty := pj.Field(qi)
+		if got := pjQty.U32(); got != 1 {
+			t.Fatalf("抛出物数量=%d，期望 1", got)
+		}
+	}
+	if row, _ := srv.DB.GetItemByGUID(ctx, g); row != nil {
+		t.Fatal("抛出物是一次性记录，不应落库")
+	}
+
 	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
 	if !ok {
 		t.Fatal("13/5 第二次未处理")
