@@ -144,6 +144,10 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 		t.Fatalf("创建装填物失败: %v", err)
 	}
 	srv.setStackCount(ctx, bait, 2)
+	// 这段锁的是「f4 抛出物注入」这条链路本身，所以把开关显式打开。
+	// 出厂缺省已改成 0：实机看客户端自己就会画这一发抛投（设计稿 §17.2），
+	// 缺省不下发；缺省行为由本测试末尾那段守。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	srv.setHanditemLoadedRef(ctx, hand.GUID, bait.GUID)
 
 	target := wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(17.5)})
@@ -224,6 +228,33 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	}
 	if reason := srv.dispatch.checkRegisteredResponse(13, 5, body, srv.Table()); reason != "" {
 		t.Fatalf("13/5 合同守卫误拒: %s", reason)
+	}
+
+	// 缺省（tunable=0）：不再下发抛出物实例，但扣料、姿态块、落点照旧。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "0")
+	bait2, err := srv.CreateItem(ctx, uid, "worm_01", "rig", 1)
+	if err != nil {
+		t.Fatalf("创建第二发装填物失败: %v", err)
+	}
+	srv.setStackCount(ctx, bait2, 2)
+	srv.setHanditemLoadedRef(ctx, hand.GUID, bait2.GUID)
+	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 缺省关闭抛出物时未处理")
+	}
+	dec, _, err = proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj := dec.Field(4).Val; proj == nil || proj.ArgCount() != 0 {
+		t.Fatalf("缺省应不下发抛出物实例，实得 %#v", proj)
+	}
+	if pose := dec.Field(2).Val; pose == nil || pose.Class != "pnbphpdmppe" {
+		t.Fatalf("关掉抛出物不该影响 f2 姿态块，实得 %#v", pose)
+	}
+	if fresh2, gerr := srv.DB.GetItemByGUID(ctx, bait2.GUID); gerr != nil || fresh2 == nil ||
+		srv.stackCountOf(ctx, fresh2) != 1 {
+		t.Fatalf("缺省关闭抛出物后仍应扣掉 1 份，实得 %#v", fresh2)
 	}
 }
 
