@@ -224,9 +224,28 @@ func irFieldInt(n *irNode, idx int) (int64, bool) {
 	return v, true
 }
 
+// markTripPlaceDob 凭证水域 dob.f1（ghkchkmebcd.nipfkbkgbll）置 1。客户端
+// 抛竿门 hncnmlgnhjm.jccgcdgncjg 只在当前地点类型=1（klaglfafejl）时走
+// f23 钓鱼游通行校验；=0 走等级/买断路径，凭证图必然禁抛竿并提示
+// "钓鱼旅结束了"（2026-11-05 实测：票有效、徽章倒计时长场，抛竿仍被拒）。
+// 仅当该玩家在此地点有活跃钓鱼游时才打标：无票进入（房契/买断）时
+// f1=1 会让客户端以钓鱼游会话语义加载地图，而 f23 已无有效条目 →
+// 加载黑屏（2026-11-06 实测：钓鱼游过期后买房进北海直接黑屏）。
+func (s *Server) markTripPlaceDob(uid int64, key string, dob *irNode) {
+	if _, isTrip := placeTripPrices[key]; !isTrip {
+		return
+	}
+	if _, ok := s.activeTripRemainingSec(context.Background(), uid, key); !ok {
+		return
+	}
+	if len(dob.Fields) > 1 && dob.Fields[1].F == "byte" {
+		dob.Fields[1].V = json.RawMessage("1")
+	}
+}
+
 // buildSpawnLocatorBody 1/13 响应体：206 cgbaffjpbkg{dob, scene}。
 // levelKey 是玩家上次所在地图；scene 为空时按地图选择已知默认场景。
-func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([]byte, error) {
+func (s *Server) buildSpawnLocatorBody(uid int64, levelKey, scene string, nowUnix int64) ([]byte, error) {
 	levelKey = travelLevelKey(levelKey)
 	if scene == "" {
 		scene = sceneForLevel(levelKey)
@@ -246,6 +265,7 @@ func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([
 	if err := materializeIR(&dob); err != nil {
 		return nil, err
 	}
+	s.markTripPlaceDob(uid, levelKey, &dob)
 	reanchorWeather(&dob, nowUnix)
 	dobVal, err := irToValue(&dob)
 	if err != nil {
@@ -259,7 +279,7 @@ func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([
 }
 
 // buildMapDobBody 1/12 place：指定地图 key 的 dob(205 dobfogbcggd)。
-func (s *Server) buildMapDobBody(key string, nowUnix int64) ([]byte, error) {
+func (s *Server) buildMapDobBody(uid int64, key string, nowUnix int64) ([]byte, error) {
 	maps, err := loadMapDefs()
 	if err != nil {
 		return nil, err
@@ -275,6 +295,7 @@ func (s *Server) buildMapDobBody(key string, nowUnix int64) ([]byte, error) {
 	if err := materializeIR(&dob); err != nil {
 		return nil, err
 	}
+	s.markTripPlaceDob(uid, key, &dob)
 	reanchorWeather(&dob, nowUnix)
 	dobVal, err := irToValue(&dob)
 	if err != nil {
@@ -291,7 +312,7 @@ func (s *Server) buildTravelBody(sess *Session, key string) ([]byte, error) {
 }
 
 func (s *Server) buildTravelBodyAt(sess *Session, key string, nowUnix int64) ([]byte, error) {
-	dobBody, err := s.buildMapDobBody(key, nowUnix)
+	dobBody, err := s.buildMapDobBody(sess.Userid, key, nowUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -314,7 +335,7 @@ func (s *Server) buildTravelBodyAt(sess *Session, key string, nowUnix int64) ([]
 		proto.Field{Op: "VAL", Val: nullVal()},
 		proto.Field{Op: "VAL", Val: nullVal()},
 	)
-	prof, err := s.BuildProfile307(ctx, sess.Userid)
+	prof, err := s.BuildProfile307W(ctx, sess.Userid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		return nil, fmt.Errorf("profile 307: %w", err)
 	}

@@ -261,7 +261,8 @@ func hVerifyEmail(ctx *Ctx) ([]byte, bool) {
 
 // replyProfile307 构造并返回数据库中的完整档案 307，供 3/20、3/21、3/23 共用。
 func replyProfile307(ctx *Ctx) ([]byte, bool) {
-	tree, err := ctx.Sess.Srv.BuildProfile307(ctx.Sess.pushCtx(), ctx.Sess.Userid)
+	tree, err := ctx.Sess.Srv.BuildProfile307W(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+		worldTotalGameMin(time.Now()))
 	if err != nil {
 		ctx.Log.Warn("307 构造失败", "err", err)
 		return nil, false

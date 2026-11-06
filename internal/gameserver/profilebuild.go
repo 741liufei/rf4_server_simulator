@@ -71,6 +71,17 @@ func BuildStats322(_ context.Context, _ *store.DB, _ int64) *proto.Value {
 	})
 }
 
+// buildStats322W 同上，但 f0 下发连续游戏分钟（不 mod 1440）：客户端世界
+// 时钟基址 = f13.f0，之后 ×24 流逝。钓鱼游锚点（f23.oieepfcgjgn）用同一
+// 连续坐标（见 f23 注释），基址回绕会让跨午夜的锚点与 W 错位 1440 分钟。
+// 昼夜时刻 = W mod 1440，连续值 mod 回后与原日内分钟一致。
+func buildStats322W(wNow int64) *proto.Value {
+	return wiregen.MustMakeObj("kkmhfbeldpg", map[int]*proto.Value{
+		0: proto.U32(uint32(wNow)),
+		4: build315(),
+	})
+}
+
 // build745 构造通行证状态块。
 func build745() *proto.Value {
 	return wiregen.MustMakeObj("dnijhkbdfan", map[int]*proto.Value{
@@ -99,8 +110,17 @@ func build5012() *proto.Value {
 	})
 }
 
-// BuildProfile307 全量本人档案（3/1 响应、801.f7、2/1 推送共用）。
+// BuildProfile307 全量本人档案（801.f7、807 等会话内嵌 profile 也共用）。
+// wNow 是构档案时刻的客户端会话游戏分钟（sessionGameMin），用于校准钓鱼游
+// 启表基准；登录时刻的调用传 0。 See BuildProfile307W。
 func (s *Server) BuildProfile307(ctx context.Context, uid int64) (*proto.Value, error) {
+	return s.BuildProfile307W(ctx, uid, 0)
+}
+
+// BuildProfile307W 同上，wNow 为会话游戏时钟（登录时为 0，会话中递增）。
+// 会话内下发（1/14 响应、2/1 推送、3/38 响应等）必须带当前 W，否则客户端
+// 会把已启表钓鱼游的剩余算成负数（立刻显示"已过期"）。
+func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*proto.Value, error) {
 	p, err := s.DB.EnsureProfile(ctx, uid)
 	if err != nil {
 		return nil, err
@@ -142,6 +162,46 @@ func (s *Server) BuildProfile307(ctx context.Context, uid int64) (*proto.Value, 
 		0: proto.Args(proto.S("210"), build5013()),
 	})
 
+	// f23 钓鱼游（wire 类 hajlpdpmnfe/1506）：客户端世界地图按 dhaenhabecc
+	// 匹配地图键（hncnmlgnhjm.hlcjincbjma），据此渲染"✈还剩下N天"徽章、
+	// 免入场费划线价、等级锁绕过（反编译 Assembly-CSharp 证实）。
+	//
+	// 剩余公式（il2csharp gcepbaokfie.pioghgjeelp 实码 + 2026-11-05 rf4_hook
+	// decode=4 注入实测，客户端解析的 knp/start/dur/bought 与服务端逐字段吻合）：
+	//   剩余 = ecdgbohiooi(f2) + min(oieepfcgjgn(f4), W+3) − W − 3
+	// knpoijanngk(f3)=false 时直接返回全额 f2；W 是客户端世界时钟（2/2
+	// keepalive FILETIME 每 5 秒校准，世界纪元总分钟坐标，与 worldTotalGameMin
+	// 同源）。f4 若发"到期锚点 W+剩余"则 min 恒饱和于 W+3，剩余恒=f2/0 值错位
+	// ——首轮实测徽章"48分钟"恒定不变即此（hook dump start=142192696=W购+48）。
+	// 因此下发编码取：**f2=剩余游戏分钟、f4=W+3**，代回公式恰输出真实剩余，
+	// 推送间隔内随 W 自然递减；叠加购票（剩余>单次时长）同样精确。
+	// 到期条目不再下发：客户端徽章按条目存在性渲染，保留会让图标在到期
+	// 后残留（2026-11-05 实测）；限购由服务端 3/38 拒绝并回业务失败文案。
+	tripStates, _ := s.DB.TripStates(ctx, uid)
+	vouchers := make([]*proto.Value, 0, len(tripStates))
+	for _, st := range tripStates {
+		if st.Purchases <= 0 || st.RemainingSec <= 0 {
+			continue
+		}
+		remainGameMin := int64(st.RemainingSec * 24 / 60)
+		if remainGameMin < 0 {
+			remainGameMin = 0
+		}
+		var started uint32
+		var start int64
+		if st.LastConsumeTS > 0 {
+			started = 1
+			start = wNow + 3
+		}
+		vouchers = append(vouchers, wiregen.MustMakeObj("hajlpdpmnfe", map[int]*proto.Value{
+			0: proto.StrVal(st.Place),
+			1: proto.U32(uint32(st.Purchases)),
+			2: proto.U32(uint32(remainGameMin)),
+			3: proto.U32(started),
+			4: proto.U32(uint32(start)),
+		}))
+	}
+
 	return wiregen.MakeObj("ghfbofgdflm", map[int]*proto.Value{
 		0:  proto.U32(uint32(p.UID)),
 		1:  proto.StrVal(p.Name),
@@ -156,7 +216,7 @@ func (s *Server) BuildProfile307(ctx context.Context, uid int64) (*proto.Value, 
 		10: proto.U32(membershipKind),
 		11: proto.U64(membershipExp),
 		12: s.buildPose308(ctx, uid),
-		13: BuildStats322(ctx, s.DB, p.UID),
+		13: buildStats322W(wNow),
 		14: proto.U32(0),
 		15: proto.U32(profileFlags),
 		16: proto.U32(1),
@@ -165,8 +225,17 @@ func (s *Server) BuildProfile307(ctx context.Context, uid int64) (*proto.Value, 
 		19: proto.U64(uint64(p.Bank)),
 		20: proto.ArrayOf(hexOf(houseItems)),
 		21: proto.Str(nil),
-		22: proto.ArrayOf(hexOf(placeItems)),
-		23: proto.Args(proto.S("181")),
+		22: proto.ArrayOf(hexOf(placeItems)), // 已买断地点（f22 只承载买断，钓鱼游不进 f22）
+		// 容器 code=181（by_type_id 实抓推导值，实机验证可用）：服务端始终
+		// 发 181，购票→进图→抛竿→到期回收全链路回归通过——抛竿受
+		// FishingSceneVoucherWathDog 门控，f23 解析作废会直接禁抛竿/黑屏，
+		// 因此 181 可用是活体证据；rf4_hook decode=4 注入实测客户端解析的
+		// knp/start/dur/bought 与服务端逐字段吻合。f4c375b 曾按反编译
+		// "读取器注册表 1506 注册于 124"在注释里断言应改 124，但代码从未
+		// 改过、实机也未复现解析失败，且其"125=bncmdhbgahe"邻位说法与
+		// 在库表矛盾（bncmdhbgahe=600）——判定为当时误读，2026-11-06
+		// 审查复核后定案保留 181（改动前需官方 307 实抓佐证）。
+		23: proto.Args(proto.S("181"), vouchers...),
 		24: build745(),
 		25: season,
 	})
@@ -303,7 +372,7 @@ func (s *Server) BuildShortcutList(ctx context.Context, uid int64) *proto.Value 
 
 // Push2_1 推送当前档案，用于刷新货币与等级。
 func (s *Session) Push2_1() {
-	p, err := s.Srv.BuildProfile307(s.pushCtx(), s.Userid)
+	p, err := s.Srv.BuildProfile307W(s.pushCtx(), s.Userid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		s.log.Warn("2/1 构造失败", "err", err)
 		return

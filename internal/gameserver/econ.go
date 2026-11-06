@@ -111,7 +111,7 @@ func (s *Server) fishingEnd(ctx *Ctx) ([]byte, bool) {
 		st.mu.Unlock()
 
 		stats813 = s.build813(cctx, uid, pending, prevBest, skillGain, levelsGained)
-		profileTree, _ = s.BuildProfile307(cctx, uid)
+		profileTree, _ = s.BuildProfile307W(cctx, uid, worldTotalGameMin(time.Now()))
 		skill312 = s.buildSingleSkill312(cctx, uid, skillID)
 	}
 
@@ -433,7 +433,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		s.notifyFishReleased(ctx.Sess, pending)
 	}
 	// 响应 807：{null, null, 307, null, null, null}
-	profileTree, err := s.BuildProfile307(ctx.Sess.pushCtx(), uid)
+	profileTree, err := s.BuildProfile307W(ctx.Sess.pushCtx(), uid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		profileTree = proto.Null()
 	}
