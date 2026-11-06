@@ -27,7 +27,18 @@ const (
 	gearAttrWeight   = "dhlkahnodoo"
 	gearAttrTestMin  = "dakogfmkclb"
 	gearAttrTestMax  = "jfebacgmlmb"
-	gearAttrTaper    = "ddebfbbjppk"
+
+	// gearAttrRodAction 是鱼竿调性：1=Slow 2=Moderate 3=Fast 4=ExtraFast。
+	gearAttrRodAction = "bmmpdijcjdf"
+	// gearAttrRodStiffness 是鱼竿硬度档：0=未登记/任意，1..10 依次变硬（8..10
+	// 多为船竿）。item_def 里 cat3 的实际分布是 0:217 1:54 2:72 3:63 4:171
+	// 5:152 6:170 7:91 8:18 9:21 10:14，共 53 根落在 8..10，不能按 1..7 截断。
+	gearAttrRodStiffness = "ndpfblpkagj"
+	// gearAttrRodRigidity 是竿身刚度（0..1），本体侧用于弯曲手感，服务端只记录。
+	gearAttrRodRigidity = "lpgpehmjnjc"
+	// gearAttrSensitivity 是鱼竿灵敏度（0..1），本体侧用于咬口反馈，服务端只记录。
+	gearAttrSensitivity = "ddebfbbjppk"
+
 	gearAttrStretch  = "aomkdnjcgji"
 	gearAttrDensity  = "lgjeahdobch"
 	gearAttrLineLen  = "ljnnpokapig"
@@ -38,6 +49,8 @@ const (
 	gearAttrLeaderIn = "mbnambppbom"
 	gearAttrHookSize = "gkfbafmbpam"
 	gearAttrHookLen  = "najajfakhdo"
+	// gearAttrMaterial 是前导线材质（cat15）；主线材质走 fopbhlmkcpe。
+	gearAttrMaterial = "ocmbfkebgpp"
 
 	// hookWeightVolumeFactor 把钩体长度(mm)换算成"能入口"的鱼重上限(g)：
 	// cap = factor * length^3。这是假想模型，本体没有对应判定，
@@ -170,8 +183,12 @@ func nestedF32(m map[string]any, key string) float64 {
 	return f
 }
 
-func rodPowerKg(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrMaxLoad) }
-func rodLengthM(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrLength) }
+func rodPowerKg(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrMaxLoad) }
+func rodLengthM(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrLength) }
+func rodAction(def *store.ItemDef) int64        { return itemDefInt(def, gearAttrRodAction) }
+func rodStiffness(def *store.ItemDef) int64     { return itemDefInt(def, gearAttrRodStiffness) }
+func rodRigidity(def *store.ItemDef) float64    { return itemDefF32(def, gearAttrRodRigidity) }
+func rodSensitivity(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrSensitivity) }
 
 // missingRodDataLogged 记录已经告警过"缺物理字段"的竿 itemID，每个竿只告警一次，
 // 避免每次抛竿/断件都刷日志。
@@ -268,8 +285,6 @@ func (s *Server) rodReelDragSetting(ctx context.Context, rodGUID string) (int64,
 func rodTestG(def *store.ItemDef) (float64, float64) {
 	return itemDefF32(def, gearAttrTestMin), itemDefF32(def, gearAttrTestMax)
 }
-
-func rodTaper(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrTaper) }
 
 // gearBreakLimitKg 返回整副钓组最弱一环的拉力；0 表示没有可信物理数据。
 // 手竿没有轮子，只比较竿/主线/子线；带轮竿额外比较锁轮承力。

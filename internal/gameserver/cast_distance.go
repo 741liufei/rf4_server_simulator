@@ -26,7 +26,9 @@ type CastDistanceContext struct {
 	CastAction           uint32
 	CastPower            float64
 	RodLengthM           float64
-	RodTaper             float64
+	RodAction            int64
+	RodStiffness         int64
+	RodSensitivity       float64
 	RodTestMinG          float64
 	RodTestMaxG          float64
 	RigWeightG           float64
@@ -100,8 +102,11 @@ var builtInCastModifiers = []CastDistanceModifier{
 		// 2.4m≈0.99，3.6m≈1.07；长竿有更大的有效加速行程。
 		return clampFloat(0.82+0.07*c.RodLengthM, 0.85, 1.18)
 	}},
-	castDistanceModifierFunc{name: "rod_taper", fn: func(c CastDistanceContext) float64 {
-		return castRodTaperFactor(c.RodTaper)
+	castDistanceModifierFunc{name: "rod_action", fn: func(c CastDistanceContext) float64 {
+		return castRodActionFactor(c.RodAction)
+	}},
+	castDistanceModifierFunc{name: "rod_stiffness", fn: func(c CastDistanceContext) float64 {
+		return castRodStiffnessFactor(c.RodStiffness)
 	}},
 	castDistanceModifierFunc{name: "rod_test_payload", fn: func(c CastDistanceContext) float64 {
 		return rodTestWeightFactor(c.PayloadWeightG, c.RodTestMinG, c.RodTestMaxG)
@@ -167,13 +172,18 @@ type castDistanceProfile struct {
 	PlayerSecondary      float64
 
 	RodLengthM         float64
-	RodTaper           float64
+	RodAction          int64
+	RodStiffness       int64
+	RodSensitivity     float64
 	RodTestMinG        float64
 	RodTestMaxG        float64
 	RigWeightG         float64
 	BaitItemID         string
 	BaitWeightG        float64
 	PayloadWeightG     float64
+	PayloadTestRatio   float64 // 载荷 / 竿 Test 上限；0 表示竿未登记 Test
+	RodOverTest        bool    // 载荷超过竿 Test 上限，抛投距离开始衰减
+	PayloadParts       string  // 组合重量的分项摘要，供日志审计
 	WeightFactor       float64
 	SkillCategory      int64
 	SkillMastery       float64
@@ -212,13 +222,40 @@ func castLineDiameterFactor(diameterMM float64) float64 {
 	return clampFloat(math.Sqrt(0.25/diameterMM), 0.84, 1.12)
 }
 
-// 快调/硬梢竿更容易把挥杆能量传给线组；这里只做小幅修正，避免覆盖
-// 竿长与 Test 克重这两个主变量。
-func castRodTaperFactor(taper float64) float64 {
-	if taper <= 0 {
+// castRodActionFactor 按竿的“调性”修正能量传递：慢调竿身整体弯曲、蓄力
+// 行程长但回弹慢，快调竿只有竿梢段参与、回弹干脆，同样挥杆速度下能把更
+// 多能量送给线组。这是客户端调性枚举（1=Slow…4=ExtraFast）在服务端唯一
+// 的物理落点；其余参数（硬度档）见 castRodStiffnessFactor。
+func castRodActionFactor(action int64) float64 {
+	switch action {
+	case 1: // Slow
+		return 0.975
+	case 2: // Moderate
+		return 0.99
+	case 3: // Fast
+		return 1.005
+	case 4: // ExtraFast
+		return 1.02
+	default:
 		return 1
 	}
-	return clampFloat(0.98+0.04*taper, 0.98, 1.022)
+}
+
+// castRodStiffnessFactor 用硬度档做极小幅修正：越硬的竿梢越不容易“吃掉”
+// 挥杆行程，但过硬会牺牲容错。幅度压在 -1.4%..+1.4% 内，不和竿长、Test
+// 克重抢主导权，避免同一根竿只换硬度标号就出现距离跳变。
+//
+// 客户端硬度档实际是 0..10（0=未登记/任意，1..7 常见档，8..10 多为船竿），
+// 不是旧注释假设的 1..7。8 档以上按公式已超过 clamp 上限，统一取 1.014；
+// 0 保持中性 1.0，异常大值按最硬档封顶，不再静默降级成中性。
+func castRodStiffnessFactor(stiffness int64) float64 {
+	if stiffness <= 0 {
+		return 1
+	}
+	if stiffness > 10 {
+		stiffness = 10
+	}
+	return clampFloat(0.986+0.004*float64(stiffness), 0.986, 1.014)
 }
 
 // 拉伸率越高，蓄力时的能量损失越明显。数值来自主线静态定义。
@@ -354,10 +391,16 @@ func castNominalDistanceM(rigType int64) float64 {
 	return castNominalDefaultM
 }
 
-// rodTestWeightFactor 把线组载荷换算为无封顶的单调抛投增幅。
-// 同一套装备、其他参数不变时，载荷越重系数越高；采用对数增长，
-// 重量可以持续增加距离，但不会因为几克变化而出现夸张跳变。
-// 该系数只影响抛投，不参与断线或炸杆；炸杆仍由搏鱼张力决定。
+// rodTestWeightFactor 把线组载荷换算为抛投重量系数。
+//
+// 竿的 Test 区间是“推荐抛投重量”：区间内载荷越重、竿身储能越充分，距离
+// 随对数缓慢上升；超过 Test 上限后竿梢已经无法把全部挥杆能量传给线组，
+// 距离转为衰减。旧实现全程单调递增，导致 100g 铁板配 2-10g 竿反而抛得
+// 比合规载荷更远，与竿梢超重的实际手感相反。
+//
+// 衰减只在 payload > testMax 时生效，Test 区间内的标定保持原曲线，
+// 因此既有距离区间不受影响。该系数只影响抛投，不参与断线或炸杆；
+// 炸杆仍由搏鱼张力决定（见 gear_damage.go）。
 func rodTestWeightFactor(payloadG, testMinG, testMaxG float64) float64 {
 	if testMaxG <= 0 {
 		return 1
@@ -379,7 +422,35 @@ func rodTestWeightFactor(payloadG, testMinG, testMaxG float64) float64 {
 	if referenceG <= 0 {
 		return 1
 	}
-	return 0.80 + 0.12*math.Log1p(payloadG/referenceG)
+	inBand := func(g float64) float64 {
+		return 0.80 + 0.12*math.Log1p(g/referenceG)
+	}
+	if payloadG <= testMaxG {
+		return inBand(payloadG)
+	}
+	// 峰值取 Test 上限处的储能，超出后按超重倍率 r=payload/testMax 衰减。
+	// 相对峰值的比例恒为 1/(1+rodTestOverloadDecay*(r-1))，只与超重倍率
+	// 有关、与竿型无关：1.5×→74.1%，2×→58.8%，3×→41.7%。
+	// r 很大时会撞到 clampFloat 的绝对下限 0.22（那是系数绝对值，不是
+	// "剩峰值的 22%"）；下限用于避免"抛在脚边"的极端值。
+	peak := inBand(testMaxG)
+	overRatio := payloadG/testMaxG - 1
+	return clampFloat(peak/(1+rodTestOverloadDecay*overRatio), 0.22, peak)
+}
+
+// rodTestOverloadDecay 控制超重衰减陡度。2 倍 Test 上限时 r=2，系数为
+// 1/(1+0.70)=58.8% 峰值，接近路亚实钓中"超重后抛投距离明显下降"的量级。
+// 该数值是常数取值的标定锚点，由 TestCastOverTestPayloadShortensDistance
+// 的数值断言锁定，调整常数必须同步调整断言。
+const rodTestOverloadDecay = 0.70
+
+// rodOverTestRatio 返回载荷相对竿 Test 上限的倍率，1 表示刚好在上限。
+// 竿未登记 Test 时返回 0（数据缺失，不做超重判断）。
+func rodOverTestRatio(payloadG, testMaxG float64) float64 {
+	if testMaxG <= 0 || payloadG <= 0 {
+		return 0
+	}
+	return payloadG / testMaxG
 }
 
 func castMasteryFactor(mastery float64) float64 {
@@ -454,7 +525,9 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 	if rod, rerr := s.DB.GetItemByGUID(ctx, rodGUID); rerr == nil && rod != nil {
 		if def, derr := s.itemDefForRow(ctx, rod); derr == nil {
 			p.RodLengthM = rodLengthM(def)
-			p.RodTaper = rodTaper(def)
+			p.RodAction = rodAction(def)
+			p.RodStiffness = rodStiffness(def)
+			p.RodSensitivity = rodSensitivity(def)
 			p.RodTestMinG, p.RodTestMaxG = rodTestG(def)
 		}
 	}
@@ -466,7 +539,7 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 	p.LineMaterial = line.Material
 	p.LineLinearDensityGPM = line.LinearDensityGPM
 
-	terminalRigWeight, baitWeight := s.castPayloadWeights(ctx, rodGUID)
+	terminalRigWeight, baitWeight, parts := s.castPayloadWeights(ctx, rodGUID)
 	// 真正随挥杆启动的只有竿梢到终端之间那段线；线杯上的存线不全部算作
 	// 飞行载荷。这里以实际剩余线和竿长中的较小值估算运行线段。
 	lineRunningLength := math.Min(p.LineLengthM, math.Max(p.RodLengthM, 0))
@@ -474,6 +547,9 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 	p.RigWeightG = terminalRigWeight + p.LineRunningWeightG
 	p.BaitWeightG = baitWeight
 	p.PayloadWeightG = p.RigWeightG + p.BaitWeightG
+	p.PayloadParts = formatCastWeightParts(parts, p.LineRunningWeightG)
+	p.PayloadTestRatio = rodOverTestRatio(p.PayloadWeightG, p.RodTestMaxG)
+	p.RodOverTest = p.PayloadTestRatio > 1
 	// 同一次抛投同时记录咬钩逻辑使用的当前饵 ID，便于审计“饵效饵”和
 	// “重量饵”是否来自同一个 f5 装配。饵 ID 本身不做距离乘数，真正
 	// 进入物理计算的是上方汇总出的真实重量。
@@ -487,8 +563,9 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 
 	c := CastDistanceContext{
 		RigType: rigType, CastAction: p.CastAction, CastPower: p.CastPower,
-		RodLengthM: p.RodLengthM, RodTaper: p.RodTaper,
-		RodTestMinG: p.RodTestMinG, RodTestMaxG: p.RodTestMaxG,
+		RodLengthM: p.RodLengthM, RodAction: p.RodAction, RodStiffness: p.RodStiffness,
+		RodSensitivity: p.RodSensitivity,
+		RodTestMinG:    p.RodTestMinG, RodTestMaxG: p.RodTestMaxG,
 		RigWeightG: p.RigWeightG, BaitWeightG: p.BaitWeightG, PayloadWeightG: p.PayloadWeightG,
 		ReelEfficiency: perf.CastEfficiency,
 		ReelType:       p.ReelType, SpoolSize: p.SpoolSize, SpoolCapacityM: p.SpoolCapacityM,
