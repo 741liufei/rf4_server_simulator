@@ -78,8 +78,15 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 		pose = proto.Null()
 	}
 	thrown := proto.Args(proto.S("61"))
+	thrownGUID := ""
 	if pj := handitemThrowProjectile(upserts, handGUID); withProj && pj != nil {
 		thrown = proto.Args(proto.S("61"), pj)
+		thrownGUID = throwProjectileGUID(pj)
+	}
+	// 一次性自清：把抛出物 GUID 同时放进 f5 移除列表，客户端建好飞行体后
+	// 这条临时实例就不会留在弹弓弹药格里（实测缺省 0=不启用）。
+	if thrownGUID != "" && srv.tunableF("handitem_throw_selfclean", 0) != 0 {
+		removed = append(removed, thrownGUID)
 	}
 	ctx.Log.Info("805 落点与抛出物", "hand", shortGUID(handGUID), "dist_m", dist,
 		"upserts", len(upserts), "removed", len(removed), "pose", withPose, "projectile", thrown.ArgCount())
@@ -541,6 +548,19 @@ func (s *Server) reloadHanditemAfterThrow(ctx context.Context, uid int64, parent
 		return res
 	}
 	return nil
+}
+
+// throwProjectileGUID 读出抛出物实例的 GUID，供 f5 自清使用。
+func throwProjectileGUID(pj *proto.Value) string {
+	if pj == nil {
+		return ""
+	}
+	i := fieldIdxByCS(pj.Class, csGUID)
+	if i < 0 || i >= len(pj.Fields) {
+		return ""
+	}
+	f := pj.Field(i)
+	return f.GuidHex()
 }
 
 // handitemThrowProjectile 复制一份「这一发抛出去的饵」：沿用装填堆的实例记录，
