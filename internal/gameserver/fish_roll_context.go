@@ -22,6 +22,8 @@ type fishRollContext struct {
 	weather    fishingWeather
 	rigType    int64
 	happyBite  float64
+	onBoat     bool
+	boatKnown  bool
 	biteRoll   func() float64
 	cache      *fishingRollCache
 	skill      fishingSkillBonus

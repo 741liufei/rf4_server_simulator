@@ -19,23 +19,26 @@ import (
 
 // FishState 保存单个玩家的钓鱼状态，重连后继续使用。
 type FishState struct {
-	mu              fishStateMutex
-	finishMu        sync.Mutex
-	GearGuid        string
-	RigType         int64 // jppmjnahbpo 钓组种类（on_cast 记录；路亚族单独节奏）
-	Loc             string
-	Spot            uint64
-	DepthCM         int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
-	ReelSetting     int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
-	CastActive      bool
-	InWater         bool
-	NeedBite        bool
-	PosX            float64
-	PosZ            float64
-	HasPos          bool
-	CastPosX        float64
-	CastPosZ        float64
-	HasCastPos      bool
+	mu          fishStateMutex
+	finishMu    sync.Mutex
+	GearGuid    string
+	RigType     int64 // jppmjnahbpo 钓组种类（on_cast 记录；路亚族单独节奏）
+	Loc         string
+	Spot        uint64
+	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
+	ReelSetting int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
+	CastActive  bool
+	InWater     bool
+	NeedBite    bool
+	PosX        float64
+	PosZ        float64
+	HasPos      bool
+	CastPosX    float64
+	CastPosZ    float64
+	HasCastPos  bool
+	// BoatUntil 是船票租用有效的截止 unix，3/7 验票上船时写入。0 表示本次会话
+	// 还没有上船证据，判鱼对“已上船”条件保持中性。
+	BoatUntil       int64
 	CastTs          time.Time
 	FallTs          time.Time
 	FallSeen        bool
@@ -157,6 +160,21 @@ func (st *FishState) updateLureActionLocked(now time.Time, previousMask, mask ui
 }
 
 type fishingTimerTicket struct{ generation, sequence uint64 }
+
+// markBoardLocked 记录玩家上船到何时（取船票租用到期时间）。调用方需持有 st.mu。
+func (st *FishState) markBoardLocked(unix int64) {
+	st.BoatUntil = unix
+}
+
+// onBoatLocked 判断当前是否还在船上。调用方需持有 st.mu。
+// known=false 表示本次会话没见过上船流程，调用方不该据此封鱼；票租用到期后
+// known=true 且 on=false，可以确认已经不在船上。
+func (st *FishState) onBoatLocked(nowUnix int64) (on, known bool) {
+	if st.BoatUntil == 0 {
+		return false, false
+	}
+	return st.BoatUntil > nowUnix, true
+}
 
 func (st *FishState) cancelBiteTimerLocked() {
 	if st.biteTimer != nil {
@@ -1598,9 +1616,11 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 	rigType := st.RigType
 	lureLayer, lureAction, lureMask := st.LureLayer, st.LureAction, st.LureMotionMask
 	lureSpeed := st.ReelSetting
+	boatOn, boatKnown := st.onBoatLocked(now.Unix())
 	f := s.rollFishForRig(s.dbCtx(), uid, st.GearGuid, st.Loc, st.Bait, st.Bonus, fishRollContext{
 		x: x, z: z, hasPos: hasPos, spot: st.Spot, depthCM: baitDepthCM,
 		lureLayer: lureLayer, lureAction: lureAction, lureMask: lureMask, lureSpeed: lureSpeed, rigType: rigType,
+		onBoat: boatOn, boatKnown: boatKnown,
 		now: now, weather: sess.weatherAt(st.Loc, now), happyBite: sess.currentHappyHour().BiteBonus,
 	})
 	if f == nil {

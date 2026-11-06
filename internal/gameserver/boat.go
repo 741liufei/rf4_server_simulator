@@ -77,6 +77,7 @@ func hCheckTicket(ctx *Ctx) ([]byte, bool) {
 		if tree := srv.activeRentalTicket(ctx, station); tree != nil {
 			body, err := proto.EncodeValue(tree, ctx.Sess.Table())
 			if err == nil {
+				srv.markPlayerBoarded(ctx, tree)
 				ctx.Log.Info("3/7 复用有效期内的船票", "station", station)
 				return body, true
 			}
@@ -123,12 +124,41 @@ func hCheckTicket(ctx *Ctx) ([]byte, bool) {
 		// 否则它用旧的（未租用）票构造记录，看门狗判定失败并传回岸边。
 		ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{row.GUID})))
 		ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
+		srv.markPlayerBoarded(ctx, tree)
 		ctx.Log.Info("3/7 验票通过", "guid", guidShort(g), "item", row.ItemID, "station", station)
 		return body, true
 	}
 
 	ctx.Log.Info("3/7 没有可用船票，回 null", "station", station, "guids", len(realGUIDs))
 	return []byte{0x00}, true
+}
+
+// markPlayerBoarded 记录“已上船”，截止取票的租用到期时间（iingicaldbk FILETIME）。
+// 客户端只在码头上船时发 3/7，验票通过即上船证据；租用到期就视为已下船。
+// 没有票到期时间时不改状态，避免把“没证据”写成“不在船上”。
+func (s *Server) markPlayerBoarded(ctx *Ctx, tree *proto.Value) {
+	if ctx == nil || ctx.Sess == nil || ctx.Sess.Srv == nil || tree == nil {
+		return
+	}
+	idx := fieldIdxByCS(tree.Class, csUpdated)
+	if idx < 0 || idx >= len(tree.Fields) || tree.Fields[idx].Num == nil {
+		return
+	}
+	ft := u64Of(tree.Fields[idx].Num)
+	if ft == 0 {
+		return
+	}
+	unix := proto.FiletimeToUnix(int64(ft))
+	if unix <= time.Now().Unix() {
+		return // 票已过期，不能当成在船上
+	}
+	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+	if st == nil {
+		return
+	}
+	st.mu.Lock()
+	st.markBoardLocked(unix)
+	st.mu.Unlock()
 }
 
 // pickStationTicket 按站点在背包里挑一张未租用的船票（不写租用状态）。
@@ -165,6 +195,7 @@ func (s *Server) pickStationTicket(ctx *Ctx, station uint64) *proto.Value {
 		}
 		ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{row.GUID})))
 		ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
+		s.markPlayerBoarded(ctx, tree)
 		return tree
 	}
 	return nil

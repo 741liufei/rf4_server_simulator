@@ -64,3 +64,17 @@ func TestCheckTicket(t *testing.T) {
 			boatTicketTypeID, dec3.Kind, dec3.TypeID)
 	}
 }
+
+func TestOnBoatStateNeedsBoardingEvidence(t *testing.T) {
+	st := &FishState{}
+	if on, known := st.onBoatLocked(1000); on || known {
+		t.Fatal("没见过上船流程时应是未知，不能封鱼")
+	}
+	st.markBoardLocked(2000)
+	if on, known := st.onBoatLocked(1500); !on || !known {
+		t.Fatal("船票有效期内应判定为在船上")
+	}
+	if on, known := st.onBoatLocked(2500); on || !known {
+		t.Fatal("船票到期后应判定为已下船")
+	}
+}

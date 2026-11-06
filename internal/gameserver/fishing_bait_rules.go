@@ -26,8 +26,10 @@ type fishBaitRule struct {
 	needDrift  bool
 	needJig    bool
 	needMotion bool
+	// needBoat 表示攻略要求“使用有效船票并已上船”。
+	needBoat bool
 	// jigOrMotion 用于“出现 jig 阶梯，或采用路亚钓法且已上船、饵在水中运动”
-	// 这类二选一前置条件，不能拆成同时要求。
+	// 这类二选一前置条件，不能拆成同时要求。船是二选一里的一条路，不单独封鱼。
 	jigOrMotion bool
 }
 
@@ -78,6 +80,7 @@ func parseFishBaitRules(raw string) map[string]fishBaitRule {
 			r.jigOrMotion = true
 		} else {
 			r.needJig, r.needMotion = needJig, needMotion
+			r.needBoat = strings.Contains(r.condition, "已上船")
 		}
 		if _, denied, ok := strings.Cut(extra, "不吃"); ok {
 			denied = strings.FieldsFunc(denied, func(c rune) bool { return c == ')' || c == '；' || c == ';' })[0]
@@ -368,6 +371,9 @@ func ruleConditionAllows(r fishBaitRule, c fishRollContext) bool {
 				return false
 			}
 		}
+	}
+	if r.needBoat && c.boatKnown && !c.onBoat {
+		return false
 	}
 	if !lureMotionEvidence(c.lureMask) {
 		return true

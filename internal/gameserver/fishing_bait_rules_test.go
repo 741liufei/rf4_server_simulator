@@ -231,8 +231,11 @@ func TestFishBaitGuideConditionsParseChartAndMotion(t *testing.T) {
 		t.Fatal("大鼻软口鱼应要求顺水漂流")
 	}
 	salmon := fishBaitRules[ruleName("大西洋鲑鱼")]
-	if !salmon.needMotion || salmon.needJig {
-		t.Fatalf("大西洋鲑鱼动作条件 jig=%v motion=%v", salmon.needJig, salmon.needMotion)
+	if !salmon.needMotion || salmon.needJig || !salmon.needBoat {
+		t.Fatalf("大西洋鲑鱼动作条件 jig=%v motion=%v boat=%v", salmon.needJig, salmon.needMotion, salmon.needBoat)
+	}
+	if catfishRule := fishBaitRules[ruleName("花鲶")]; catfishRule.needBoat {
+		t.Fatal("花鲶的“已上船”属于二选一分支，不该单独作为条件")
 	}
 	catfish := fishBaitRules[ruleName("花鲶")]
 	if !catfish.jigOrMotion || catfish.needJig || catfish.needMotion {
