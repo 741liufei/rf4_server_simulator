@@ -173,28 +173,41 @@ func (d *DB) UnrecalledTripGrantPlaces(ctx context.Context, uid int64) ([]string
 	return out, rows.Err()
 }
 
-// ExpireTripAccessTx 钓鱼游到期落地：trip_state 清零与 place_access(kind='trip')
-// 回收在同一事务，任一步失败整体回滚（下一拍补偿重试）。DELETE 带
-// remaining_sec<=0 守卫，与重购并发时不会误删新资格。
-func (d *DB) ExpireTripAccessTx(ctx context.Context, uid int64, place string, now float64) error {
+// ExpireTripAccessTx 钓鱼游到期落地：只有当前状态仍等于 expected 时才清零，
+// 再把 place_access(kind='trip') 回收。CAS 防止 consumeTripTimes 读取旧状态后、
+// 清理事务开始前玩家完成重购，被无条件 UPDATE 清掉新时长。
+func (d *DB) ExpireTripAccessTx(ctx context.Context, expected TripState, now float64) (bool, error) {
 	tx, err := d.SQL.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE trip_state SET remaining_sec=0, last_consume_ts=?, updated_ts=? WHERE uid=? AND place=?`,
-		now, now, uid, place); err != nil {
-		return err
+	res, err := tx.ExecContext(ctx,
+		`UPDATE trip_state SET remaining_sec=0, last_consume_ts=?, updated_ts=?
+		 WHERE uid=? AND place=? AND last_consume_ts=? AND remaining_sec=? AND purchases=?`,
+		now, now, expected.UID, expected.Place,
+		expected.LastConsumeTS, expected.RemainingSec, expected.Purchases)
+	if err != nil {
+		return false, err
+	}
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if changed == 0 {
+		return false, nil
 	}
 	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM place_access WHERE uid=? AND place=? AND kind='trip'
 		AND EXISTS(SELECT 1 FROM trip_state t
 			WHERE t.uid=place_access.uid AND t.place=place_access.place AND t.remaining_sec<=0)`,
-		uid, place); err != nil {
-		return err
+		expected.UID, expected.Place); err != nil {
+		return false, err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // RevokeExpiredTripAccess 残留补偿：仅删除已到期（remaining_sec<=0）钓鱼游

@@ -477,8 +477,8 @@ func hTravel(ctx *Ctx) ([]byte, bool) {
 	}
 	sess.Srv.setLevel(sess.Userid, key)
 	sess.rememberWeather(key, nowUnix)
-	// 进入钓鱼游地图：启表（已购未进图的行由此开始倒计时）；启表后推刷新
-	// 档案，客户端 f23 的 knpoijanngk 翻转为已启表，徽章开始倒数。
+	// 兼容旧存档：只对 last_consume_ts=0 的历史已购行补启表；新购票已在
+	// 3/38 购买事务中启表。
 	if sess.Srv.startTripTimers(sess.pushCtx(), sess.Userid, key) {
 		sess.Push2_1()
 	}
@@ -539,7 +539,7 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	}
 	srv.setLevel(uid, level)
 	sess.rememberWeather(level, nowUnix)
-	// 重登落在钓鱼游地图上等同"已进入"：启表并推刷新档案。
+	// 兼容旧存档：重登时补启 last_consume_ts=0 的历史已购行。
 	if srv.startTripTimers(sess.pushCtx(), uid, level) {
 		sess.Push2_1()
 	}

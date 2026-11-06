@@ -9,7 +9,7 @@ import (
 )
 
 // TestTripCaptureSimulation 模拟客户端视角：登录 capture（f13 基址）→
-// 购票 → 进图启表 → capture 1/14 档案 → 用客户端公式算剩余。
+// 购票即启表 → 进图 capture 1/14 档案 → 用客户端公式算剩余。
 func TestTripCaptureSimulation(t *testing.T) {
 	srv, _ := newEconomyTxTestServer(t)
 	ctx0 := context.Background()
@@ -33,7 +33,7 @@ func TestTripCaptureSimulation(t *testing.T) {
 	wBase := u64Of(p0.Fields[13].Val.Fields[0].Num) // f13.f0 日内分钟
 	t.Logf("登录: f13.f0基址=%d sessionGameMin=%d", wBase, worldTotalGameMin(time.Now()))
 
-	// 购票（未启表）。
+	// 购票即启表。
 	if err := srv.DB.KVSet(ctx0, tripDurationKVKey, "120"); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestTripCaptureSimulation(t *testing.T) {
 		t.Fatal("购票失败")
 	}
 
-	// 购买即启表；回拨 10 秒模拟进图后在线消耗 10 秒。
+	// 购票即启表；回拨 10 秒模拟在线消耗 10 秒。
 	if _, err := srv.DB.SQL.Exec(
 		`UPDATE trip_state SET last_consume_ts=last_consume_ts-10 WHERE uid=? AND place=?`, uid, place); err != nil {
 		t.Fatal(err)

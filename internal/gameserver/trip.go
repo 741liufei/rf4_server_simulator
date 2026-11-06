@@ -2,12 +2,12 @@ package gameserver
 
 // 钓鱼游计时（3/38 购买，见 world.go hPlaceTripTx）。
 //
-// 计时规则（用户提供的官方说明 + 2026-11-05 口头修正）：每次购买 5 现实
-// 小时，**进入该地图才开始计时**；开始后只要会话在线就消耗——离线暂停，
-// 在线不论身处哪张地图都计时。实现上 last_consume_ts=0 表示"已购未进图"，
-// 进入地图（1/14 切图、1/13 重登落点）时由 startTripTimers 置为当前时刻
-// 启表；之后由 keepalive tick（session.go startKeepalive）每拍调用
-// consumeTripTimes 扣减，会话关闭时再消费一次即停表。
+// 计时规则（2026-11-06 反编译与实机复核）：每次购买 5 现实小时，**购买
+// 即启表**；购买后只要会话在线就消耗，离线暂停，在线不论身处哪张地图都
+// 计时。startTripTimers 仅用于兼容 last_consume_ts=0 的历史存档，在进入
+// 地图时补启表；新购票在 3/38 事务中直接写入 last_consume_ts=now。之后由
+// keepalive tick（session.go startKeepalive）每拍调用 consumeTripTimes 扣减，
+// 会话关闭时再消费一次即停表。
 
 import (
 	"context"
@@ -57,8 +57,8 @@ func (s *Server) tripLevelLocked(ctx context.Context, uid int64, level string) b
 	return n == 0
 }
 
-// startTripTimers 玩家进入钓鱼游地图时启表：last_consume_ts=0（已购未进图）
-// 的行置为当前时刻。已启表或未购票的行不动。返回是否新启动了计时。
+// startTripTimers 兼容旧存档：只把 last_consume_ts=0 的历史已购行置为当前
+// 时刻。新购票已经在 3/38 事务中启表；已启表或未购票的行不动。
 func (s *Server) startTripTimers(ctx context.Context, uid int64, level string) bool {
 	if s == nil || s.DB == nil {
 		return false
@@ -133,9 +133,15 @@ func (s *Session) consumeTripTimes(now time.Time) bool {
 		// 重试），档案 f22 不再包含该地点；钓鱼游装备包（租用物品）一并
 		// 从背包移除（trip_equip.go）。拆开执行曾在删除失败时留下 access
 		// 残留行，资格判断因此放行已到期玩家。
+		expected := *st
 		st.RemainingSec = 0
-		if uerr := s.Srv.DB.ExpireTripAccessTx(cctx, s.Userid, st.Place, nowF); uerr != nil {
+		expired, uerr := s.Srv.DB.ExpireTripAccessTx(cctx, expected, nowF)
+		if uerr != nil {
 			s.log.Warn("钓鱼游到期回收失败", "place", st.Place, "err", uerr)
+			continue
+		}
+		if !expired {
+			s.log.Info("钓鱼游状态已并发变化，本次不回收", "place", st.Place)
 			continue
 		}
 		revoked = true

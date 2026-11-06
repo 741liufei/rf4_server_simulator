@@ -28,7 +28,8 @@ Status: done
 ## Implementation Decisions
 
 - `internal/gameserver/world.go`：3/38 票价整段走 `placeTripPrices`，
-  移除"未收录按客户端报价"两条路径。
+  移除"未收录按客户端报价"两条路径；购票事务直接写入
+  `last_consume_ts=now`，按实机反编译结果**购买即启表**。
 - `internal/gameserver/handlers_game.go`：hTravel 前置 `tripLevelLocked`
   （与 hEnterMap 共用），锁定地图拒绝且不改写位置。
 - `internal/gameserver/trip.go`：资格 = place_access JOIN trip_state
