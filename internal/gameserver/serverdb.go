@@ -231,6 +231,9 @@ func (s *Server) EnsurePlayer(ctx context.Context, uid int64) error {
 	if _, err := s.DB.EnsureProfile(ctx, uid); err != nil {
 		return err
 	}
+	if _, _, err := s.removeItemsAndRepairRigs(ctx, uid, nil); err != nil {
+		return fmt.Errorf("修复物品装配引用: %w", err)
+	}
 	var parsed struct {
 		Items []struct {
 			ItemID string `json:"item_id"`

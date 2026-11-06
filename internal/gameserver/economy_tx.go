@@ -299,6 +299,10 @@ func grantPreparedItemTx(ctx context.Context, tx *sql.Tx, prepared *store.Item, 
 			if add < 1 {
 				add = 1
 			}
+			limit := bundleQuantityLimit(row.WireClass)
+			if cur < 0 || add > limit || cur > limit-add {
+				return nil, false, fmt.Errorf("堆叠物品数量溢出: %s", prepared.ItemID)
+			}
 			setItemQty(row.WireClass, fields, uint64(cur+add))
 			bumpCreatedTicks(fields, row.WireClass)
 			fj, ferr := FieldsToJSON(fields)

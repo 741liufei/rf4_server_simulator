@@ -123,7 +123,7 @@ func hItemRemove(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	guids := deepGUIDs(ctx.Tree)
-	removed, fish, err := srv.DB.RemoveOwnedItems(ctx.Sess.pushCtx(), ctx.Sess.Userid, guids)
+	removed, fish, err := srv.removeItemsAndRepairRigs(ctx.Sess.pushCtx(), ctx.Sess.Userid, guids)
 	if err != nil {
 		ctx.Log.Warn("物品移除失败", "err", err)
 		ctx.ReplyFailure("System.IO.IOException", "物品未能移除，请重试")
