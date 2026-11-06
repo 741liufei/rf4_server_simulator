@@ -64,6 +64,12 @@ var bottomRigTypes = map[int64]bool{
 	12: true, 13: true, 14: true, 15: true, 16: true, 17: true, 18: true,
 	23: true, 24: true, 25: true, 26: true, 27: true, 28: true, 29: true,
 	32: true, 34: true,
+	55: true, 56: true, 57: true, 58: true, 59: true, 60: true,
+}
+
+// floatRigTypes 是可调漂、允许饵在下沉行程中被接口的浮钓族。
+var floatRigTypes = map[int64]bool{
+	1: true, 2: true, 3: true, 4: true, 21: true, 30: true, 31: true,
 }
 
 // floatRigTypes 是可调漂、允许饵在下沉行程中被接口的浮钓族。
@@ -75,7 +81,10 @@ var floatRigTypes = map[int64]bool{
 var rigTypeLureFamily = map[int64]bool{
 	5: true, 6: true, 7: true, 8: true, 9: true, 10: true, 11: true,
 	19: true, 20: true, 22: true,
+	50: true, 51: true, 52: true, 53: true, 54: true,
 }
+
+func marineRigType(rigType int64) bool { return rigType >= 50 && rigType <= 60 }
 
 // defaultRigTypeForRod 按竿型选择第一个有资源名映射的允许钓组。
 func (s *Server) defaultRigTypeForRod(ctx context.Context, rodItemID string) int64 {

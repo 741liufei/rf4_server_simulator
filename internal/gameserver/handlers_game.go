@@ -700,6 +700,12 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 
+	// 海杆的 Rod 实例由 4/22 竿线全量树构建；普通纺车杆通常已从库存树
+	// 实例化。海杆没有该对象时，客户端的 RUILoadIndicator 会一直显示 0。
+	if srv.tunableF("marine_full_sync", 0) != 0 && marineRigType(rigType) {
+		ctx.Sess.Push4_22Full()
+	}
+
 	body := castReady158(ctx, gear, depthCM, rigType)
 	if body == nil {
 		return nil, false
@@ -1019,14 +1025,38 @@ func hFishingFall(ctx *Ctx) ([]byte, bool) {
 func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	// 14/9 fishing/pull：纺车杆的"抬杆"（右键）与"小刺"（Ctrl+右键）。
 	// 客户端在本地播放杆梢动作，这条命令是 fire-and-forget 通知，不需要回包。
-	// 先原样记录请求体，便于确认两种手势的参数差异。
-	ctx.Log.Info("14/9 抬杆/小刺", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 96))
-	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+	// 海钓使用 Pull 作为实际刺鱼入口，不一定另发普通钓法的 14/11；收到鱼后若只记录
+	// 这条命令，客户端永远得不到 14/15 挂钩确认，表现为不能抬竿且没有力度条。
+	srv := ctx.Sess.Srv
+	st := srv.stateFor(ctx.Sess.Userid)
 	st.mu.Lock()
-	if rigTypeLureFamily[st.RigType] {
+	pending, gear, rigType := st.Pending, st.GearGuid, st.RigType
+	if rigTypeLureFamily[rigType] {
 		st.recordLurePulseLocked(time.Now())
 	}
+	confirm := marineRigType(rigType) && pending != nil && st.CastActive && !st.Resolved && !st.Hooked
+	if confirm {
+		st.Hooked = true
+	}
 	st.mu.Unlock()
+	if confirm {
+		if err := srv.consumeHookedBait(ctx.Sess, pending, gear); err != nil {
+			ctx.Log.Warn("海钓抬竿后鱼饵扣减失败", "fish", pending.FishGUID, "err", err)
+		}
+		bound := false
+		if ctx.Sess.marineHookConfirm() {
+			bound = ctx.Sess.Push14_15(gear, pending.FishGUID)
+		} else if !ctx.Sess.marineHookItemSync() {
+			ctx.Log.Info("14/9 海钓抬竿只走真服 14/11 路径，跳过 14/15/4/22")
+		}
+		if ctx.Sess.marineHookItemSync() {
+			ctx.Sess.Push4_22Hook()
+		}
+		ctx.Log.Info("14/9 海钓抬竿确认", "rod", shortGUID(gear), "fish", shortGUID(pending.FishGUID),
+			"rig_type", rigType, "14/15", bound)
+	} else {
+		ctx.Log.Info("14/9 抬杆/小刺", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 96), "rig_type", rigType)
+	}
 	return nil, true
 }
 
@@ -1034,9 +1064,11 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv
 	st := srv.stateFor(ctx.Sess.Userid)
 	st.mu.Lock()
+	wasHooked := st.Hooked
 	st.Hooked = true
 	pending := st.Pending
 	gear := st.GearGuid
+	rigType := st.RigType
 	castActive := st.CastActive
 	resolved := st.Resolved
 	st.mu.Unlock()
@@ -1051,13 +1083,28 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	if pending == nil && !resolved && castActive {
 		srv.scheduleBiteForHooked(ctx.Sess, st)
 	}
-	ctx.Sess.Push4_22Hook()
+	if pending != nil && marineRigType(rigType) && !wasHooked {
+		if !ctx.Sess.marineHookConfirm() {
+			if !ctx.Sess.marineHookItemSync() {
+				ctx.Log.Info("14/11 只走真服已证实路径，跳过 14/15/4/22")
+			}
+		} else {
+			ctx.Sess.Push14_15(gear, pending.FishGUID)
+		}
+		if ctx.Sess.marineHookItemSync() {
+			ctx.Sess.Push4_22Hook()
+		}
+	} else {
+		ctx.Sess.Push4_22Hook()
+	}
 	return nil, true
 }
 
 func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	// 14/12 的 f0 是客户端鱼实体状态变化：
-	//   f0=3/5/6：客户端因钓组状态拒收鱼实体，保留当前鱼并延迟重推；
+	//   f0=3/5：客户端因钓组状态拒收鱼实体，保留当前鱼并延迟重推；
+	//   f0=6：鱼实体已经进入当前钓组，等待玩家刺鱼；不能重推或清 Hooked，
+	//          否则海钓会每 6 秒重复生成同一尾鱼并锁住右键抬竿。
 	//   f0=1/2/8：当前鱼未中钩离场；钓组仍在水中时重新等待下一尾；
 	//   其他：保守按本轮没有鱼处理。
 	srv := ctx.Sess.Srv
@@ -1070,7 +1117,13 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	}
 	st.mu.Lock()
 	ctx.Log.Info("14/12 鱼状态", "f0", f0)
-	if f0 == 3 || f0 == 5 || f0 == 6 {
+	if f0 == 6 {
+		st.cancelPendingTimerLocked()
+		st.PushSent = true
+		st.mu.Unlock()
+		return nil, true
+	}
+	if f0 == 3 || f0 == 5 {
 		// 客户端尚未接收鱼实体：保留当前鱼，延迟重推同一尾，
 		// 不能把不兼容的钓组状态误当成鱼已离场。
 		st.cancelBiteTimerLocked()

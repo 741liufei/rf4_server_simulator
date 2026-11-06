@@ -38,14 +38,15 @@ func neutralFishingSkillBonus() fishingSkillBonus {
 
 // fishingSkillCatForRig 根据钓组类型返回对应技能大类；未知类型归入浮钓。
 func fishingSkillCatForRig(rigType int64) int64 {
+	// 海钓拟饵/沉底族也分别参与对应动作状态机，但熟练度仍统一归海钓大类。
+	if marineRigType(rigType) {
+		return 11
+	}
 	if bottomRigTypes[rigType] {
 		return 3
 	}
 	if rigTypeLureFamily[rigType] {
 		return 2
-	}
-	if rigType >= 50 && rigType <= 59 {
-		return 11
 	}
 	return 1
 }

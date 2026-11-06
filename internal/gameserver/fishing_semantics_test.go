@@ -404,7 +404,7 @@ func TestCastLandingPositionFromObject(t *testing.T) {
 }
 
 func TestFishingLeftRigNotReadyRepushesSameFish(t *testing.T) {
-	for _, state := range []uint32{3, 5, 6} {
+	for _, state := range []uint32{3, 5} {
 		t.Run(fmt.Sprintf("status%d", state), func(t *testing.T) {
 			srv, _ := newDetachTestServer(t)
 			const uid = int64(1000001)

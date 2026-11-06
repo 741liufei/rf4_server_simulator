@@ -162,6 +162,7 @@ func TestFishTrueEscapeStillBroadcasts(t *testing.T) {
 	st := srv.stateFor(sess.Userid)
 	st.mu.Lock()
 	st.CastActive = true
+	st.Hooked = true // 只有已中鱼（14/11）后的 f0=8 才算真脱钩，未中钩离场官方静默。
 	st.Pending = &RolledFish{Species: "g_tench", WeightG: 547}
 	st.mu.Unlock()
 

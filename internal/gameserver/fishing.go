@@ -1460,6 +1460,33 @@ func (s *Session) Push14_14(f *RolledFish, hookGUID, gearGuid string) bool {
 	)) != 0
 }
 
+// marineHookConfirm 海钓额外挂钩推送开关，tunables 键 marine_hook_confirm。
+// 真服成功抓包只有 14/14 -> 14/11 -> 14/8，没有 14/15 或中钩时的 4/22。
+// 这两条额外推送会改变客户端鱼实体状态，默认关闭，只保留已证实的协议路径。
+func (s *Session) marineHookConfirm() bool {
+	return s.Srv.tunableF("marine_hook_confirm", 0) != 0
+}
+
+// marineHookItemSync 是否在 14/11/14/9 后补发单钩 4/22。
+// 真服抓包里没有单独的挂钩 4/22，但私服的 14/1/2 钓组树可能缺少客户端
+// 启动搏鱼所需的 mounted hook，因此单独保留开关做实测。
+func (s *Session) marineHookItemSync() bool {
+	return s.Srv.tunableF("marine_hook_item_sync", 0) != 0
+}
+
+// Push14_15 确认海钓鱼实体与当前钓组的挂钩关系。
+// 客户端契约为 args("524")[钓组 GUID, 鱼 GUID]；缺少该推送时海钓右键抬竿
+// 虽会上报 14/9，但鱼不会进入搏鱼状态，力度条也不会激活。
+func (s *Session) Push14_15(gearGUID, fishGUID string) bool {
+	if s == nil || gearGUID == "" || fishGUID == "" {
+		return false
+	}
+	return s.Push(14, 15, proto.Args524(
+		proto.Guid(gearGUID),
+		proto.Guid(fishGUID),
+	)) != 0
+}
+
 // fishPushDedupeWindow 同一尾鱼重复推送的抑制窗口。
 const fishPushDedupeWindow = 5 * time.Second
 
