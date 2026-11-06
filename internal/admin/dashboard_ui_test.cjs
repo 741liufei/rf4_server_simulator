@@ -20,19 +20,20 @@ test('params page groups preserve edits and upstream embedded API routing',async
    await page.clock.install();
    await page.goto('http://127.0.0.1:19214'+prefix+'/#params');
    await page.locator('#tun_xp_gain').waitFor();
-   assert.equal(await page.locator('.tunable-group').count(),2);
+   assert.equal(await page.locator('#tun_fish_weight_cap').getAttribute('placeholder'),'默认 0');
+   assert.equal(await page.locator('.tunable-group').count(),3);
    await page.locator('#tun_xp_gain').fill('2.5');
    await page.clock.fastForward(8100);
    await page.waitForTimeout(100);
    assert.equal(await page.locator('#tun_xp_gain').inputValue(),'2.5');
    for(const text of ['', '最长合理业务参数名称与说明'.repeat(10), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.repeat(15)]){
     if(text)await page.locator('.tunable-field label').first().evaluate((e,t)=>e.textContent=t,text);
-    const m=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth,fields:[...document.querySelectorAll('.tunable-field')].map(e=>{
+    const m=await page.evaluate(()=>({viewport:innerWidth,scroll:document.documentElement.scrollWidth,fields:[...document.querySelectorAll('.tunable-field')].filter(e=>e.querySelector('input')&&e.querySelector('button')).map(e=>{
      const input=e.querySelector('input').getBoundingClientRect(),button=e.querySelector('button').getBoundingClientRect(),label=e.querySelector('label');
      return {input:input.width,button:button.width,height:button.height,gap:button.x-input.right,labelScroll:label.scrollWidth,labelWidth:label.clientWidth,font:getComputedStyle(label).fontSize};
     })}));
     assert.ok(m.scroll<=m.viewport+1,JSON.stringify({width,scale,prefix,m}));
-    for(const f of m.fields){assert.ok(f.input>=50&&f.button>=40&&f.height>=28&&f.gap>=7);assert.ok(f.labelScroll<=f.labelWidth+1);}
+    for(const f of m.fields){assert.ok(f.input>=50&&f.button>=40&&f.height>=28&&f.gap>=7,JSON.stringify({width,scale,prefix,f}));assert.ok(f.labelScroll<=f.labelWidth+1);}
     metrics.push({width,scale,prefix,text:!text?'normal':text.startsWith('ABC')?'continuous':'chinese',...m.fields[0]});
    }
    assert.deepEqual(errors,[]);await context.close();

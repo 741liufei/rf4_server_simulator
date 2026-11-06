@@ -20,11 +20,11 @@ button,input,select,textarea{font:inherit;color:var(--text)}button{cursor:pointe
 .toast{position:fixed;right:22px;bottom:22px;display:flex;flex-direction:column;gap:8px;z-index:80}.toast div{padding:11px 14px;border-radius:11px;background:#17364b;border:1px solid #2d6680;box-shadow:var(--shadow);animation:in .2s ease}@keyframes in{from{opacity:0;transform:translateX(15px)}to{opacity:1;transform:none}}.toast .bad{background:#481f2a;border-color:#7a3443}.toast .ok{background:#143b31;border-color:#286a58}
 #login{min-height:100vh;display:grid;place-items:center;padding:20px}.login-card{width:min(390px,95vw);padding:28px;background:linear-gradient(160deg,#132539,#0b1521);border:1px solid #2a455f;border-radius:22px;box-shadow:0 30px 90px #000b}.login-card .logo{width:58px;height:58px;margin-bottom:18px}.login-card h1{font-size:23px;margin:0 0 4px}.login-card p{color:var(--muted);margin:0 0 20px}.login-card .field{margin-bottom:12px}
 .notice{position:fixed;left:0;right:0;top:0;z-index:95;display:flex;align-items:center;justify-content:center;gap:12px;padding:12px 54px 12px 20px;background:linear-gradient(90deg,#ff9f1c,#ff4d6d 45%,#c026d3);color:#fff;font-weight:800;font-size:15px;letter-spacing:.02em;text-shadow:0 1px 2px #0006;box-shadow:0 10px 30px #0007;animation:noticeIn .35s ease}.notice[hidden]{display:none}.notice .pulse{width:10px;height:10px;flex:0 0 10px;border-radius:50%;background:#fff;box-shadow:0 0 0 0 #ffffff99;animation:pulse 1.6s infinite}.notice .msg{max-width:min(1100px,84vw);text-align:center;line-height:1.5}.notice .msg b{color:#fff45c;font-size:16px}.notice .close{position:absolute;right:14px;top:50%;transform:translateY(-50%);width:30px;height:30px;border-radius:50%;border:1px solid #ffffff66;background:#00000026;color:#fff;font-size:15px;line-height:1;display:grid;place-items:center;padding:0}.notice .close:hover{background:#00000055}@keyframes noticeIn{from{transform:translateY(-100%)}to{transform:none}}@keyframes pulse{0%{box-shadow:0 0 0 0 #ffffff99}70%{box-shadow:0 0 0 12px #ffffff00}100%{box-shadow:0 0 0 0 #ffffff00}}body.notice-on{padding-top:56px}
-@media(max-width:1100px){.split{grid-template-columns:1fr}.player-list{max-height:300px}.stats{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:repeat(2,1fr)}.mail-box{grid-template-columns:1fr}}@media(max-width:720px){.shell{grid-template-columns:1fr}.sidebar{height:auto;position:relative;padding:13px}.nav{flex-direction:row;overflow:auto}.nav button{white-space:nowrap}.main{padding:16px}.topbar{align-items:flex-start}.stats,.form-grid,.skills{grid-template-columns:1fr}.modal-bg{padding:8px}}
+@media(max-width:1100px){.split{grid-template-columns:1fr}.player-list{max-height:300px}.stats{grid-template-columns:repeat(2,1fr)}.form-grid{grid-template-columns:repeat(2,1fr)}.mail-box{grid-template-columns:1fr}}@media(max-width:720px){.shell{grid-template-columns:1fr}.sidebar{height:auto;position:relative;padding:13px;min-width:0;overflow:hidden}.nav{flex-direction:row;overflow:auto;min-width:0;max-width:100%}.nav button{white-space:nowrap}.main{padding:16px}.topbar{align-items:flex-start}.stats,.form-grid,.skills{grid-template-columns:1fr}.modal-bg{padding:8px}}
 
 .main,.card,.view,.sidebar,.nav{min-width:0}.nav{max-width:100%}.player-hero{flex-wrap:wrap}.player-hero>div,.player-row>div{min-width:0;max-width:100%}.player-hero h2,.player-row .n{overflow-wrap:anywhere}
 
-@media(max-width:720px){.shell{grid-template-columns:minmax(0,1fr)}.field.span2{grid-column:auto}.toolbar .grow{min-width:100px}.player-hero .actions,.tabs{flex-wrap:wrap}.tabs button{flex:0 0 auto;white-space:nowrap}.nav button{flex:0 0 auto}}
+@media(max-width:720px){.shell{grid-template-columns:minmax(0,1fr);width:100%;overflow-x:hidden}.field.span2{grid-column:auto}.toolbar .grow{min-width:100px}.player-hero .actions,.tabs{flex-wrap:wrap}.tabs button{flex:0 0 auto;white-space:nowrap}.nav button{flex:0 0 auto}}
 
 /* 鱼群规则：单行紧凑开关条（说明默认收起、点「说明」展开），把视口高度让给下方的水域/鱼种列表 */
 #fishRulesCard{padding:12px 16px}
@@ -61,7 +61,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
  #fishAreas{max-height:45vh;overflow:auto}
  #fishEditor .table-wrap{max-height:60vh;overflow:auto}
 }
-@media(max-width:720px){#view-fish .fish-layout{grid-template-columns:minmax(0,1fr)!important}#view-dashboard .duo{grid-template-columns:minmax(0,1fr)!important}}
+@media(max-width:720px){#view-fish .fish-layout{grid-template-columns:minmax(0,1fr)!important}#view-dashboard .duo{grid-template-columns:minmax(0,1fr)!important}#paramsBody .tunable-field{display:block}#paramsBody .tunable-field>div:last-child{margin-top:8px;width:100%}#paramsBody .tunable-field input{width:auto;min-width:50px;flex:1}}
 /* 侧栏两行导航：名称 + 一句功能说明 */
 .nav button .txt{display:flex;flex-direction:column;align-items:flex-start;min-width:0}
 .nav button .txt small{font-size:10.5px;line-height:1.3;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px}
@@ -240,22 +240,33 @@ const TUNABLE_DEFS=[
   ['bait_pref_scale','饵效强度',1,'0=鱼不看饵；1=标准效果，按饵料偏好筛鱼'],
   ['bait_pref_weight_shift','饵效偏大体型',1,'越大越偏向个体大的鱼咬钩'],
   ['fish_weight_scale','鱼体重倍率',1,'全地图鱼重整体缩放，2=两倍重'],
-  ['fish_weight_cap','鱼重受钓具上限',1,'1=超出钓具负重的鱼按上限截断；0=不限制'],
+  ['fish_weight_cap','鱼重受钓具上限',0,'1=超出钓具负重的鱼按上限截断；0=不限制'],
   ['fight_power_scale','搏斗拉力倍率',1,'越低鱼挣扎越小、越不易断线；1=原版'],
   ['xp_gain','经验倍率',1,'结算经验整体缩放，1.5=多 50% 经验'],
   ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
+  ['fish_escape_taunt','跑鱼提示',1,'1=随机嘲讽文案；0=回退官方“鱼脱钩了”模板'],
 ];
 async function loadTunables(){
  const t=await api('/api/tunables');
  // 行式布局：左=标签+说明，右=数值+保存/恢复默认，双列排布
  const field=key=>{
   const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
+  if(key==='fish_escape_taunt'){
+   const on=parseFloat(String(t[key]??'1'))>0;
+   return `<div class="tunable-field"><div><label for="tun_fish_escape_taunt">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_escape_taunt" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_escape_taunt',${on?0:1})">${on?'嘲讽文案：开（点击关闭）':'官方“鱼脱钩了”（点击开启嘲讽）'}</button></div></div>`;
+  }
   return '<div class="tunable-field"><div><label for="tun_'+key+'">'+esc(label)+'</label><div class="tunable-hint">'+esc(hint)+'</div></div><div><input type="number" step="any" id="tun_'+key+'" value="'+esc(String(t[key]??''))+'" placeholder="默认 '+def+'"><button class="btn alt sm" onclick="saveTunable(\''+key+'\')">保存</button><button class="btn alt sm" title="回写代码默认值 '+def+'" onclick="resetTunable(\''+key+'\','+def+')">恢复默认</button></div></div>';
  };
  const group=(title,sub,keys)=>'<section class="tunable-group"><h3>'+esc(title)+'<small style="font-weight:400;margin-left:8px;color:var(--muted)">'+esc(sub)+'</small></h3><div class="tunable-fields">'+keys.map(field).join('')+'</div></section>';
  $('#paramsBody').innerHTML=
   group('玩法手感','咬钩快慢、饵料偏好、鱼的大小与挣扎力度',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift','fish_weight_scale','fish_weight_cap','fight_power_scale'])
-  +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio']);
+  +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio'])
+  +group('跑鱼提示','上鱼失败时的聊天播报样式',['fish_escape_taunt']);
+}
+async function saveTunableVal(key,val){
+  await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:String(val)})});
+  toast('已保存，最多 30 秒生效');
+  loadTunables();
 }
 async function saveTunable(key){
   const v=$('#tun_'+key).value.trim();
