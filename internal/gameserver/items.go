@@ -914,6 +914,29 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 	})
 }
 
+// fillFeedUnitWeight 把单件克重写进窝料实例的重量字段（U32 槽承载 IEEE754 位模式，
+// FLOAT 槽直接写浮点）。已有非零值不覆盖，返回是否发生变化。
+// 用途：老库存实例是在「照抄定义」的年代生成的，重量恒为 0。
+func fillFeedUnitWeight(wireClass string, fields []proto.Field, itemID string) bool {
+	idx := fieldIdxByCS(wireClass, castAttrWaterWeight)
+	if idx < 0 || idx >= len(fields) {
+		return false
+	}
+	grams := groundbaitUnitGrams(itemID)
+	if fieldIsFloat(wireClass, idx) {
+		if fields[idx].Float != 0 {
+			return false
+		}
+		fields[idx].Float = grams
+		return true
+	}
+	if u64Of(fields[idx].Num) != 0 {
+		return false
+	}
+	fields[idx].Num = ptrU64(uint64(math.Float32bits(float32(grams))))
+	return true
+}
+
 // applyDefAttrs 将 item_def.attrs_json 回填到对象；浮点值使用 IEEE754 位模式。
 func (s *Server) applyDefAttrs(def *store.ItemDef, class string, obj *proto.Value) {
 	if def.AttrsJSON == "" {
@@ -947,6 +970,14 @@ func (s *Server) applyDefAttrs(def *store.ItemDef, class string, obj *proto.Valu
 			if _, exists := attrs["dnmfciolgep"]; !exists {
 				attrs["dnmfciolgep"] = v
 			}
+		}
+	}
+	// 品类 46（成品窝料）的原生定义不带克重，实例照抄定义就永远是「质量 0 克」。
+	// 客户端「质量」那一行读的是实例重量字段（cilmgoaoofg f7 ijbjficbhog）的
+	// IEEE754 位模式、单位克；真实服务端按实例下发，这里按窝料档案补上。
+	if def.Category == 46 {
+		if w, ok := attrs[castAttrWaterWeight].(float64); !ok || w == 0 {
+			attrs[castAttrWaterWeight] = float64(math.Float32bits(float32(groundbaitUnitGrams(def.ItemID))))
 		}
 	}
 	for cs, val := range attrs {

@@ -53,6 +53,9 @@ type groundbaitItemDef struct {
 	Hold       float64            `json:"hold"`
 	TargetFish string             `json:"target_fish_key"`
 	Portions   float64            `json:"portions"`
+	// UnitGrams 一份窝料的单件克重，只用于物品实例的重量字段显示，
+	// 不参与吸引判定（吸引用 potency/dispersion/hold 那一套）。
+	UnitGrams float64 `json:"unit_grams"`
 }
 
 type groundbaitAffinityRow struct {
@@ -117,6 +120,23 @@ func groundbaitDefsLoad() *groundbaitDefs {
 		groundbaitDefsShared = d
 	})
 	return groundbaitDefsShared
+}
+
+// groundbaitDefaultUnitGrams 是档案缺项时的兜底克重（一球 30 克）。
+const groundbaitDefaultUnitGrams = 30.0
+
+// groundbaitUnitGrams 返回一份窝料的单件克重。
+//
+// 原生 item_def 里 11 个窝料（品类 46）的 ijbjficbhog 全是 0 —— 实测连商店买的
+// 「干混合」在客户端也显示「质量 0 克」，说明窝料克重是真实服务端**按实例**下发的，
+// 不是定义带的。客户端 kItemDesc_Mass 读实例重量字段的 IEEE754 位模式、单位是克
+// （2026-11-07 双值实测：写 30.0 显示「30 克」，写 30000.0 显示「30 公斤」）。
+// 所以这里按窝料档案补值，档案缺项回落到一球 30 克。
+func groundbaitUnitGrams(itemID string) float64 {
+	if def, ok := groundbaitDefsLoad().itemDef(itemID); ok && def.UnitGrams > 0 {
+		return def.UnitGrams
+	}
+	return groundbaitDefaultUnitGrams
 }
 
 // itemDef 取窝料档案；未知物品返回 ok=false，由调用方按中性档案处理。
