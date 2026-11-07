@@ -1,0 +1,197 @@
+{
+"items": [
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 0.76,
+"hold": 1.4,
+"item_id": "feed_amur",
+"particle": 0.51,
+"portions": 1.0,
+"potency": 2.76,
+"scent": 0.45,
+"target_fish_key": "g_carp"
+},
+{
+"diet": {
+"boilie": 0.189,
+"plant": 0.811
+},
+"dispersion": 0.84,
+"hold": 1.35,
+"item_id": "feed_dry",
+"particle": 0.32,
+"portions": 1.0,
+"potency": 2.6,
+"scent": 0.38,
+"target_fish_key": ""
+},
+{
+"diet": {
+"plant": 0.4047,
+"worm": 0.5953
+},
+"dispersion": 0.75,
+"hold": 1.1,
+"item_id": "feed_gustera",
+"particle": 0.24,
+"portions": 1.0,
+"potency": 2.22,
+"scent": 0.54,
+"target_fish_key": "s.bream"
+},
+{
+"diet": {
+"boilie": 0.103,
+"plant": 0.897
+},
+"dispersion": 1.01,
+"hold": 1.1,
+"item_id": "feed_karas",
+"particle": 0.2,
+"portions": 1.0,
+"potency": 1.78,
+"scent": 0.38,
+"target_fish_key": "crucian"
+},
+{
+"diet": {
+"plant": 0.7062,
+"worm": 0.2938
+},
+"dispersion": 0.71,
+"hold": 1.4,
+"item_id": "feed_karp",
+"particle": 0.44,
+"portions": 1.0,
+"potency": 2.62,
+"scent": 0.47,
+"target_fish_key": "carp"
+},
+{
+"diet": {
+"boilie": 0.0739,
+"plant": 0.6307,
+"worm": 0.2955
+},
+"dispersion": 0.72,
+"hold": 1.15,
+"item_id": "feed_lesh",
+"particle": 0.3,
+"portions": 1.0,
+"potency": 2.54,
+"scent": 0.42,
+"target_fish_key": "bream"
+},
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 1.1,
+"hold": 1.0,
+"item_id": "feed_lin",
+"particle": 0.13,
+"portions": 1.0,
+"potency": 1.64,
+"scent": 0.35,
+"target_fish_key": "tench"
+},
+{
+"diet": {
+"plant": 0.5568,
+"worm": 0.4432
+},
+"dispersion": 0.97,
+"hold": 1.0,
+"item_id": "feed_plotva",
+"particle": 0.16,
+"portions": 1.0,
+"potency": 1.46,
+"scent": 0.5,
+"target_fish_key": "c.roach"
+},
+{
+"diet": {
+"plant": 0.5762,
+"worm": 0.4238
+},
+"dispersion": 0.63,
+"hold": 1.6,
+"item_id": "feed_usach",
+"particle": 0.4,
+"portions": 1.0,
+"potency": 2.16,
+"scent": 0.45,
+"target_fish_key": "c_barbel"
+},
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 0.75,
+"hold": 1.35,
+"item_id": "feed_yaz",
+"particle": 0.42,
+"portions": 1.0,
+"potency": 2.78,
+"scent": 0.38,
+"target_fish_key": "s.orfe"
+},
+{
+"diet": {
+"boilie": 0.189,
+"plant": 0.811
+},
+"dispersion": 0.84,
+"hold": 1.35,
+"item_id": "feedcompleted",
+"particle": 0.32,
+"portions": 1.0,
+"potency": 2.6,
+"scent": 0.38,
+"target_fish_key": ""
+},
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 0.64,
+"hold": 1.0,
+"item_id": "pva_stick_l",
+"particle": 0.3,
+"portions": 1.0,
+"potency": 0.64,
+"scent": 0.56,
+"target_fish_key": ""
+},
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 0.64,
+"hold": 1.0,
+"item_id": "pva_stick_m",
+"particle": 0.3,
+"portions": 1.0,
+"potency": 0.64,
+"scent": 0.56,
+"target_fish_key": ""
+},
+{
+"diet": {
+"plant": 1.0
+},
+"dispersion": 0.64,
+"hold": 1.0,
+"item_id": "pva_stick_s",
+"particle": 0.3,
+"portions": 1.0,
+"potency": 0.64,
+"scent": 0.56,
+"target_fish_key": ""
+}
+],
+"profile_version": 1,
+"source": "offline-probe-v1.1"
+}
