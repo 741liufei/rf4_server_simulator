@@ -451,6 +451,43 @@ func TestBaitReloadRefreshesSourceStackForClient(t *testing.T) {
 	}
 }
 
+// TestBaitReloadSkipsWhenSelectedHookIsGone 锁定：钩随断线/断竿离组后，收竿补饵不能
+// 再往没有钩的钓组上挂饵（线上事故：断线丢掉钩和浮漂，14/4 仍补挂一份苍蝇，
+// 玩家看到钓组“损坏后鱼饵还在”）。
+func TestBaitReloadSkipsWhenSelectedHookIsGone(t *testing.T) {
+	s, db := newRigTestServer(t)
+	ctx := t.Context()
+	rod := baitTestRod(t, s)
+	hook := mountHookForBaitTest(t, s, rod, 0)
+	source, child := baitTestMount(t, s, rod, "worm_01", 5, 350)
+	if groups := s.baitedHookSets(ctx, rod); len(groups) != 1 || groups[0].hookGUID != hook {
+		t.Fatalf("初始钩饵关联异常: %+v", groups)
+	}
+	if _, err := s.consumeBaitEvent(ctx, 1000001, rod, "hook-gone-bite", []string{child}, false); err != nil {
+		t.Fatal(err)
+	}
+	if res := s.rigRemoveItemComponent(ctx, 1000001, rod, hook); res == nil {
+		t.Fatal("拆钩失败")
+	}
+
+	if _, err := s.reloadBaitForCast(ctx, 1000001, rod); err != nil {
+		t.Fatal(err)
+	}
+	if baits := s.currentBaits(ctx, rod); len(baits) != 0 {
+		t.Fatalf("钩已不在钓组上，收竿仍补挂了 %v", baits)
+	}
+	if row, err := db.GetItemByGUID(ctx, source); err != nil || row == nil || baitQuantity(row) != 4 {
+		t.Fatalf("来源饵堆不应被再次拆走: %+v err=%v", row, err)
+	}
+	var pending int
+	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM rod_setting WHERE guid=? AND key LIKE 'rebait:%'`, rod).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending != 0 {
+		t.Fatalf("已拆钩的补饵请求应清除，仍剩 %d 条", pending)
+	}
+}
+
 // TestBaitRefillsWhenFishIsLanded 锁定：14/11 吃掉钩上的最后一份饵后，14/4 收竿应当
 // 立即补挂同种库存。若把补饵拖到下一次 14/1/14/2，客户端会停在空钩状态，玩家
 // 必须先手动换饵才能抛竿（手杆上鱼一条后鱼饵消失）。

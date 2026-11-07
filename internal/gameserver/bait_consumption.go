@@ -611,13 +611,18 @@ func (s *Server) reloadBaitForCast(ctx context.Context, uid int64, rod string) (
 		comps := s.storedRigComponents(ctx, rod)
 		occupied := false
 		mountOrdinal := ordinal
-		if multi && request.HookGUID != "" {
+		// 钩已随断线、断竿或拆卸离开钓组时，这条补饵请求作废：不能再把饵挂到
+		// 没有钩的钓组上。多钩钓组一直有这段校验，单钩钓组此前漏掉了，
+		// 表现为“断线丢了钩和浮漂，14/4 收杆又把鱼饵补回去”。
+		if request.HookGUID != "" {
 			if _, _, present := rigCompKeyForGUID(comps, request.HookGUID); !present {
 				if _, err := s.DB.SQL.ExecContext(ctx, `DELETE FROM rod_setting WHERE guid=? AND key=?`, rod, key); err != nil {
 					return out, err
 				}
 				continue
 			}
+		}
+		if multi && request.HookGUID != "" {
 			assignments, err := s.baitHookAssignments(ctx, rod, comps, false)
 			if err != nil {
 				return out, err
