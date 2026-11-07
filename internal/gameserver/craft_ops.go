@@ -107,6 +107,15 @@ func craftOutputMerges(def *store.ItemDef) bool {
 	return def.Category != 46 && def.Category != 30
 }
 
+// appendMaterialUses 按实际扣掉的件数记录用料。PVA 棒的 10/20/50 克规格
+// 分别装 1/2/5 份干饵，只记一次会让大棒和小棒的成分比例失真。
+func appendMaterialUses(dst []string, itemID string, qty int64) []string {
+	for i := int64(0); i < qty; i++ {
+		dst = append(dst, itemID)
+	}
+	return dst
+}
+
 // 制作配方对应的技能大类（捕获鱼饵 4 见 baitdig.go）。
 const (
 	craftCookSkillID = 6 // 烹调术
@@ -517,7 +526,7 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 					}
 					remaining -= got
 					if got > 0 {
-						usedMats = append(usedMats, it.ItemID)
+						usedMats = appendMaterialUses(usedMats, it.ItemID, got)
 						if !containsGUID(touched, it.GUID) {
 							touched = append(touched, it.GUID)
 						}
@@ -573,7 +582,7 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 					return fail("材料不足", "item", row.ItemID, "missing", need-got)
 				}
 				consumed = true
-				usedMats = append(usedMats, row.ItemID)
+				usedMats = appendMaterialUses(usedMats, row.ItemID, got)
 				if !containsGUID(touched, row.GUID) {
 					touched = append(touched, row.GUID)
 				}
@@ -619,7 +628,7 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 					}
 					remaining -= got
 					if got > 0 {
-						usedMats = append(usedMats, it.ItemID)
+						usedMats = appendMaterialUses(usedMats, it.ItemID, got)
 					}
 					consumed = true
 				}
