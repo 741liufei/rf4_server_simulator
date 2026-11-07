@@ -383,6 +383,27 @@ func (s *Server) biteDelayInWeather(st *FishState, weather fishingWeather, now t
 	return standardBiteDelay(d, bonus.BiteSpeed, maxDelay, scale)
 }
 
+// biteFloorDelay 返回落水保护时长。
+//
+// 浮钓/底钓的基础保护是 6 秒；该值必须跟随 bite_delay_scale，
+// 否则把倍率调快后第一轮到点仍会被"落水未满 6 秒"顺延回去，
+// 玩家看到的就是固定 6 秒延迟。下限 800ms，避免倍率极小时立刻判鱼。
+// 路亚族固定 1.2 秒：拟饵落水即生效，没有"浮标立稳"这一环，也不吃倍率。
+func biteFloorDelay(scale float64, lure bool) time.Duration {
+	if lure {
+		return 1200 * time.Millisecond
+	}
+	floor := 6 * time.Second
+	if scale > 0 {
+		scaled := time.Duration(float64(floor) * scale)
+		if scaled < 800*time.Millisecond {
+			scaled = 800 * time.Millisecond
+		}
+		floor = scaled
+	}
+	return floor
+}
+
 func standardBiteDelay(sample, biteSpeed, capS, scale float64) float64 {
 	if biteSpeed <= 0 {
 		biteSpeed = 1
@@ -1605,11 +1626,9 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		base = st.FallTs
 	}
 	lure := rigTypeLureFamily[st.RigType]
-	// 路亚族 floor 降 1.2s：拟饵落水即生效，没有"浮标立稳"这回事。
-	floor := 6 * time.Second
+	floor := biteFloorDelay(s.tunableF("bite_delay_scale", 1.0), lure)
 	minWait := time.Second
 	if lure {
-		floor = 1200 * time.Millisecond
 		minWait = 500 * time.Millisecond
 	}
 	now := time.Now()
