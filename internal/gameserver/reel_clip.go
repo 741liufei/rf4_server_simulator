@@ -14,6 +14,8 @@ const (
 	reelDragSettingKey  = "reel_drag_setting"
 	reelSpeedSettingKey = "reel_speed_setting"
 	maxReelClipM        = 10000
+	// defaultReelSpeed 新竿 f5.f7 的出厂默认，也是玩家从未调过 17/15 时的收线速度。
+	defaultReelSpeed int64 = 15
 )
 
 func clampReelClipM(v int64) int64 {
@@ -65,7 +67,7 @@ func buildRig153Full(name string, rigType int64, comps map[int64]rigComp, depth,
 		4: proto.U32(uint32(depth)),
 		5: proto.U32(uint32(clampReelClipM(clipM))),
 		6: proto.U32(15),
-		7: proto.U32(15),
+		7: proto.U32(uint32(defaultReelSpeed)),
 		8: proto.U32(uint32(clampBaitMount(baitMountSel))),
 		9: proto.U32(uint32(clampBaitMount(baitMountAvail))),
 	})

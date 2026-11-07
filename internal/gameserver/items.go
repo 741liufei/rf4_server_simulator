@@ -885,7 +885,7 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 	if saved, ok := s.rodReelDragSetting(ctx, it.GUID); ok {
 		drag = saved
 	}
-	speed := int64(15)
+	speed := defaultReelSpeed
 	if saved, ok := s.rodReelSpeedSetting(ctx, it.GUID); ok {
 		speed = saved
 	}

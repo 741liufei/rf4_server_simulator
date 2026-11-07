@@ -1634,10 +1634,9 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	ctx.Log.Info("17/14 设置摩擦", "竿", shortGUID(rodGUID), "值", value)
-	if srv.DB != nil {
-		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelDragSettingKey,
-			strconv.FormatInt(value, 10))
-		srv.rodRigSetDrag(ctx.Sess.pushCtx(), rodGUID, value)
+	if srv.DB != nil && !srv.setOwnedRodSetting(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+		rodGUID, reelDragSettingKey, value, 6) {
+		ctx.Log.Warn("17/14 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
 	}
 	return nil, true
 }
@@ -1653,33 +1652,34 @@ func hRodSetSpeed(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	ctx.Log.Info("17/15 设置收线速度", "竿", shortGUID(rodGUID), "值", value)
+	if srv.DB != nil {
+		if !srv.setOwnedRodSetting(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+			rodGUID, reelSpeedSettingKey, value, 7) {
+			ctx.Log.Warn("17/15 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
+	}
 	st := srv.stateFor(ctx.Sess.Userid)
 	st.mu.Lock()
 	st.ReelSetting = value
 	st.mu.Unlock()
-	if srv.DB != nil {
-		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelSpeedSettingKey,
-			strconv.FormatInt(value, 10))
-		srv.rodRigSetSpeed(ctx.Sess.pushCtx(), rodGUID, value)
-	}
 	return nil, true
 }
 
-// rodRigSetDrag 把摩擦档位写回竿实例钓组桩的第 6 个字段，保留其他钓组状态。
-func (s *Server) rodRigSetDrag(ctx context.Context, rodGUID string, value int64) bool {
-	return s.rodRigSetSetting(ctx, rodGUID, 6, value)
-}
-
-// rodRigSetSpeed 把收线速度写回竿实例钓组桩的第 7 个字段，保留其他钓组状态。
-func (s *Server) rodRigSetSpeed(ctx context.Context, rodGUID string, value int64) bool {
-	return s.rodRigSetSetting(ctx, rodGUID, 7, value)
-}
-
-func (s *Server) rodRigSetSetting(ctx context.Context, rodGUID string, fieldIdx int, value int64) bool {
+// setOwnedRodSetting 校验竿实例属于 uid 后，持久化竿设置并尽力回写 f5 的第 fieldIdx 个字段。
+// 返回 false 表示竿不存在或不属于该玩家，此时不产生任何写入。
+func (s *Server) setOwnedRodSetting(ctx context.Context, uid int64, rodGUID, key string, value int64, fieldIdx int) bool {
 	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
+	if err != nil || row == nil || row.UID != uid {
 		return false
 	}
+	_ = s.DB.UpsertRodSetting(ctx, rodGUID, key, strconv.FormatInt(value, 10))
+	s.rodRigSetField(ctx, row, fieldIdx, value)
+	return true
+}
+
+// rodRigSetField 把值写回竿实例钓组桩的第 fieldIdx 个字段，保留其他钓组状态。
+func (s *Server) rodRigSetField(ctx context.Context, row *store.Item, fieldIdx int, value int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false
