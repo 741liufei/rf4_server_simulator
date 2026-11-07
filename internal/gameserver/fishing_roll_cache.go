@@ -131,11 +131,12 @@ func (s *Server) cachedGradeLines(ctx context.Context, c fishRollContext, key st
 
 func (s *Server) cachedSpeciesLengthKP(ctx context.Context, c fishRollContext, key string) (float64, float64) {
 	if s.DB == nil {
-		return 0.0355, 1.0 / 3.0
+		return defaultSpeciesLengthK, defaultSpeciesLengthP
 	}
 	cache := rollCache(c)
 	if cache == nil {
-		return s.DB.SpeciesLengthKP(ctx, key)
+		k, p := s.DB.SpeciesLengthKP(ctx, key)
+		return calibratedLengthKP(key, k, p)
 	}
 	cache.mu.Lock()
 	if values, ok := cache.lengthKP[key]; ok {
@@ -144,6 +145,7 @@ func (s *Server) cachedSpeciesLengthKP(ctx context.Context, c fishRollContext, k
 	}
 	cache.mu.Unlock()
 	k, p := s.DB.SpeciesLengthKP(ctx, key)
+	k, p = calibratedLengthKP(key, k, p)
 	cache.mu.Lock()
 	cache.lengthKP[key] = [2]float64{k, p}
 	cache.mu.Unlock()

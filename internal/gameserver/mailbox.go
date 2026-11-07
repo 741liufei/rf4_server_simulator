@@ -800,8 +800,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		if entry.LengthM <= 0 && entry.WeightG > 0 {
 			lp := lengthSeed[entry.Species]
 			if lp[0] == 0 {
-				lp = [2]float64{0.0355, 1.0 / 3.0}
+				lp = [2]float64{defaultSpeciesLengthK, defaultSpeciesLengthP}
 			}
+			lp[0], lp[1] = calibratedLengthKP(entry.Species, lp[0], lp[1])
 			entry.LengthM = math.Round(lp[0]*math.Pow(float64(entry.WeightG), lp[1])*100000) / 100000
 		}
 		if err := s.DB.KeepnetInsert(ctx, &entry); err != nil {
@@ -843,8 +844,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		if f.LengthM == 0 {
 			lp := lengthSeed[f.Species]
 			if lp[0] == 0 {
-				lp = [2]float64{0.0355, 1.0 / 3.0}
+				lp = [2]float64{defaultSpeciesLengthK, defaultSpeciesLengthP}
 			}
+			lp[0], lp[1] = calibratedLengthKP(f.Species, lp[0], lp[1])
 			f.LengthM = math.Round(lp[0]*math.Pow(float64(f.WeightG), lp[1])*100000) / 100000
 		}
 		st.mu.Lock()
