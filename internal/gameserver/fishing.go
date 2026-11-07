@@ -507,10 +507,10 @@ const (
 	verifiedStaminaPerGram      = 2.3880400747623083
 	verifiedInitialStaminaRatio = 0.5628187656402588
 	verifiedForcePerGram        = 0.009806650025503976
-	// 实机反馈鱼体力见底过快：默认把体力池放大 4 倍，并让鱼以 85% 体力开局。
-	// 两项都可通过 tunables 的 fish_stamina_scale / fish_initial_stamina_ratio 调整。
-	defaultFishStaminaScale        = 4.0
-	defaultFishInitialStaminaRatio = 0.85
+	// 默认使用真实样本校准值；需要调整手感时只通过 tunables 显式覆盖，
+	// 不再把主观补偿值作为全体鱼的基准。
+	defaultFishStaminaScale        = 1.0
+	defaultFishInitialStaminaRatio = verifiedInitialStaminaRatio
 )
 
 // lengthSeed 保存体长公式 k*w^p 的参数。
