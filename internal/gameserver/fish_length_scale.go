@@ -1,5 +1,7 @@
 package gameserver
 
+import "math"
+
 // 体长系数校准表。
 //
 // 静态库 species_weight 里 252 个鱼种的 length_k 绝大多数是同一个默认值 0.0355，
@@ -8,6 +10,7 @@ package gameserver
 // 换算：length_k = 现实最大体长(m) / 站点记录最大重量(g)^(1/3)，length_p 固定 1/3。
 // 重量锚点取 cn.rf4-stat.com 各鱼种「全部时间 最大重量」，体长锚点取现实生物学最大体长；
 // 缺少站点重量的鱼种用已锚定样本回归后夹在 [0.02, 0.09]，蟹/鱿/蚌/蛙等非鱼类不参与校准。
+// 静态库中已有非默认 k 或 p 的鱼种属于官方样本标定曲线，不使用本表覆盖。
 //
 // 以查表覆盖的方式生效：静态库不改，静态导入的内容哈希保持稳定。
 
@@ -47,7 +50,6 @@ var speciesLengthKOverride = map[string]float64{
 	"bullhead_syb":        0.098400,
 	"burbot":              0.057690,
 	"c.carp":              0.045214,
-	"c.roach":             0.047052,
 	"c_anguineus":         0.042205,
 	"c_barbel":            0.045000,
 	"c_bleak":             0.041741,
@@ -68,13 +70,10 @@ var speciesLengthKOverride = map[string]float64{
 	"chavycha":            0.029240,
 	"chimaera":            0.131037,
 	"chir":                0.036593,
-	"chlamys_isl":         0.045711,
 	"chukuchan":           0.044523,
 	"coalfish":            0.044971,
 	"common_carp":         0.041039,
 	"conger":              0.042082,
-	"crawfish":            0.046124,
-	"crucian":             0.040369,
 	"d_zubatka":           0.025517,
 	"dace":                0.047622,
 	"din_l_carp":          0.042448,
@@ -88,7 +87,6 @@ var speciesLengthKOverride = map[string]float64{
 	"eel":                 0.094494,
 	"fe_lamprey":          0.047333,
 	"fhcatfish":           0.064366,
-	"freshwater_mussel":   0.046162,
 	"fwdrum":              0.025198,
 	"g_carp":              0.042601,
 	"g_carp_albino":       0.042601,
@@ -150,7 +148,6 @@ var speciesLengthKOverride = map[string]float64{
 	"mikija":              0.035000,
 	"molva":               0.042678,
 	"muksun":              0.038522,
-	"mytilus_ed":          0.046445,
 	"n.pike":              0.065519,
 	"n_asagi":             0.030780,
 	"n_carp":              0.042554,
@@ -161,7 +158,6 @@ var speciesLengthKOverride = map[string]float64{
 	"nerka":               0.048457,
 	"palia_kr":            0.048535,
 	"palia_lud":           0.040936,
-	"perch":               0.021948,
 	"piksha":              0.053957,
 	"pinagor":             0.027516,
 	"pollachius":          0.044964,
@@ -171,7 +167,6 @@ var speciesLengthKOverride = map[string]float64{
 	"red_fish":            0.069336,
 	"resfish":             0.041894,
 	"rudd":                0.043679,
-	"s.bream":             0.066818,
 	"s.orfe":              0.050397,
 	"s_bass":              0.028965,
 	"s_carp":              0.042678,
@@ -190,10 +185,17 @@ var speciesLengthKOverride = map[string]float64{
 	"zoarces_v":           0.051787,
 }
 
-// calibratedLengthK 返回该鱼种校准后的 length_k；没有校准值时原样返回。
-func calibratedLengthK(key string, k float64) float64 {
-	if v, ok := speciesLengthKOverride[key]; ok {
-		return v
+const (
+	defaultSpeciesLengthK = 0.0355
+	defaultSpeciesLengthP = 1.0 / 3.0
+)
+
+// calibratedLengthKP 返回校准后的体长参数。
+// 只覆盖静态库仍使用默认 k/p 的鱼种；已有非默认参数代表官方样本标定曲线，必须原样保留。
+func calibratedLengthKP(key string, k, p float64) (float64, float64) {
+	v, ok := speciesLengthKOverride[key]
+	if !ok || math.Abs(k-defaultSpeciesLengthK) > 1e-9 || math.Abs(p-defaultSpeciesLengthP) > 1e-9 {
+		return k, p
 	}
-	return k
+	return v, defaultSpeciesLengthP
 }

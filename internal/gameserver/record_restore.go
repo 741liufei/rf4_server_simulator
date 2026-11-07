@@ -31,6 +31,7 @@ func PrepareRestoredRecord(ctx context.Context, db *store.DB, key string, grade,
 		return r, fmt.Errorf("%s：重量不在所选档位内，或该鱼种没有此档位", key)
 	}
 	k, p := db.SpeciesLengthKP(ctx, key)
+	k, p = calibratedLengthKP(key, k, p)
 	r.WeightG, r.LengthM = weight, k*math.Pow(float64(weight), p)
 	return r, nil
 }
