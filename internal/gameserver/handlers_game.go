@@ -37,10 +37,11 @@ func hProfile(ctx *Ctx) ([]byte, bool) {
 	return body, true
 }
 
-// 容器枚举（Go 只建模 0 背包 / 5 鱼护）。
+// 客户端库存枚举。
 const (
-	containerBackpack = 0
-	containerKeepnet  = 5
+	containerBackpack     = 0
+	containerKeepnet      = 5
+	containerTradingCards = 18
 )
 
 // ---- 4/1 items/count ----
@@ -766,6 +767,7 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 	if !srv.pendingCatchAllowsCast(ctx, st) {
 		return nil, true
 	}
+	st = srv.selectFishingRod(ctx.Sess.Userid, gear)
 	reelSetting, hasReelSetting := srv.rodReelDragSetting(ctx.Sess.pushCtx(), gear)
 	st.mu.Lock()
 	st.GearGuid = gear
@@ -866,6 +868,8 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 	if !srv.pendingCatchAllowsCast(ctx, st) {
 		return nil, true
 	}
+	st = srv.selectFishingRod(ctx.Sess.Userid, gear)
+	st.mu.Lock()
 	if ctx.Tree != nil {
 		if loc := findObjStr(ctx.Tree, "olieodeoaof"); loc != "" {
 			st.Loc = loc
@@ -875,7 +879,6 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 		}
 	}
 	castX, castZ, hasCastPos := castLandingPosition(ctx.Tree)
-	st.mu.Lock()
 	st.GearGuid = gear
 	st.CastPosX, st.CastPosZ, st.HasCastPos = castX, castZ, hasCastPos
 	st.mu.Unlock()
@@ -1089,7 +1092,7 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 				seq = u64Of(o.Field(14).Num)
 			}
 			strs := treeStrsDeep(o)
-			st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+			st := ctx.Sess.Srv.fishingStateForRequest(ctx)
 			st.mu.Lock()
 			st.TickSeen = true
 			st.TickSeq = seq
@@ -1136,15 +1139,15 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 				}
 			}
 			if needBite {
-				ctx.Log.Info("钓组在水中，补排咬钩", "f5", fmt.Sprintf("0x%X", anim))
+				ctx.Log.Info("钓组在水中，补排咬钩", "rod", shortGUID(st.GearGuid), "f5", fmt.Sprintf("0x%X", anim))
 				ctx.Sess.Srv.scheduleBiteForHooked(ctx.Sess, st)
 			} else if enterWater {
-				ctx.Log.Info("钓组在水中", "f5", fmt.Sprintf("0x%X", anim))
+				ctx.Log.Info("钓组在水中", "rod", shortGUID(st.GearGuid), "f5", fmt.Sprintf("0x%X", anim))
 			}
 			// 14/7 每帧都会发送，仅在动画位变化时记录日志。
 			if changed {
 				stateAgeMS := time.Since(st.LureStateAt).Milliseconds()
-				ctx.Log.Info("14/7 钓组动画位", "f5", fmt.Sprintf("0x%X", anim),
+				ctx.Log.Info("14/7 钓组动画位", "rod", shortGUID(st.GearGuid), "f5", fmt.Sprintf("0x%X", anim),
 					"mask", fmt.Sprintf("0x%X", anim&lureMotionStatusMask),
 					"action", st.LureAction, "layer", st.LureLayer,
 					"layer_cm", st.effectiveBaitDepthCMLocked(time.Now()),
@@ -1156,7 +1159,7 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 }
 
 func hFishingFall(ctx *Ctx) ([]byte, bool) {
-	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+	st := ctx.Sess.Srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.FallSeen = true
 	st.FallTs = time.Now()
@@ -1170,7 +1173,7 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	// 海钓使用 Pull 作为实际刺鱼入口，不一定另发普通钓法的 14/11；收到鱼后若只记录
 	// 这条命令，客户端永远得不到 14/15 挂钩确认，表现为不能抬竿且没有力度条。
 	srv := ctx.Sess.Srv
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	pending, gear, rigType := st.Pending, st.GearGuid, st.RigType
 	if rigTypeLureFamily[rigType] {
@@ -1192,7 +1195,7 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 			ctx.Log.Info("14/9 海钓抬竿只走真服 14/11 路径，跳过 14/15/4/22")
 		}
 		if ctx.Sess.marineHookItemSync() {
-			ctx.Sess.Push4_22Hook()
+			ctx.Sess.Push4_22Hook(gear)
 		}
 		ctx.Log.Info("14/9 海钓抬竿确认", "rod", shortGUID(gear), "fish", shortGUID(pending.FishGUID),
 			"rig_type", rigType, "14/15", bound)
@@ -1204,7 +1207,7 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 
 func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	wasHooked := st.Hooked
 	st.Hooked = true
@@ -1218,7 +1221,7 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	if pending != nil {
 		fishGUID, species = pending.FishGUID, pending.Species
 	}
-	ctx.Log.Info("14/11 中鱼", "fish", shortGUID(fishGUID), "species", species, "was_hooked", wasHooked)
+	ctx.Log.Info("14/11 中鱼", "rod", shortGUID(gear), "fish", shortGUID(fishGUID), "species", species, "was_hooked", wasHooked)
 	if pending != nil {
 		if err := srv.consumeHookedBait(ctx.Sess, pending, gear); err != nil {
 			ctx.Log.Warn("中鱼后鱼饵扣减失败", "fish", pending.FishGUID, "err", err)
@@ -1239,10 +1242,10 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 			ctx.Sess.Push14_15(gear, pending.FishGUID)
 		}
 		if ctx.Sess.marineHookItemSync() {
-			ctx.Sess.Push4_22Hook()
+			ctx.Sess.Push4_22Hook(gear)
 		}
 	} else {
-		ctx.Sess.Push4_22Hook()
+		ctx.Sess.Push4_22Hook(gear)
 	}
 	return nil, true
 }
@@ -1255,7 +1258,7 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	//   f0=1/2/8：当前鱼未中钩离场；钓组仍在水中时重新等待下一尾；
 	//   其他：保守按本轮没有鱼处理。
 	srv := ctx.Sess.Srv
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	f0 := uint32(0)
 	if ctx.Tree != nil {
 		if o := findObj(ctx.Tree, "lhicjpmglbo"); o != nil && o.FieldCount() > 0 {
@@ -1263,7 +1266,7 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 		}
 	}
 	st.mu.Lock()
-	ctx.Log.Info("14/12 鱼状态", "f0", f0)
+	ctx.Log.Info("14/12 鱼状态", "rod", shortGUID(st.GearGuid), "f0", f0, "hooked", st.Hooked)
 	if f0 == 6 {
 		st.cancelPendingTimerLocked()
 		st.PushSent = true
@@ -1357,7 +1360,7 @@ func hFishingLoad(ctx *Ctx) ([]byte, bool) {
 // 结算由 progress_ops.go 的 fishingEndSettle 完成，包括经验、Premium 加成和等级更新。
 func hFishingEnd(ctx *Ctx) ([]byte, bool) {
 	// 收竿：钓组离水，清掉“在水中/挂起”状态。
-	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
+	st := ctx.Sess.Srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.InWater = false
 	st.NeedBite = false

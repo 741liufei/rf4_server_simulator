@@ -313,7 +313,7 @@ func TestItemRemoveRepairPreservesValidRigAndOtherPlayer(t *testing.T) {
 	if _, err := db.SQL.Exec(`INSERT INTO rod_setting(guid,key,value) VALUES(?,'test','42')`, foreignMissingRod); err != nil {
 		t.Fatal(err)
 	}
-	foreignFishing := &store.FishingState{UID: sess.Userid + 1, GearGUID: foreignMissingRod, CastActive: true,
+	foreignFishing := &store.FishingState{UID: sess.Userid + 1, RodGUID: foreignMissingRod, GearGUID: foreignMissingRod, CastActive: true,
 		Pending: &store.FishingFish{FishGUID: "dddddddddddddddddddddddddddddddd"}}
 	if err := db.SaveFishingState(ctx, foreignFishing); err != nil {
 		t.Fatal(err)

@@ -16,13 +16,15 @@ import (
 // attachments to the backpack. An empty list repairs existing login data without
 // granting replacement items or changing another player's inventory.
 func (s *Server) removeItemsAndRepairRigs(ctx context.Context, uid int64, guids []string) (removed, fish []string, err error) {
-	s.fishMu.Lock()
-	st := s.fishStates[uid]
-	s.fishMu.Unlock()
-	if st != nil {
+	states := s.fishingStatesFor(uid)
+	for _, st := range states {
 		st.mu.Lock()
-		defer st.mu.Unlock()
 	}
+	defer func() {
+		for i := len(states) - 1; i >= 0; i-- {
+			states[i].mu.Unlock()
+		}
+	}()
 	tx, err := beginEconomyTx(ctx, s.DB)
 	if err != nil {
 		return nil, nil, err
@@ -84,10 +86,11 @@ func (s *Server) removeItemsAndRepairRigs(ctx context.Context, uid int64, guids 
 		}
 		clearRigFieldsForBackpack(fields, row.WireClass)
 		row.RigGUID = ""
+		row.Container = tradingItemContainer(row.WireClass, "backpack")
 		if err := updateItemFieldsTx(ctx, s.DB, tx, row, fields); err != nil {
 			return nil, nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE item SET container='backpack', slot=0 WHERE guid=? AND uid=?`, row.GUID, uid); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE item SET container=?, slot=0 WHERE guid=? AND uid=?`, row.Container, row.GUID, uid); err != nil {
 			return nil, nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE guid=? AND EXISTS
@@ -121,12 +124,18 @@ func (s *Server) removeItemsAndRepairRigs(ctx context.Context, uid int64, guids 
 		}
 	}
 
-	clearHeld := false
-	if st != nil && st.GearGuid != "" {
+	var clearStates []*FishState
+	for _, st := range states {
+		if st.GearGuid == "" {
+			continue
+		}
 		_, err := getOwnedItemTx(ctx, tx, uid, st.GearGuid)
-		clearHeld = errors.Is(err, sql.ErrNoRows)
+		clearHeld := errors.Is(err, sql.ErrNoRows)
 		if err != nil && !clearHeld {
 			return nil, nil, err
+		}
+		if clearHeld {
+			clearStates = append(clearStates, st)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE fishing_state SET
@@ -140,7 +149,7 @@ func (s *Server) removeItemsAndRepairRigs(ctx context.Context, uid int64, guids 
 	if err := tx.Commit(); err != nil {
 		return nil, nil, err
 	}
-	if clearHeld {
+	for _, st := range clearStates {
 		st.cancelBiteTimerLocked()
 		st.cancelPendingTimerLocked()
 		st.castGeneration++

@@ -245,6 +245,10 @@ const TUNABLE_DEFS=[
   ['xp_gain','经验倍率',1,'结算经验整体缩放，1.5=多 50% 经验'],
   ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
   ['fish_escape_taunt','跑鱼提示',1,'1=随机嘲讽文案；0=回退官方“鱼脱钩了”模板'],
+  ['card_drop_normal','普通 / 达标鱼掉卡率',0.001,'0~1。默认 0.001 = 0.1%，每尾实际钓获抽一次'],
+  ['card_drop_star','星鱼掉卡率',0.5,'0~1。默认 0.5 = 50%'],
+  ['card_drop_blue','蓝冠鱼掉卡率',0.8,'0~1。默认 0.8 = 80%'],
+  ['card_drop_rare_scale','稀有鱼掉卡系数',0.25,'0~1。稀有、超稀有鱼统一乘此系数，默认 0.25'],
 ];
 async function loadTunables(){
  const t=await api('/api/tunables');
@@ -261,6 +265,7 @@ async function loadTunables(){
  $('#paramsBody').innerHTML=
   group('玩法手感','咬钩快慢、饵料偏好、鱼的大小与挣扎力度',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift','fish_weight_scale','fish_weight_cap','fight_power_scale'])
   +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio'])
+  +group('钓获掉卡','本地自定概率；最多 30 秒生效，重连或重复结算不补抽',['card_drop_normal','card_drop_star','card_drop_blue','card_drop_rare_scale'])
   +group('跑鱼提示','上鱼失败时的聊天播报样式',['fish_escape_taunt']);
 }
 async function saveTunableVal(key,val){
@@ -305,7 +310,7 @@ function renderPlayerDetail(){
   const p=PLAYER;
   $('#playerDetail').innerHTML=`
     <div class="player-hero"><div><h2>${esc(p.name)} <span class="muted">#${p.uid}</span></h2><div class="sub">Lv.${p.level} · XP ${fmt(p.xp)} · 背包/装备 ${p.item_count} · 护网 ${p.keepnet_count} · 邮件 ${p.mail_count}</div></div><div class="actions"><button class="btn alt sm" onclick="kickPlayer()">踢下线</button><button class="${p.banned?'btn good':'btn bad'} sm" onclick="toggleBan()">${p.banned?'解除封禁':'封禁玩家'}</button></div></div>
-    <div class="tabs"><button class="${PLAYER_TAB==='profile'?'on':''}" onclick="setPlayerTab('profile')">档案与资产</button><button class="${PLAYER_TAB==='items'?'on':''}" onclick="setPlayerTab('items')">背包 / 装备</button><button class="${PLAYER_TAB==='keepnet'?'on':''}" onclick="setPlayerTab('keepnet')">护网</button><button class="${PLAYER_TAB==='skills'?'on':''}" onclick="setPlayerTab('skills')">技能熟练度</button><button class="${PLAYER_TAB==='mail'?'on':''}" onclick="setPlayerTab('mail')">邮箱</button></div>
+    <div class="tabs"><button class="${PLAYER_TAB==='profile'?'on':''}" onclick="setPlayerTab('profile')">档案与资产</button><button class="${PLAYER_TAB==='items'?'on':''}" onclick="setPlayerTab('items')">背包 / 装备</button><button class="${PLAYER_TAB==='keepnet'?'on':''}" onclick="setPlayerTab('keepnet')">护网</button><button class="${PLAYER_TAB==='records'?'on':''}" onclick="setPlayerTab('records')">鱼种记录</button><button class="${PLAYER_TAB==='skills'?'on':''}" onclick="setPlayerTab('skills')">技能熟练度</button><button class="${PLAYER_TAB==='mail'?'on':''}" onclick="setPlayerTab('mail')">邮箱</button></div>
     <div id="playerTabBody"></div>`;
   renderPlayerTab();
 }
@@ -327,8 +332,48 @@ function renderPlayerTab(){
   }
   if(PLAYER_TAB==='items')renderItems();
   if(PLAYER_TAB==='keepnet')renderKeepnet();
+  if(PLAYER_TAB==='records')renderRecords();
   if(PLAYER_TAB==='skills')renderSkills();
   if(PLAYER_TAB==='mail')renderPlayerMail();
+}
+let RECORDS=null,RECORD_CHANGES=new Map(),RECORD_LEVEL='',RECORD_SEARCH='',RECORD_LOADING=0;
+const recordGrade=g=>['未钓获','已钓获','达标','★ 星','♛ 蓝冠'][g]||'未钓获';
+async function renderRecords(level=RECORD_LEVEL){
+  const uid=PLAYER.uid,request=++RECORD_LOADING;
+  $('#playerTabBody').innerHTML='<p class="muted">正在加载鱼种记录…</p>';
+  try{
+    const data=await api('/api/players/records?uid='+uid+'&level='+encodeURIComponent(level));
+    if(request!==RECORD_LOADING||PLAYER.uid!==uid||PLAYER_TAB!=='records')return;
+    RECORDS=data;RECORD_LEVEL=data.level;RECORD_CHANGES=new Map();
+    $('#playerTabBody').innerHTML=`<div class="toolbar"><label for="recordMap">地图</label><select id="recordMap" onchange="changeRecordMap(this.value)">${data.maps.map(m=>`<option value="${esc(m.level)}" ${m.level===data.level?'selected':''}>${esc(m.name)}</option>`).join('')}</select><input class="grow" id="recordSearch" placeholder="搜索鱼种名称 / ID" value="${esc(RECORD_SEARCH)}" oninput="RECORD_SEARCH=this.value;renderRecordRows()"><button id="recordSave" class="btn good" onclick="saveRecords()" disabled>保存补录</button></div><p class="muted">实钓记录始终保留。“不补录”只清除此工具的补录。重量留空时按实际档位下限填写；补录会计入一次钓获，无经验、货币或护网奖励。保存前自动备份。建议玩家下线后补录，重新登录查看图鉴；在线刷新与并发尚未完整验证。</p><div class="table-wrap"><table><thead><tr><th>鱼种</th><th>当前达成</th><th>最重记录</th><th>补录档位</th><th>补录重量（克，可留空）</th></tr></thead><tbody id="recordRows"></tbody></table></div>`;
+    renderRecordRows();
+  }catch(e){if(PLAYER.uid===uid&&PLAYER_TAB==='records')$('#playerTabBody').textContent=e.message}
+}
+function changeRecordMap(level){
+  if(RECORD_CHANGES.size){$('#recordMap').value=RECORD_LEVEL;toast('请先保存当前地图的修改','bad');return}
+  renderRecords(level);
+}
+function renderRecordRows(){
+  const q=RECORD_SEARCH.toLowerCase();
+  $('#recordRows').innerHTML=RECORDS.fish.filter(f=>!q||`${f.name} ${f.fish_key}`.toLowerCase().includes(q)).map(f=>{
+    const c=RECORD_CHANGES.get(f.fish_key)||{grade:f.restored_grade,weight_g:f.restored_weight_g||''};
+    return `<tr data-key="${esc(f.fish_key)}"><td><b>${esc(f.name)}</b><div class="muted mono">${esc(f.fish_key)}</div></td><td><span class="tag ${f.grade>=4?'blue':f.grade>=3?'gold':''}">${recordGrade(f.grade)}</span>${f.natural_grade?`<div class="muted">实钓：${recordGrade(f.natural_grade)}</div>`:''}</td><td>${f.weight_g?fmt(f.weight_g)+' g':'—'}</td><td><select aria-label="${esc(f.name)}补录档位" onchange="editRecord(this)">${[0,1,2,3,4].map(g=>`<option value="${g}" ${+c.grade===g?'selected':''}>${g===0?'不补录':recordGrade(g)}</option>`).join('')}</select></td><td><input type="number" min="1" max="4294967295" step="1" aria-label="${esc(f.name)}补录重量" placeholder="自动取档位下限" value="${esc(c.weight_g)}" oninput="editRecord(this)"></td></tr>`;
+  }).join('')||'<tr><td colspan="5" class="empty">没有匹配鱼种</td></tr>';
+}
+function editRecord(input){
+  const row=input.closest('tr'),key=row.dataset.key;
+  if(input.tagName==='SELECT')row.querySelector('input').value='';
+  RECORD_CHANGES.set(key,{fish_key:key,grade:+row.querySelector('select').value,weight_g:+row.querySelector('input').value||0});
+  $('#recordSave').disabled=false;$('#recordSave').textContent=`保存补录（${RECORD_CHANGES.size}）`;
+}
+async function saveRecords(){
+  const uid=PLAYER.uid,level=RECORD_LEVEL,button=$('#recordSave');
+  button.disabled=true;button.textContent='备份并保存…';$('#recordMap').disabled=true;
+  try{
+    const result=await api('/api/players/records',{method:'POST',body:JSON.stringify({uid,level,changes:[...RECORD_CHANGES.values()]})});
+    toast('已保存并备份：'+result.backup);
+    if(PLAYER.uid===uid&&PLAYER_TAB==='records')await renderRecords(level);
+  }catch(e){toast(e.message,'bad');button.disabled=false;button.textContent='重试保存';if($('#recordMap'))$('#recordMap').disabled=false}
 }
 function localInput(ts){
   if(!ts) return '';

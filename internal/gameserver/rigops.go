@@ -884,7 +884,7 @@ func clearRigFieldsForBackpack(fields []proto.Field, wireClass string) {
 		fields[source].Hex = ""
 	}
 	if sidx := fieldIdxByCS(wireClass, csSlotEnum); sidx >= 0 && fieldOpAt(wireClass, sidx) == "BYTE" {
-		fields[sidx].Num = ptrU64(0) // 背包
+		fields[sidx].Num = ptrU64(rootItemStorageKind(wireClass))
 	}
 }
 
@@ -2383,8 +2383,24 @@ func registerRigHandlers(d *Dispatch) {
 	d.Register(17, 4, hRigRemoveAll)       // rod/remove_all 全拆
 	d.Register(17, 6, hRigBaitMount)       // rod/set_baitmount 挂饵方式
 	d.Register(17, 7, hRodTake)            // rod/take 取竿到手上（158 手持上下文）
+	d.Register(17, 8, hRodPut)             // rod/put 放竿，不结束这根竿的抛投
 	d.Register(13, 4, hHanditemPrepare)    // handitem/prepare 手持物拿到手上（158）
 	d.Register(13, 7, hHanditemSetDist)    // handitem/set_dist 手持物距离（158）
+}
+
+// hRodPut 是 fire-and-forget。竿仍在水中，继续保留自己的鱼和计时器；
+// 放竿不修改背包或钓组，不能用全量物品同步重建客户端的水中装备。
+func hRodPut(ctx *Ctx) ([]byte, bool) {
+	st := ctx.Sess.Srv.fishingStateForRequest(ctx)
+	st.mu.Lock()
+	gear, pending, hooked := st.GearGuid, st.Pending, st.Hooked
+	st.mu.Unlock()
+	fish := ""
+	if pending != nil {
+		fish = shortGUID(pending.FishGUID)
+	}
+	ctx.Log.Info("放竿：保留水中状态", "rod", shortGUID(gear), "fish", fish, "hooked", hooked)
+	return nil, true
 }
 
 // hHanditemPrepare 处理 13/4，将手持物拿到手上并返回 158 手持上下文。
@@ -2399,7 +2415,7 @@ func hHanditemPrepare(ctx *Ctx) ([]byte, bool) {
 	if len(guids) > 0 {
 		gear = guids[0]
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.selectFishingRod(ctx.Sess.Userid, gear)
 	st.mu.Lock()
 	if gear != "" {
 		st.GearGuid = gear // 13/7 读它，不写会让后续 set_dist 回全零
@@ -2543,6 +2559,7 @@ func hRodTake(ctx *Ctx) ([]byte, bool) {
 	if !srv.pendingCatchAllowsCast(ctx, st) {
 		return nil, true
 	}
+	st = srv.selectFishingRod(ctx.Sess.Userid, rod)
 	st.mu.Lock()
 	if rod != "" {
 		st.GearGuid = rod

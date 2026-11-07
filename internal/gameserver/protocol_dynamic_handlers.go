@@ -106,7 +106,7 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 	if brokenGUID == zeroGUID {
 		brokenGUID = ""
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	if rodGUID == "" || rodGUID == zeroGUID {
 		st.mu.Lock()
 		rodGUID = normalizeDynamicGUID(st.GearGuid)
@@ -254,7 +254,7 @@ func hRodCutLine(ctx *Ctx) ([]byte, bool) {
 	if cutM < 0 {
 		cutM = 0
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	if rodGUID == "" || rodGUID == zeroGUID {
 		st.mu.Lock()
 		rodGUID = normalizeDynamicGUID(st.GearGuid)

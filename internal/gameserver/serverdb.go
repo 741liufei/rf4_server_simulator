@@ -173,11 +173,14 @@ func knownRealFightCurveRows() [][19]float64 {
 
 // buildFightItems 构造 4/22 物品同步元素：full 返回竿和线，非 full 返回钩。
 // 14/11 以钩强 f0 作为负载比基准，因此非 full 分支不能返回竿树。
-func (s *Server) buildFightItems(ctx context.Context, uid int64, full bool) ([]*proto.Value, error) {
+func (s *Server) buildFightItems(ctx context.Context, uid int64, full bool, gears ...string) ([]*proto.Value, error) {
 	st := s.stateFor(uid)
 	st.mu.Lock()
 	gear := st.GearGuid
 	st.mu.Unlock()
+	if len(gears) > 0 {
+		gear = gears[0]
+	}
 	if gear == "" {
 		// 无手持竿：取背包第一件竿
 		guids, _ := s.DB.ItemGUIDsByContainers(ctx, uid, []string{"backpack", "rig"})
