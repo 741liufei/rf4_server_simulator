@@ -5080,7 +5080,7 @@ var ClassMeta = map[string]ClassInfo{
 		{Idx: 0, Name: "nlmnpekipjc", Label: "", Enum: "", Zh: "竿重量（lapcaghijic 竿模型）"},
 		{Idx: 1, Name: "mbnambppbom", Label: "", Enum: "", Zh: "竿身对象（caplnlcolch → lcajgpjolbo）"},
 		{Idx: 2, Name: "lbadjgllglo", Label: "", Enum: "", Zh: "竿组件对象（ejaknoijoho → loedbndnill）"},
-		{Idx: 3, Name: "baadhdmaonp", Label: "", Enum: "", Zh: "竿组件对象（dfjfblgheff → oiebifopill，观测恒 null）"},
+		{Idx: 3, Name: "baadhdmaonp", Label: "", Enum: "", Zh: "普通主线实例（ohciikgjghe → ofjgdndfipm）；自制引线用 f3，旧样本观测为 null"},
 		{Idx: 4, Name: "coaedglnojk", Label: "", Enum: "", Zh: "当前未使用。"},
 		{Idx: 5, Name: "cahhdnicmbn", Label: "", Enum: "", Zh: "物品实例 guid（JSON id 主键）"},
 		{Idx: 6, Name: "odflendafcg", Label: "", Enum: "", Zh: "父容器/父物品 guid（可空）"},
