@@ -80,6 +80,7 @@ func (s *Server) fishingEnd(ctx *Ctx) ([]byte, bool) {
 	hooked := st.Hooked
 	rigType := st.RigType
 	gearGUID := st.GearGuid
+	loc, spot := st.Loc, st.Spot
 	st.mu.Unlock()
 
 	cctx := ctx.Sess.pushCtx()
@@ -91,6 +92,7 @@ func (s *Server) fishingEnd(ctx *Ctx) ([]byte, bool) {
 	levelsGained := int64(0)
 	prevLevel := int64(1)
 	if hasFish {
+		s.recordHuntCatch(cctx, uid, loc, spot, pending)
 		// 14/4 只结算经验；银币由鱼市 20/2 卖鱼入账。
 		xp, silver := catchValue(pending.Species, pending.Grade, pending.WeightG)
 		bonusXp := s.tunableF("xp_gain", 1.0)

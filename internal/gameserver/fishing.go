@@ -857,10 +857,21 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			return nil
 		}
 		key := weightedChoice(keys, wts)
-		sample := func() float64 {
-			return float64(s.sampleWeightDB(cctx, key, s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c))
+		var w, grade int64
+		var huntReady fishHuntReadiness
+		if s.fishHuntEnabled() && c.uid > 0 {
+			h := s.loadFishHuntState(cctx, c.uid, c.loc, c.spot)
+			w, grade, huntReady = s.sampleHuntWeight(cctx, key,
+				s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c, h)
+			if w > 0 {
+				s.recordHuntBite(cctx, h)
+			}
+		} else {
+			sample := func() float64 {
+				return float64(s.sampleWeightDB(cctx, key, s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c))
+			}
+			w = int64(applyTrophyLuck(sample(), bonus.TrophyLuck, sample))
 		}
-		w := int64(applyTrophyLuck(sample(), bonus.TrophyLuck, sample))
 		if w == 0 {
 			for i, candidate := range keys {
 				if candidate == key {
@@ -876,7 +887,9 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 		if c.forRig && !c.acceptHappyHourBite(fishingBaitInterest(interest, bonus), s.weatherFishActivity(key, c)) {
 			return nil
 		}
-		grade := s.rollGradeForRoll(cctx, key, w, c)
+		if grade <= 0 {
+			grade = s.rollGradeForRoll(cctx, key, w, c)
+		}
 		lk, lp := s.cachedSpeciesLengthKP(cctx, c, key)
 		length := lk * math.Pow(float64(w), lp)
 		length = math.Round(length*100000) / 100000
@@ -889,6 +902,13 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 		}
 		if baitHit {
 			s.log.Info("roll_from_db 命中饵效", "鱼种", key, "重量", w, "tier", tiers[key])
+		}
+		if s.fishHuntEnabled() && c.uid > 0 {
+			s.log.Info("发鱼阶段", "uid", c.uid, "loc", c.loc, "spot", c.spot,
+				"stage", fishHuntStageName(huntReady.Stage), "A", roundTo(huntReady.A, 3),
+				"E", roundTo(huntReady.E, 3), "G", roundTo(huntReady.G, 3),
+				"P", roundTo(huntReady.P, 3), "Q", roundTo(huntReady.Q, 3),
+				"grade", grade)
 		}
 		return f
 	}

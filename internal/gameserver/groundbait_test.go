@@ -506,9 +506,8 @@ func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
 	}
 }
 
-// TestGroundbaitNeighborCellCountsWeaker 邻格容差。弹弓与手抛只报距离，落点只能算到
-// 几米精度；实测客户端本次抛饵散布 scatter=3.0 米，5 米方格很容易把同一团窝切在边界
-// 两侧。相邻一格的窝按衰减系数计入，隔两格以上才算无关；咬口扣份先扣本格再扣邻格。
+// TestGroundbaitNeighborCellCountsWeaker 验证圆形落点范围：浮标离窝料越远，
+// 窝效越低；范围外为 0；咬口扣份优先扣离浮标最近的窝。
 func TestGroundbaitNeighborCellCountsWeaker(t *testing.T) {
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
@@ -552,21 +551,25 @@ func TestGroundbaitNeighborCellCountsWeaker(t *testing.T) {
 		t.Fatalf("邻格抬升（%.2f）必须低于同份数本格窝（%.2f）", near, same)
 	}
 
-	bx, bz := int64(300/groundbaitCellSizeM), int64(300/groundbaitCellSizeM)
-	st := s.groundbaitSpot(ctx, uidNear, "gb-test-loc", bx, bz)
+	st := s.groundbaitSpotAt(ctx, uidNear, "gb-test-loc", 300, 300, true, 7)
 	if st.batches != 1 || st.near != 1 || st.diffuse != 0 {
-		t.Fatalf("应看到 1 批邻格窝且不算落点未知，实得 batches=%d near=%d diffuse=%d", st.batches, st.near, st.diffuse)
+		t.Fatalf("应看到 1 批距离衰减窝且不算落点未知，实得 batches=%d near=%d diffuse=%d", st.batches, st.near, st.diffuse)
 	}
-	if st.units < 3.19 || st.units > 3.21 {
-		t.Fatalf("8 份邻格窝按 0.40 衰减应得 N=3.2，实得 %.3f", st.units)
+	// (305,302) 距浮标 sqrt(5²+2²)=5.385m，圆形权重约 0.815。
+	if st.units < 6.5 || st.units > 6.55 {
+		t.Fatalf("8 份 5.385m 外窝按圆形衰减应得 N≈6.52，实得 %.3f", st.units)
 	}
 
-	// 容差调 0：退回严格同格，邻格窝彻底无关。
-	setWeatherTestTunable(t, s, "groundbait_neighbor_cells", "0")
+	// 把影响半径压到 0，验证范围外彻底无关。
+	setWeatherTestTunable(t, s, "groundbait_range_core_m", "0")
+	setWeatherTestTunable(t, s, "groundbait_range_mid_m", "0")
+	setWeatherTestTunable(t, s, "groundbait_range_outer_m", "0")
 	if back := roll(uidNear); back != 100 {
-		t.Fatalf("容差=0 时邻格窝不该影响浮标格，实得 %.2f", back)
+		t.Fatalf("影响半径=0 时范围外窝不该影响浮标格，实得 %.2f", back)
 	}
-	setWeatherTestTunable(t, s, "groundbait_neighbor_cells", "1")
+	setWeatherTestTunable(t, s, "groundbait_range_core_m", "4")
+	setWeatherTestTunable(t, s, "groundbait_range_mid_m", "7")
+	setWeatherTestTunable(t, s, "groundbait_range_outer_m", "10")
 
 	// 咬口扣份优先本格：本格只剩 1 份，先吃掉它，邻格那 8 份此刻不动。
 	const uidMix = int64(1000004)
