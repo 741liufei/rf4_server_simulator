@@ -96,6 +96,22 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
 #storeSummary{max-width:100%;overflow-wrap:anywhere}
 #playerHappyHour{overflow-wrap:anywhere}
 .update-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px;padding:12px 16px;border:1px solid var(--accent);border-radius:12px;background:#0e2438;color:#bfe3ff;font-size:13px}.update-banner[hidden]{display:none}.update-banner.muted{border-color:var(--line);background:#101c2b;color:var(--muted)}.update-banner.warn{border-color:var(--warn);background:#3a2b14;color:#ffd9a0}.update-banner .update-actions{display:flex;gap:8px;margin-left:auto;align-items:center}.update-banner a{text-decoration:none;display:inline-block}
+/* 发布说明页：读取发布包内的 发布说明.md */
+.release-card{padding:0;overflow:hidden}.release-card>.section-head{padding:18px 22px;margin:0;border-bottom:1px solid var(--line)}.release-card>.section-head h2{font-size:19px}.release-card>.section-head p{margin:3px 0 0}.release-markdown{padding:22px 26px 34px}
+@media(max-width:720px){.release-card>.section-head{padding:16px}.release-markdown{padding:18px 16px 28px}}
+/* 关于页：README Markdown 渲染 */
+.about-card{padding:0;overflow:hidden}
+.about-head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:22px 24px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,#112a40,#111e2e)}
+.about-head h2{margin:0 0 4px;font-size:20px}.about-head p{margin:0;color:var(--muted);font-size:12px}
+.markdown-body{max-width:980px;margin:0 auto;padding:26px 30px 38px;line-height:1.78;overflow-wrap:anywhere}
+.markdown-body>:first-child{margin-top:0}.markdown-body h1,.markdown-body h2,.markdown-body h3,.markdown-body h4,.markdown-body h5,.markdown-body h6{line-height:1.35;scroll-margin-top:20px}
+.markdown-body h1{font-size:28px;margin:0 0 18px;padding-bottom:10px;border-bottom:1px solid var(--line)}.markdown-body h2{font-size:21px;margin:30px 0 12px;padding-bottom:7px;border-bottom:1px solid #1d3146}.markdown-body h3{font-size:17px;margin:24px 0 10px}
+.markdown-body p{margin:0 0 13px;color:#d3e0ec}.markdown-body a{color:#62c7ff;text-decoration:none;border-bottom:1px solid #62c7ff55}.markdown-body a:hover{color:#9adfff;border-bottom-color:#9adfff}.markdown-body strong{color:#fff}
+.markdown-body ul,.markdown-body ol{margin:0 0 14px;padding-left:26px}.markdown-body li{margin:4px 0}
+.markdown-body code{padding:2px 6px;border-radius:5px;background:#0a1521;border:1px solid #1f3449;color:#9be8cf;font:12px/1.5 Consolas,"Cascadia Code",monospace}.markdown-body pre{margin:0 0 16px;padding:15px 17px;background:#08121e;border:1px solid var(--line);border-radius:12px;overflow:auto}.markdown-body pre code{padding:0;border:0;background:transparent;color:#c9d7e4;font-size:12px;white-space:pre}
+.markdown-body blockquote{margin:0 0 16px;padding:10px 15px;border-left:3px solid var(--accent);background:#0e2032;color:#aac4da}.markdown-body hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+.markdown-body table{width:100%;border-collapse:collapse;margin:0 0 16px;font-size:13px;display:block;overflow-x:auto}.markdown-body th,.markdown-body td{padding:9px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}.markdown-body th{background:#14263a;color:#fff;white-space:nowrap}.markdown-body tr:nth-child(even) td{background:#0d1927}
+@media(max-width:720px){.about-head{padding:18px}.markdown-body{padding:20px 17px 28px}.markdown-body h1{font-size:23px}.markdown-body h2{font-size:18px}.about-head .btn{display:none}}
 </style>
 </head>
 <body>
@@ -122,6 +138,8 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       <button data-view="fish" onclick="go('fish')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6.5 12c1.2-3.3 4.3-5.5 7.5-5.5 3.5 0 6 2.5 7 5.5-1 3-3.5 5.5-7 5.5-3.2 0-6.3-2.2-7.5-5.5Z"/><path d="M17.5 11v.01"/><path d="M6.5 12 3 9v6l3.5-3Z"/></svg></span><span class="txt"><b>钓场与鱼口</b><small>玩法开关 · 出什么鱼 · 咬钩快慢</small></span></button>
       <button data-view="mail" onclick="go('mail')"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><span class="txt"><b>邮件</b><small>发消息和物品附件</small></span></button>
       <button data-view="params" onclick="go('params')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1.5 14h5M9.5 8h5M17.5 16h5"/></svg></span><span class="txt"><b>游戏参数</b><small>玩法手感 · 经验结算倍率</small></span></button>
+      <button data-view="release" onclick="go('release')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M5 3h10l4 4v14H5z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg></span><span class="txt"><b>发布说明</b><small>版本更新 · 修复内容</small></span></button>
+      <button data-view="about" onclick="go('about')"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 10.5v5.5M12 7.5h.01"/></svg></span><span class="txt"><b>关于</b><small>项目说明 · README</small></span></button>
       <button data-view="audit" onclick="go('audit')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01"/></svg></span><span class="txt"><b>审计日志</b><small>后台每次操作的留痕</small></span></button>
     </nav>
     <div class="side-foot"><div class="u" id="who">admin</div><div class="m"><span class="status-dot"></span> 服务在线</div><button class="btn alt sm" onclick="logout()">退出登录</button></div>
@@ -142,6 +160,8 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     <section class="view" id="view-fish"><div class="card" id="fishRulesCard" style="margin-bottom:12px"><div class="rules-strip"><h2>鱼群规则</h2><label class="rule-item"><span>鱼群随机分布</span><input type="checkbox" class="switch" id="fishDistributionSwitch" disabled onchange="toggleFishRules('distribution',this)"></label><label class="rule-item"><span>鱼类吃饵偏好</span><input type="checkbox" class="switch" id="fishRulesSwitch" disabled onchange="toggleFishRules('bait',this)"></label><label class="rule-item"><span>天气与温度鱼口</span><input type="checkbox" class="switch" id="fishWeatherSwitch" disabled onchange="toggleFishRules('weather',this)"></label><label class="rule-item"><span>欢乐时光</span><input type="checkbox" class="switch" id="happyHourSwitch" disabled onchange="toggleFishRules('happy',this)"></label><small class="muted" id="rulesStatus"></small><button class="btn alt sm" id="rulesHelpBtn" aria-expanded="false" onclick="toggleRulesHelp()">说明 ⌄</button></div><div id="rulesHelp" hidden><p class="muted" style="margin:0 0 8px">各项独立保存；天气、饵料和分布规则默认关闭，欢乐时光默认开启。</p><div class="rule-help"><b>鱼群随机分布</b><span id="fishDistributionMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>鱼类吃饵偏好</b><span id="fishRulesMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>天气与温度鱼口</b><span id="fishWeatherMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>欢乐时光</b><span id="happyHourMessage" role="status">正在读取开关。</span></div></div></div><div class="grid fish-layout" style="grid-template-columns:270px minmax(0,1fr)"><div class="card"><div class="section-head"><h2>水域</h2></div><input id="fishSearch" placeholder="筛选水域" oninput="renderFishAreas()"><div id="fishAreas"></div></div><div class="card" id="fishEditor"><div class="empty">选择水域配置鱼口</div></div></div></section>
     <section class="view" id="view-mail"><div class="mail-box"><div class="card"><div class="section-head"><h2>撰写邮件</h2><small>队列约 2 秒内由主服投递</small></div><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="field"><label>收件人 UID</label><input id="mailUid" type="number"></div><div class="field"><label>快捷载入玩家</label><input id="mailPlayerSearch" placeholder="搜索并回车" onkeydown="if(event.key==='Enter')findMailPlayer()"></div></div><div class="field" style="margin-top:12px"><label>邮件正文</label><textarea id="mailText" placeholder="写给玩家的消息…"></textarea></div><div class="section-head" style="margin-top:14px"><h2>附件</h2><button class="btn alt sm" onclick="addAttachment()">+ 添加附件</button></div><div id="attachments"></div><div class="actions"><button class="btn good" onclick="sendMail()">发送邮件</button><button class="btn alt" onclick="previewMail()">预览</button></div></div><div class="card"><div class="section-head"><h2>发送预览</h2></div><div id="mailPreview" class="empty">填写邮件后点击预览</div><div class="section-head" style="margin-top:20px"><h2>常用模板</h2></div><div class="actions"><button class="btn alt sm" onclick="mailTemplate('补偿')">补偿邮件</button><button class="btn alt sm" onclick="mailTemplate('活动奖励')">活动奖励</button><button class="btn alt sm" onclick="mailTemplate('测试')">测试邮件</button></div></div></div></section>
     <section class="view" id="view-params"><div class="card"><div class="section-head"><h2>游戏参数</h2><small>热更新：保存后最多 30 秒生效；随时可调回默认值，不损坏玩家存档</small></div><div id="paramsBody"></div></div></section>
+    <section class="view" id="view-release"><div class="card release-card"><div class="section-head"><div><h2>发布说明</h2><p class="muted">读取发布包内的 发布说明.md</p></div><button class="btn alt sm" onclick="loadReleaseNotes()">刷新</button></div><div class="markdown-body release-markdown" id="releaseBody"><div class="empty">读取中…</div></div></div></section>
+    <section class="view" id="view-about"><div class="card about-card"><div class="about-head"><div><h2>关于本项目</h2><p>内容来自 README.md · 优先读取本地文件</p></div><a class="btn alt sm" href="https://github.com/glance522/rf4_server_simulator" target="_blank" rel="noreferrer">在 GitHub 查看</a></div><div class="markdown-body" id="aboutReadme"><div class="empty">读取中…</div></div></div></section>
     <section class="view" id="view-audit"><div class="card"><div class="section-head"><h2>最近操作</h2><small>最新 200 条</small></div><div class="table-wrap" id="auditTable"></div></div></section>
   </main>
 </div>
@@ -215,7 +235,7 @@ async function boot(){
     const initial=location.hash.slice(1);go(titles[initial]?initial:'dashboard',true);if(!DASHBOARD_TIMER)DASHBOARD_TIMER=setInterval(()=>{if(VIEW==='dashboard'&&TOKEN)loadDashboard(false).catch(()=>{})},8000);
   }catch(e){logout()}
 }
-const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕']};
+const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕'],release:['发布说明','发布包内的版本更新 · 修复内容'],about:['关于','项目说明 · README.md']};
 function go(name,fromHash=false){
   if(!titles[name])name='dashboard';
   VIEW=name;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.view===name));
@@ -226,7 +246,7 @@ function go(name,fromHash=false){
 }
 window.addEventListener('hashchange',()=>go(location.hash.slice(1),true));
 function refreshCurrent(){
-  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,mail:()=>{},params:loadTunables,audit:loadAudit};
+  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
 // 总览常用操作：图标 + 名称 + 一句功能定义
@@ -276,6 +296,7 @@ const TUNABLE_DEFS=[
   ['xp_gain','经验倍率',1,'结算经验整体缩放，1.5=多 50% 经验'],
   ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
   ['fish_escape_taunt','跑鱼提示',1,'1=随机嘲讽文案；0=回退官方“鱼脱钩了”模板'],
+  ['fish_hooked_chat','上钩播报',0,'确认鱼已挂钩时仅向本人显示快捷栏竿号、鱼种和克级重量；默认关闭'],
   ['card_drop_normal','普通 / 达标鱼掉卡率',0.001,'0~1。默认 0.001 = 0.1%，每尾实际钓获抽一次'],
   ['card_drop_star','星鱼掉卡率',0.5,'0~1。默认 0.5 = 50%'],
   ['card_drop_blue','蓝冠鱼掉卡率',0.8,'0~1。默认 0.8 = 80%'],
@@ -286,6 +307,10 @@ async function loadTunables(){
  // 行式布局：左=标签+说明，右=数值+保存/恢复默认，双列排布
  const field=key=>{
   const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
+  if(key==='fish_hooked_chat'){
+   const on=parseFloat(String(t[key]??def))>0;
+   return `<div class="tunable-field"><div><label for="tun_fish_hooked_chat">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_hooked_chat" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_hooked_chat',${on?0:1})">${on?'上钩播报：开（点击关闭）':'上钩播报：关（点击开启）'}</button></div></div>`;
+  }
   if(key==='fish_escape_taunt'){
    const on=parseFloat(String(t[key]??'1'))>0;
    return `<div class="tunable-field"><div><label for="tun_fish_escape_taunt">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_escape_taunt" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_escape_taunt',${on?0:1})">${on?'嘲讽文案：开（点击关闭）':'官方“鱼脱钩了”（点击开启嘲讽）'}</button></div></div>`;
@@ -297,7 +322,7 @@ async function loadTunables(){
   group('玩法手感','咬钩快慢、饵料偏好、鱼的大小与挣扎力度',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift','fish_weight_scale','fish_weight_cap','fight_power_scale'])
   +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio'])
   +group('钓获掉卡','本地自定概率；最多 30 秒生效，重连或重复结算不补抽',['card_drop_normal','card_drop_star','card_drop_blue','card_drop_rare_scale'])
-  +group('跑鱼提示','上鱼失败时的聊天播报样式',['fish_escape_taunt']);
+  +group('聊天通知','跑鱼提示与上钩播报分别设置；保存后最多 30 秒生效',['fish_escape_taunt','fish_hooked_chat']);
 }
 async function saveTunableVal(key,val){
   await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:String(val)})});
@@ -325,6 +350,79 @@ async function runConfirm(){const cb=CONFIRM_CB;CONFIRM_CB=null;closeModal();if(
 async function loadAudit(){
   const list=await api('/api/audit?limit=200');
   $('#auditTable').innerHTML=`<table><thead><tr><th>时间</th><th>管理员</th><th>动作</th><th>对象</th><th>详情</th></tr></thead><tbody>${list.map(e=>`<tr><td>${timeText(e.TS??e.ts)}</td><td>${esc(e.Admin??e.admin)}</td><td><span class="tag blue">${esc(e.Action??e.action)}</span></td><td class="mono">${esc(e.Target??e.target)}</td><td style="white-space:normal;max-width:430px">${esc(e.Detail??e.detail)}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">暂无记录</td></tr>'}</tbody></table>`;
+}
+const ABOUT_REPO='https://github.com/glance522/rf4_server_simulator';
+const ABOUT_BLOB=ABOUT_REPO+'/blob/main/';
+function readmeInline(text){
+  const stash=[];
+  const keep=html=>{stash.push(html);return '\u0000'+(stash.length-1)+'\u0000'};
+  let s=String(text??'');
+  s=s.replace(/`([^`]+)`/g,(_,code)=>keep('<code>'+esc(code)+'</code>'));
+  s=s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(_,label,href)=>{
+    let u=href;
+    if(!/^(?:https?:\/\/|mailto:|#|\/)/i.test(u)){
+      if(!/^(?:\.{0,2}\/)/.test(u))u='./'+u;
+      u=ABOUT_BLOB+u.replace(/^\.\//,'');
+    }
+    return keep('<a href="'+esc(u)+'" target="_blank" rel="noreferrer">'+esc(label)+'</a>');
+  });
+  s=esc(s).replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  return s.replace(/\u0000(\d+)\u0000/g,(_,i)=>stash[Number(i)]);
+}
+function readmeCells(line){
+  return line.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(x=>x.trim());
+}
+function markdownHTML(src){
+  const lines=String(src??'').replace(/\r\n?/g,'\n').split('\n');
+  const out=[];let i=0;
+  const isBlockStart=line=>/^(#{1,6})\s+/.test(line)||/^`{3}/.test(line)||/^\s*>/.test(line)||/^\s*[-*+]\s+/.test(line)||/^\s*\d+\.\s+/.test(line)||/^\s*(---|\*\*\*|___)\s*$/.test(line)||/^\s*\|.*\|\s*$/.test(line);
+  while(i<lines.length){
+    const line=lines[i];
+    if(!line.trim()){i++;continue}
+    if(/^`{3}/.test(line)){
+      const lang=line.slice(3).trim(),code=[];i++;
+      while(i<lines.length&&!/^`{3}/.test(lines[i])){code.push(lines[i]);i++}
+      if(i<lines.length)i++;
+      out.push('<pre><code'+(lang?' class="language-'+esc(lang)+'"':'')+'>'+esc(code.join('\n'))+'</code></pre>');continue;
+    }
+    const h=line.match(/^(#{1,6})\s+(.*)$/);
+    if(h){const n=h[1].length;out.push('<h'+n+'>'+readmeInline(h[2])+'</h'+n+'>');i++;continue}
+    if(/^\s*(---|\*\*\*|___)\s*$/.test(line)){out.push('<hr>');i++;continue}
+    if(/^\s*\|.*\|\s*$/.test(line)&&i+1<lines.length&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1])){
+      const head=readmeCells(line);i+=2;const rows=[];
+      while(i<lines.length&&/^\s*\|.*\|\s*$/.test(lines[i])){rows.push(readmeCells(lines[i]));i++}
+      out.push('<table><thead><tr>'+head.map(x=>'<th>'+readmeInline(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+head.map((_,j)=>'<td>'+readmeInline(r[j]||'')+'</td>').join('')+'</tr>').join('')+'</tbody></table>');continue;
+    }
+    if(/^\s*>/.test(line)){
+      const quote=[];while(i<lines.length&&/^\s*>/.test(lines[i])){quote.push(lines[i].replace(/^\s*>\s?/,''));i++}
+      out.push('<blockquote>'+quote.map(readmeInline).join('<br>')+'</blockquote>');continue;
+    }
+    const ul=/^\s*[-*+]\s+(.*)$/,ol=/^\s*\d+\.\s+(.*)$/;
+    if(ul.test(line)||ol.test(line)){
+      const ordered=ol.test(line),items=[];
+      while(i<lines.length){const m=lines[i].match(ordered?ol:ul);if(!m)break;items.push('<li>'+readmeInline(m[1])+'</li>');i++}
+      out.push('<'+(ordered?'ol':'ul')+'>'+items.join('')+'</'+(ordered?'ol':'ul')+'>');continue;
+    }
+    const para=[line.trim()];i++;
+    while(i<lines.length&&lines[i].trim()&&!isBlockStart(lines[i])){para.push(lines[i].trim());i++}
+    out.push('<p>'+readmeInline(para.join(' '))+'</p>');
+  }
+  return out.join('');
+}
+async function loadAbout(){
+  const data=await api('/api/about'),el=$('#aboutReadme');
+  if(!data.content){el.innerHTML='<div class="empty">README.md 暂无内容</div>';return}
+  el.innerHTML=markdownHTML(data.content);
+}
+async function loadReleaseNotes(){
+  try{
+    const data=await api('/api/release-notes'),el=$('#releaseBody');
+    if(!data.content){el.innerHTML='<div class="empty">发布说明为空</div>';return}
+    el.innerHTML=markdownHTML(data.content);
+  }catch(e){
+    $('#releaseBody').innerHTML='<div class="empty">未找到或无法读取 发布说明.md<br><small>请从完整发布包启动</small></div>';
+    throw e;
+  }
 }
 let playerCache=[],ITEM_FILTER='';
 async function loadPlayers(keep=false){

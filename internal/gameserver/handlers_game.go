@@ -1195,6 +1195,11 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	if confirm {
 		st.Hooked = true
 	}
+	var hookedFish RolledFish
+	var announce bool
+	if marineRigType(rigType) {
+		hookedFish, announce = st.takeHookedChatFishLocked()
+	}
 	st.mu.Unlock()
 	if confirm {
 		if err := srv.consumeHookedBait(ctx.Sess, pending, gear); err != nil {
@@ -1214,6 +1219,9 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	} else {
 		ctx.Log.Info("14/9 抬杆/小刺", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 96), "rig_type", rigType)
 	}
+	if announce {
+		srv.notifyFishHooked(ctx.Sess, hookedFish, gear)
+	}
 	return nil, true
 }
 
@@ -1228,6 +1236,7 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	rigType := st.RigType
 	castActive := st.CastActive
 	resolved := st.Resolved
+	hookedFish, announce := st.takeHookedChatFishLocked()
 	st.mu.Unlock()
 	fishGUID, species := "", ""
 	if pending != nil {
@@ -1258,6 +1267,9 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 		}
 	} else {
 		ctx.Sess.Push4_22Hook(gear)
+	}
+	if announce {
+		srv.notifyFishHooked(ctx.Sess, hookedFish, gear)
 	}
 	return nil, true
 }

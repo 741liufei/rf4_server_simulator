@@ -11,7 +11,8 @@
 "portions": 1.0,
 "potency": 2.76,
 "scent": 0.45,
-"target_fish_key": "g_carp"
+"target_fish_key": "g_carp",
+"unit_grams": 40
 },
 {
 "diet": {
@@ -25,7 +26,8 @@
 "portions": 1.0,
 "potency": 2.6,
 "scent": 0.38,
-"target_fish_key": ""
+"target_fish_key": "",
+"unit_grams": 55
 },
 {
 "diet": {
@@ -39,7 +41,8 @@
 "portions": 1.0,
 "potency": 2.22,
 "scent": 0.54,
-"target_fish_key": "s.bream"
+"target_fish_key": "s.bream",
+"unit_grams": 40
 },
 {
 "diet": {
@@ -53,7 +56,8 @@
 "portions": 1.0,
 "potency": 1.78,
 "scent": 0.38,
-"target_fish_key": "crucian"
+"target_fish_key": "crucian",
+"unit_grams": 35
 },
 {
 "diet": {
@@ -67,7 +71,8 @@
 "portions": 1.0,
 "potency": 2.62,
 "scent": 0.47,
-"target_fish_key": "carp"
+"target_fish_key": "carp",
+"unit_grams": 45
 },
 {
 "diet": {
@@ -82,7 +87,8 @@
 "portions": 1.0,
 "potency": 2.54,
 "scent": 0.42,
-"target_fish_key": "bream"
+"target_fish_key": "bream",
+"unit_grams": 40
 },
 {
 "diet": {
@@ -95,7 +101,8 @@
 "portions": 1.0,
 "potency": 1.64,
 "scent": 0.35,
-"target_fish_key": "tench"
+"target_fish_key": "tench",
+"unit_grams": 30
 },
 {
 "diet": {
@@ -109,7 +116,8 @@
 "portions": 1.0,
 "potency": 1.46,
 "scent": 0.5,
-"target_fish_key": "c.roach"
+"target_fish_key": "c.roach",
+"unit_grams": 30
 },
 {
 "diet": {
@@ -123,7 +131,8 @@
 "portions": 1.0,
 "potency": 2.16,
 "scent": 0.45,
-"target_fish_key": "c_barbel"
+"target_fish_key": "c_barbel",
+"unit_grams": 40
 },
 {
 "diet": {
@@ -136,7 +145,8 @@
 "portions": 1.0,
 "potency": 2.78,
 "scent": 0.38,
-"target_fish_key": "s.orfe"
+"target_fish_key": "s.orfe",
+"unit_grams": 35
 },
 {
 "diet": {
@@ -150,7 +160,8 @@
 "portions": 1.0,
 "potency": 2.6,
 "scent": 0.38,
-"target_fish_key": ""
+"target_fish_key": "",
+"unit_grams": 30
 },
 {
 "diet": {
@@ -163,7 +174,8 @@
 "portions": 1.0,
 "potency": 0.64,
 "scent": 0.56,
-"target_fish_key": ""
+"target_fish_key": "",
+"unit_grams": 45
 },
 {
 "diet": {
@@ -176,7 +188,8 @@
 "portions": 1.0,
 "potency": 0.64,
 "scent": 0.56,
-"target_fish_key": ""
+"target_fish_key": "",
+"unit_grams": 30
 },
 {
 "diet": {
@@ -189,7 +202,8 @@
 "portions": 1.0,
 "potency": 0.64,
 "scent": 0.56,
-"target_fish_key": ""
+"target_fish_key": "",
+"unit_grams": 20
 }
 ],
 "profile_version": 1,
