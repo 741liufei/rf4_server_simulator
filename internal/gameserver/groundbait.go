@@ -41,6 +41,10 @@ const (
 	groundbaitMaxTickRealSec = 30.0
 	// groundbaitSatExponent 契合饱和曲线的指数。
 	groundbaitSatExponent = 1.35
+	// catGroundbaitMix 品类 46：feed_* 与自制窝料都在这一类，实例按份数计数。
+	catGroundbaitMix = int64(46)
+	// catPVAStick 品类 30：PVA 棒/可溶袋，同样按份数消耗。
+	catPVAStick = int64(30)
 )
 
 type groundbaitItemDef struct {
@@ -654,7 +658,7 @@ func (s *Server) depositCastGroundbait(sess *Session, st *FishState, change bait
 	ctx := sess.pushCtx()
 	for i, use := range change.Groundbait {
 		channel := "feeder"
-		if use.Category == 30 {
+		if use.Category == catPVAStick {
 			channel = "pva"
 		}
 		s.groundbaitDeposit(ctx, sess.Userid, loc, x, z, has, spot, use.ItemID, use.Units,

@@ -605,3 +605,120 @@ func TestGroundbaitKeepaliveAdvancesOnlineClock(t *testing.T) {
 		t.Fatalf("在线 20 秒应推进约 0.133 游戏小时，实得 %.3f", acc)
 	}
 }
+
+// TestGroundbaitHandThrowConsumesAndDeposits 手抛（12/1）必须真扣一份并记进窝账。
+// 实测少爷扔两发后背包数字减少，但库里 qty 一动不动：客户端只扣本地，
+// 服务端不接就会在下次全量快照里把这两份补回来（幽灵窝料）。
+// 请求形态实测：args(物件实例 GUID, obj19)，f0=f1=投距（6.108 / 7.567 米），f3=钓点串。
+func TestGroundbaitHandThrowConsumesAndDeposits(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const uid = int64(1000001)
+
+	stack, err := s.CreateItem(ctx, uid, "feedcompleted", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建窝料失败: %v", err)
+	}
+	s.setStackCount(ctx, stack, 3)
+
+	st := s.stateFor(uid)
+	st.mu.Lock()
+	st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot = "gb-test-loc", 100, 100, true, 7
+	st.PosX, st.PosZ, st.HasPos = 60, 60, true
+	st.mu.Unlock()
+
+	sess, _ := newTunnelProbe(t, s)
+	// 12/1 是 fire-and-forget：dispatch 不看返回值、也不走兜底链，
+	// 所以这里只看副作用（扣了几份、记没记窝）。
+	throw := func(callID uint32, dist float32, guid string) {
+		t.Helper()
+		req := rigRequestTree(t, proto.Guid(guid),
+			wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(dist), 3: proto.StrVal("gb-test-loc")}))
+		hctx := &Ctx{Sess: sess, Main: 12, Sub: 1, CallID: callID, Tree: req,
+			DecodeOK: true, ExpectResponse: false, Log: logging.Discard()}
+		hHandThrowGroundbait(hctx)
+	}
+	qty := func() int64 {
+		t.Helper()
+		row, rerr := s.DB.GetItemByGUID(ctx, stack.GUID)
+		if rerr != nil || row == nil {
+			return -1
+		}
+		return s.stackCountOf(ctx, row)
+	}
+	depositRow := func(callID string) (string, float64, int, int64, int64) {
+		t.Helper()
+		var (
+			ch, itemID     string
+			portions       float64
+			hasPos, bx, bz int64
+		)
+		err := s.DB.SQL.QueryRowContext(ctx, `SELECT channel,item_id,portions,has_pos,bx,bz
+			FROM groundbait_deposit WHERE uid=? AND txn_guid LIKE ?`, uid, "%hand:feedcompleted:%:"+callID).
+			Scan(&ch, &itemID, &portions, &hasPos, &bx, &bz)
+		if err != nil {
+			t.Fatalf("手抛没记进窝账（call=%s）: %v", callID, err)
+		}
+		return itemID, portions, int(hasPos), bx, bz
+	}
+
+	throw(9201, 6.108, stack.GUID)
+	if got := qty(); got != 2 {
+		t.Fatalf("手抛一发应扣掉 1 份（3→2），实得 %d", got)
+	}
+	itemID, portions, hasPos, bx, bz := depositRow("9201")
+	wantBX, wantBZ := groundbaitCell(100, 100)
+	if itemID != "feedcompleted" || portions != 1 {
+		t.Fatalf("窝账应是 1 份 feedcompleted，实得 %s / %.2f", itemID, portions)
+	}
+	if hasPos != 1 || bx != wantBX || bz != wantBZ {
+		t.Fatalf("有浮标落点时应记在浮标格 (%d,%d)，实得 has_pos=%d (%d,%d)", wantBX, wantBZ, hasPos, bx, bz)
+	}
+	if got := s.groundbaitSpot(ctx, uid, "gb-test-loc", wantBX, wantBZ).units; got < 0.99 || got > 1.01 {
+		t.Fatalf("手抛那份窝应全额生效，实得 %.3f", got)
+	}
+
+	// 一竿都没抛过时记在玩家脚下格（浮标落点清掉，玩家坐标仍在）。
+	st.mu.Lock()
+	st.HasCastPos, st.CastPosX, st.CastPosZ = false, 0, 0
+	st.mu.Unlock()
+	throw(9202, 7.567, stack.GUID)
+	if got := qty(); got != 1 {
+		t.Fatalf("第二发应再扣 1 份（2→1），实得 %d", got)
+	}
+	_, _, hasPos, bx, bz = depositRow("9202")
+	pBX, pBZ := groundbaitCell(60, 60)
+	if hasPos != 1 || bx != pBX || bz != pBZ {
+		t.Fatalf("没抛过竿时应记在玩家脚下格 (%d,%d)，实得 has_pos=%d (%d,%d)", pBX, pBZ, hasPos, bx, bz)
+	}
+
+	// 最后一份：库里整堆没了，但这一发照样算进窝账。
+	throw(9203, 5.5, stack.GUID)
+	if got := qty(); got != -1 {
+		t.Fatalf("第三发后整堆应被删掉，实得 qty=%d", got)
+	}
+	if _, _, _, _, bz := depositRow("9203"); bz == 0 {
+		t.Fatal("最后一发也应记进窝账")
+	}
+	if rows := gbCount(t, s, uid); rows != 3 {
+		t.Fatalf("三发应各记一批，实得 %d 批", rows)
+	}
+
+	// 非窝料物件（弹弓本身）不该被窝料通道吃掉。
+	tool, terr := s.CreateItem(ctx, uid, "wh_pc_gb", "backpack", 1)
+	if terr != nil {
+		t.Fatalf("创建手持工具失败: %v", terr)
+	}
+	throw(9204, 6.0, tool.GUID)
+	if n := gbDepositCount(t, s, uid, "9204"); n != 0 {
+		t.Fatalf("非窝料品类不该记进窝账，实得 %d 批", n)
+	}
+	row, rerr := s.DB.GetItemByGUID(ctx, tool.GUID)
+	if rerr != nil || row == nil {
+		t.Fatal("非窝料物件不该被扣掉")
+	}
+	if got := s.stackCountOf(ctx, row); got != 1 {
+		t.Fatalf("非窝料物件数量应不变，实得 %d", got)
+	}
+}

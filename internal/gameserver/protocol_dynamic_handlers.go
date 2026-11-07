@@ -12,6 +12,7 @@ import (
 
 // registerDynamicProtocolHandlers 注册动态协议命令。
 func registerDynamicProtocolHandlers(d *Dispatch) {
+	d.Register(12, 1, hHandThrowGroundbait) // 12/1 手抛：手里攥一团窝料直接扔进水里
 	d.Register(13, 5, hDynamicHanditemThrow)
 	d.Register(13, 6, hDynamicRigSnapshot)
 	d.Register(17, 9, hDynamicRodBreak)
@@ -110,16 +111,7 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 			if st != nil {
 				st.mu.Lock()
 				gbLoc, gbSpot := st.Loc, st.Spot
-				gbX, gbZ, gbHas, gbSrc := st.CastPosX, st.CastPosZ, st.HasCastPos, "cast"
-				if !gbHas && srv.tunableF("groundbait_throw_pos_fallback", 1) != 0 && st.HasPos {
-					// 一坨饵都没抛过就没有浮标落点可用，退一步记在玩家自己站的格子上。
-					// 玩家坐标来自 3/9：每 5 秒上报一次，实测与 14/2 的落点数值逐条吻合
-					// （loc10_12 抛竿 x=362.76 z=236.92，同一时刻 3/9 f0=362.76 f2=236.92）。
-					gbX, gbZ, gbHas, gbSrc = st.PosX, st.PosZ, true, "player"
-				}
-				if srv.tunableF("handitem_throw_land_cell", 0) != 0 && land.OK {
-					gbX, gbZ, gbHas, gbSrc = land.X, land.Z, true, "computed"
-				}
+				gbX, gbZ, gbHas, gbSrc := groundbaitThrowCell(srv, st, throwLandingIfOn(srv, land))
 				st.mu.Unlock()
 				// 落点来源进日志：窝到底记在浮标格、玩家脚下格还是算出来的格，
 				// 现场一眼能分清楚，调参不用再猜。
@@ -841,4 +833,133 @@ func normalizeDynamicGUID(g string) string {
 		return zeroGUID
 	}
 	return ""
+}
+
+// throwLandingIfOn 只在开关打开时把算出来的落点交给选格逻辑，关掉即原样退回。
+func throwLandingIfOn(s *Server, land throwLanding) *throwLanding {
+	if s.tunableF("handitem_throw_land_cell", 0) == 0 || !land.OK {
+		return nil
+	}
+	return &land
+}
+
+// groundbaitThrowCell 决定这一份窝料记在哪一格，调用方必须持有 st.mu。
+//
+//  1. 已经有浮标落点：记在浮标那一格（少爷「先打窝后抛竿」实测走的就是这条）；
+//  2. 一竿都没抛过：记在玩家自己站的格子，坐标来自 3/9 每 5 秒的世界坐标上报，
+//     实测与 14/2 落点数值逐条吻合（loc10_12 x=362.76 z=236.92 = 3/9 f0/f2）；
+//  3. 开关 handitem_throw_land_cell 打开：改用「玩家坐标 + 出手方向 + 距离」算出的格子；
+//  4. 什么都没有：has_pos=false，退化成「整个钓点一格」，按衰减系数生效。
+//
+// 返回 src 只给日志用：cast / player / computed / none。
+func groundbaitThrowCell(s *Server, st *FishState, computed *throwLanding) (float64, float64, bool, string) {
+	x, z, has, src := st.CastPosX, st.CastPosZ, st.HasCastPos, "cast"
+	if !has && s.tunableF("groundbait_throw_pos_fallback", 1) != 0 && st.HasPos {
+		x, z, has, src = st.PosX, st.PosZ, true, "player"
+	}
+	if computed != nil {
+		x, z, has, src = computed.X, computed.Z, true, "computed"
+	}
+	if !has {
+		src = "none"
+	}
+	return x, z, has, src
+}
+
+// handThrowItemGUID 取 12/1 第一个参数：被扔出去的物件实例 GUID。
+func handThrowItemGUID(root *proto.Value) string {
+	for _, g := range deepGUIDs(root) {
+		if n := normalizeDynamicGUID(g); n != "" {
+			return n
+		}
+	}
+	return ""
+}
+
+// handThrowDistance 取 obj19 olieodeoaof.f0 的本次投距。没带就当 0，
+// 不像弹弓那样兜底 20 米：手抛的距离是客户端真报上来的（实测 6.108 / 7.567 米），
+// 缺了就不该编一个出来。
+func handThrowDistance(root *proto.Value) float64 {
+	target := findThrowTarget(root)
+	if target == nil || target.FieldCount() == 0 || target.Field(0).Num == nil {
+		return 0
+	}
+	d := float64(math.Float32frombits(uint32(u64Of(target.Field(0).Num))))
+	if math.IsNaN(d) || math.IsInf(d, 0) || d < 0 {
+		return 0
+	}
+	return math.Min(d, 150)
+}
+
+// hHandThrowGroundbait 处理 12/1：手里攥一团窝料直接扔进水里，不用弹弓也不用打窝竿。
+//
+// 实测 2026-11-07 19:37 loc1_02 两发：请求 = args(被扔物件的实例 GUID, obj19 olieodeoaof)，
+// obj19 f0=f1=这一发的投距（6.108 米、7.567 米，随力度真的变，不像弹弓 13/5 的 f0 恒为 10.0），
+// f3=当前钓点字符串（loc1_02）。前一条 11/2 是快捷键绑定（hShortcutBind），与消耗无关。
+//
+// 客户端扔完只在自己本地把背包数字扣掉，服务端不接就会在下次全量快照里把这两份补回来
+// （幽灵窝料）。所以这里必须真扣一份，再把这一份记进窝账（通道 hand）。
+func hHandThrowGroundbait(ctx *Ctx) ([]byte, bool) {
+	srv := ctx.Sess.Srv
+	if !srv.requireDB(ctx) {
+		return nil, false
+	}
+	pushCtx := ctx.Sess.pushCtx()
+	guid := handThrowItemGUID(ctx.Tree)
+	if guid == "" {
+		return nil, false
+	}
+	row, err := srv.DB.GetItemByGUID(pushCtx, guid)
+	if err != nil || row == nil || row.UID != ctx.Sess.Userid {
+		return nil, false
+	}
+	cat, known := srv.itemCategoryOf(pushCtx, row)
+	if !known || (cat != catGroundbaitMix && cat != catPVAStick) {
+		// 手抛别的物件眼下不归窝料系统管；留一行日志，下次扔别的品类能立刻认出来再接。
+		ctx.Log.Info("手抛暂不接管", "item", row.ItemID, "category", cat)
+		return nil, false
+	}
+	if srv.consumeItemQty(pushCtx, row, 1) < 1 {
+		ctx.Log.Warn("手抛扣料失败", "item", row.ItemID, "hand", shortGUID(guid))
+		return nil, false
+	}
+	// 客户端本地那一格已经少了：服务端要么更新数量要么删掉，否则重登就复活。
+	if left, lerr := srv.DB.GetItemByGUID(pushCtx, guid); lerr == nil && left != nil {
+		ctx.Sess.Push4_22ItemGUIDs([]string{guid})
+	} else {
+		ctx.Sess.Push4_21([]string{guid})
+	}
+	srv.depositHandThrownGroundbait(ctx, row.ItemID, handThrowDistance(ctx.Tree))
+	return nil, false
+}
+
+// depositHandThrownGroundbait 把手抛出去的这一团记进窝账：通道 hand，份数缺省 1
+// （groundbait_hand_portions 可调），落点沿用弹弓那套三档选择。
+// 幂等键带 call_id：同一次请求重发只入一次账。
+func (s *Server) depositHandThrownGroundbait(ctx *Ctx, itemID string, dist float64) {
+	uid := ctx.Sess.Userid
+	st := s.stateFor(uid)
+	if st == nil {
+		return
+	}
+	portions := s.tunableF("groundbait_hand_portions", 1)
+	if portions <= 0 {
+		portions = 1
+	}
+	st.mu.Lock()
+	gbLoc, gbSpot := st.Loc, st.Spot
+	var computed *throwLanding
+	if s.tunableF("handitem_throw_land_cell", 0) != 0 && dist > 0 && st.HasPos {
+		if land := handitemThrowLanding(st, dist, s.tunableF("handitem_throw_fallback_yaw", 0)); land.OK {
+			computed = &land
+		}
+	}
+	gbX, gbZ, gbHas, gbSrc := groundbaitThrowCell(s, st, computed)
+	st.mu.Unlock()
+	if gbLoc == "" {
+		return
+	}
+	ctx.Log.Info("手抛窝料落点", "src", gbSrc, "x", gbX, "z", gbZ, "has_pos", gbHas, "dist", dist)
+	s.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot, itemID, portions, "hand",
+		fmt.Sprintf("hand:%s:%d:%d", itemID, ctx.Sess.ID, ctx.CallID))
 }
