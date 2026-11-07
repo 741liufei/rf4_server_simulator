@@ -101,6 +101,18 @@ func TestAdminAPI(t *testing.T) {
 		t.Fatalf("仪表盘异常: %d %s", code, body)
 	}
 
+	// 关于页：README 由二进制内嵌并提供给管理后台
+	code, body = call("GET", "/api/about", token, "")
+	if code != 200 {
+		t.Fatalf("关于页应 200, 实得 %d: %s", code, body)
+	}
+	var about struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(body), &about); err != nil || !strings.Contains(about.Content, "# rf4_server_simulator") {
+		t.Fatalf("README 内容异常: %v %s", err, body)
+	}
+
 	// 调参
 	if code, _ = call("POST", "/api/tunables", token, `{"key":"bite_probability","value":"0.5"}`); code != 200 {
 		t.Fatalf("调参失败 %d", code)
