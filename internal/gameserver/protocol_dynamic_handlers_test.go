@@ -168,6 +168,10 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	if math.Abs(gotDist-17.5) > 0.001 {
 		t.Fatalf("13/5 f0=%f, 期望 17.5", gotDist)
 	}
+	scatterField := dec.Field(1)
+	if gotScatter := float64(proto.F32FromBits(scatterField.U32())); math.Abs(gotScatter-5.0) > 0.001 {
+		t.Fatalf("13/5 f1=%f, 期望缺省散布 5%%", gotScatter)
+	}
 	upserts := dec.Field(3).Val
 	if upserts == nil || upserts.ArgCount() != 1 {
 		t.Fatalf("13/5 f3 应更新装填物，实得 %#v", upserts)
@@ -252,9 +256,24 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	if pose := dec.Field(2).Val; pose == nil || pose.Class != "pnbphpdmppe" {
 		t.Fatalf("关掉抛出物不该影响 f2 姿态块，实得 %#v", pose)
 	}
-	if fresh2, gerr := srv.DB.GetItemByGUID(ctx, bait2.GUID); gerr != nil || fresh2 == nil ||
-		srv.stackCountOf(ctx, fresh2) != 1 {
-		t.Fatalf("缺省关闭抛出物后仍应扣掉 1 份，实得 %#v", fresh2)
+	setWeatherTestTunable(t, srv, "handitem_throw_scatter", "0")
+	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 散布归零时未处理")
+	}
+	dec, _, err = proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scatterField = dec.Field(1)
+	if gotScatter := float64(proto.F32FromBits(scatterField.U32())); gotScatter != 0 {
+		t.Fatalf("散布开关调 0 后 f1=%f，期望 0", gotScatter)
+	}
+	if fresh2, _ := srv.DB.GetItemByGUID(ctx, bait2.GUID); fresh2 != nil {
+		t.Fatalf("第二发用尽后 bait2 应删除，实得 %#v", fresh2)
+	}
+	if loaded := srv.handitemLoadedGuid(ctx, hand.GUID); loaded != "" {
+		t.Fatalf("两发用尽后装填引用应清空，实得 %s", loaded)
 	}
 }
 

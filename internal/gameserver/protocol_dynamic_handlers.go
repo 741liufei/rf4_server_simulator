@@ -88,11 +88,17 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 	if thrownGUID != "" && srv.tunableF("handitem_throw_selfclean", 0) != 0 {
 		removed = append(removed, thrownGUID)
 	}
+	scatter := srv.tunableF("handitem_throw_scatter", 5.0)
+	if math.IsNaN(scatter) || math.IsInf(scatter, 0) {
+		scatter = 5.0
+	}
+	scatter = groundbaitClamp(scatter, 0, 100)
 	ctx.Log.Info("805 落点与抛出物", "hand", shortGUID(handGUID), "dist_m", dist,
-		"upserts", len(upserts), "removed", len(removed), "pose", withPose, "projectile", thrown.ArgCount())
+		"scatter_pct", scatter, "upserts", len(upserts), "removed", len(removed),
+		"pose", withPose, "projectile", thrown.ArgCount())
 	obj, err := wiregen.MakeObj("lmbomkliaad", map[int]*proto.Value{
 		0: proto.F32(float32(dist)),
-		1: proto.F32(5.0),
+		1: proto.F32(float32(scatter)),
 		2: pose,
 		3: proto.Args(proto.S("61"), upserts...),
 		4: thrown,
