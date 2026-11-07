@@ -64,7 +64,8 @@ func (s *Server) initializeTradingItem(ctx context.Context, def *store.ItemDef, 
 	if s.rollGradeDB(ctx, attrs.Fish, 1) != 1 {
 		return fmt.Errorf("%s：没有普通鱼档位", attrs.Fish)
 	}
-	k, _ := s.DB.SpeciesLengthKP(ctx, attrs.Fish)
+	k, p := s.DB.SpeciesLengthKP(ctx, attrs.Fish)
+	k, _ = calibratedLengthKP(attrs.Fish, k, p)
 	obj.Fields[0].Val = s.tradingCardFish(ctx, &RolledFish{Species: attrs.Fish, Grade: 1, WeightG: 1,
 		LengthM: k, FishGUID: NewItemGUID()}, time.Now())
 	return nil

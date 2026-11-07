@@ -22,8 +22,11 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
 与本地构建时间戳按通道（stable / preview）比较，发现新版时在控制中心
 和内嵌管理后台显示更新横幅：stable 新版附弹层提示，preview 只出弱化
 横幅。横幅提供"加速下载（gh-proxy 直链）/ 官方下载 / 最新预览版 /
-更新说明 / 本版本不再提醒"。检测失败
-（无网、镜像全挂）完全静默，绝不影响启动与游戏。
+更新说明 / 本版本不再提醒"。运行控制的实时日志下方另设常驻版本卡片，
+显示当前运行版本、目标通道最新版本，以及 gh-proxy / 官方 Releases
+入口；检测成功显示绿色连接灯，无网或全部镜像失败显示红色连接灯并保留
+上次成功结果。检测失败只影响这张卡片的提示，绝不影响启动、seed、
+服务启停、日志和其他功能。
 
 ## User Stories
 
@@ -31,10 +34,11 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
    更新说明或下载新版；点了"本版本不再提醒"后这个版本不再骚扰我。
 2. 作为追 main 的 preview 用户，我以横幅（不弹窗）方式得知有更新的
    preview 构建，知道自己落后了几个构建。
-3. 边界：断网 / 镜像全挂 → 界面毫无变化，日志里最多一条 warn；
-   dev 构建（无 BuildTs 注入）不做检测；远端 JSON 格式不合法或 schema
-   不认识 → 当作本次检测失败，换下一个源；检测期间不做任何下载或
-   自动安装，永远只展示信息。
+3. 边界：断网 / 镜像全挂 → 版本卡片显示红色“连接失败”，本地服务
+   操作照常；若曾成功检测则继续展示上次最新版本。dev 构建（无 BuildTs
+   注入）不做联网检测，卡片同样显示无法检测；远端 JSON 格式不合法或
+   schema 不认识 → 当作本次检测失败，换下一个源；检测期间不做任何
+   下载或自动安装，永远只展示信息。
 
 ## Implementation Decisions
 
@@ -74,6 +78,13 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
     返回 `available=false`。文件读写失败只记日志不报错。
   - 结果结构体 JSON tag 直接按 `/api/status.update` 的下发展示。
 - **launcher 接入**（`cmd/launcher/main.go`）：
+  - `/api/status` 始终返回 `current_version` 与 `update_status`
+    （`checking/connected/error/checked_at`）；检测仍在后台 goroutine，
+    状态只读，不进入启停或日志请求链路。
+  - 控制中心实时日志下方新增版本卡片，固定提供
+    `https://gh-proxy.com/https://github.com/glance522/rf4_server_simulator/releases`
+    与官方 Releases 链接；检测失败时显示红色指示灯和“不影响本地功能”
+    的说明。
   - `app` 挂 `updates *updatecheck.Checker`；HTTP 面板起来后
     `go app.runUpdateChecks()`：延迟 5s 首查 → 每 2h 复查，走
     `app.ctx`，退出即停；单次失败记 warn 并保留上一次结果。
@@ -130,8 +141,10 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
   - 回滚变红点：删除 updatecheck 实现则本文件全红。
 - `internal/admin/api_test.go`：`SetUpdateInfo` 后 `/api/me` 与
   `/api/dashboard` 带 `update` 字段（沿用既有认证/请求测试接缝）。
-- `cmd/launcher/main_test.go`：`handleStatus` 携带 `update` 字段、
-  dismiss 端点写入状态文件（CI 不跑 cmd/launcher，本地跑）。
+- `cmd/launcher/main_test.go`：`handleStatus` 携带 `update`、
+  `current_version`、`update_status` 字段；dismiss 端点写入状态文件；
+  假源返回 503 时检测状态标红但 `/api/status` 仍 200（CI 不跑
+  cmd/launcher，本地跑）。
 - UI（惯例接缝）`internal/admin/update_banner_ui_test.cjs`：mock
   `/api/me` 返回带 `update` → 断言横幅出现；mock `available=false` →
   断言不出现。沿用现有 `.cjs` 的 route/前缀约定。

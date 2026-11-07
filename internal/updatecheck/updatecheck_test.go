@@ -104,6 +104,24 @@ func TestCheckPreviewNotNewer(t *testing.T) {
 	}
 }
 
+func TestCheckReportsLatestWhenAlreadyCurrent(t *testing.T) {
+	env := newTestEnv(t, manifestBody(1,
+		releaseBody("v1.0.0", "20261106120000",
+			"notes_url", "https://github.com/glance522/rf4_server_simulator/releases/tag/v1.0.0",
+			"download_url", "https://github.com/glance522/rf4_server_simulator/releases/latest",
+			"download_mirror_url", "https://gh-proxy.com/https://github.com/glance522/rf4_server_simulator/releases/download/v1.0.0/a.zip"), ""))
+	res, err := env.checker.Check(context.Background(), "v1.0.0", "20261107120000")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if res.Available {
+		t.Fatalf("本地更新时不应提示更新: %+v", res)
+	}
+	if res.LatestVersion != "v1.0.0" || res.NotesURL == "" || res.DownloadURL == "" || res.DownloadMirrorURL == "" {
+		t.Fatalf("检测成功时应始终带回目标通道最新版本与链接: %+v", res)
+	}
+}
+
 func TestCheckStableNewerAvailable(t *testing.T) {
 	env := newTestEnv(t, manifestBody(1,
 		releaseBody("v1.2.0", "20261107120000",

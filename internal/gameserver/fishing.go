@@ -1132,8 +1132,9 @@ func (s *Server) rollFishPoolsWithRules(loc string, gearCapKg float64, bonus fis
 	// 体长
 	lp, ok := lengthSeed[e.species]
 	if !ok || lp[0] == 0 {
-		lp = [2]float64{0.0355, 1.0 / 3.0}
+		lp = [2]float64{defaultSpeciesLengthK, defaultSpeciesLengthP}
 	}
+	lp[0], lp[1] = calibratedLengthKP(e.species, lp[0], lp[1])
 	length := lp[0] * math.Pow(float64(weightG), lp[1])
 	length = math.Round(length*100000) / 100000
 
