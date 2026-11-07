@@ -45,3 +45,29 @@ func TestShortcutBindingSurvivesItemContainerMove(t *testing.T) {
 		}
 	}
 }
+
+// 绑定一个已移动到帐篷里的物品后再次保存快捷栏时，不能因为旧绑定所在容器
+// 不是背包而拒绝整次保存。
+func TestShortcutSavePreservesBindingInNonBackpackContainer(t *testing.T) {
+	db := shortcutTestDB(t)
+	ctx := context.Background()
+	if _, err := db.SQL.Exec("UPDATE item SET container='backpack' WHERE guid=?", shortcutStoredGUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BindShortcut(ctx, 1, 1, shortcutOwnGUID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec("UPDATE item SET container='tent' WHERE guid=?", shortcutOwnGUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.BindShortcut(ctx, 1, 2, shortcutStoredGUID); err != nil {
+		t.Fatalf("save with tent binding failed: %v", err)
+	}
+	bindings, err := db.ListShortcuts(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 2 || bindings[0].Slot != 1 || bindings[0].GUID != shortcutOwnGUID || bindings[1].Slot != 2 || bindings[1].GUID != shortcutStoredGUID {
+		t.Fatalf("unexpected bindings: %v", bindings)
+	}
+}

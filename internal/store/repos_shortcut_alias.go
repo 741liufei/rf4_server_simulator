@@ -24,7 +24,7 @@ func sortedShortcuts(bindings map[int64]string) []Shortcut {
 
 func shortcutItemAvailable(ctx context.Context, tx *sql.Tx, uid int64, guid string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM item WHERE uid=? AND guid=? AND container IN ('backpack','rig')", uid, guid).Scan(&count)
+	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM item WHERE uid=? AND guid=? AND container IN ('backpack','rig','tent','car','boat','scooter','house')", uid, guid).Scan(&count)
 	return count == 1, err
 }
 
