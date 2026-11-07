@@ -783,7 +783,13 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	if lineGUID == "" {
 		lineGUID, _ = s.storedRigItemGUID(ctx, rod, csLine)
 	}
-	leaderGUID := s.rigComponentGuidOf(ctx, rodGUID, catWireLeader)
+	// 引线 GUID 与最弱环计算同源：rigGearIDs 已经把竿实例的钓组对象和
+	// rig_component 派生索引合并解析过（优先 15 前导线，回退 13 子线），
+	// 这里不能再只读实例字段，否则只在派生索引里有装配时断件又会漏掉引线。
+	leaderGUID := ids.LeaderGUID
+	if leaderGUID == "" {
+		leaderGUID = s.rigComponentGuidOf(ctx, rodGUID, catWireLeader)
+	}
 	if leaderGUID == "" {
 		leaderGUID = s.rigComponentGuidOf(ctx, rodGUID, gearCatLeader)
 	}
