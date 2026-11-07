@@ -21,6 +21,7 @@ type catchReceipt struct {
 	IsRecord                                         bool
 	SkillID                                          int64
 	CaughtAt                                         float64
+	DroppedCardGUID                                  string `json:",omitempty"`
 }
 
 func (r catchReceipt) result(replayed bool) *settleXpResult {
@@ -30,7 +31,7 @@ func (r catchReceipt) result(replayed bool) *settleXpResult {
 	}
 	return &settleXpResult{baseXP: r.BaseXP, totalXP: r.TotalXP, premiumXP: r.PremiumXP, bonuses: r.Bonuses, skillGain: gain, silver: r.Silver,
 		prevBest: r.PreviousBest, newLevel: r.Level, totalXp: r.AccumulatedXP,
-		levelsGained: r.LevelsGained, isRecord: r.IsRecord, skillID: r.SkillID, replayed: replayed}
+		levelsGained: r.LevelsGained, isRecord: r.IsRecord, skillID: r.SkillID, replayed: replayed, droppedCardGUID: r.DroppedCardGUID}
 }
 
 type catchWear struct {
@@ -142,6 +143,7 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 		f.HappyHourKnown = true
 	}
 	happy := f.HappyHour
+	bait := state.Bait
 	state.mu.Unlock()
 	bonuses, err := s.rodXPBonuses(ctx, uid, gear, xp)
 	if err != nil {
@@ -156,6 +158,10 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	}
 	if happy {
 		bonuses = append(bonuses, catchXPBonus{Kind: 56, GUID: zeroGUID, Multiplier: .5, XP: int64(math.Round(float64(xp) * .5))})
+	}
+	card, err := s.prepareCatchCard(ctx, uid, f, bait)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := s.DB.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -251,6 +257,12 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 		if err := store.AddItemDamageLog(ctx, tx, change.log); err != nil {
 			return nil, err
 		}
+	}
+	if card != nil {
+		if err := insertItemTx(ctx, tx, card); err != nil {
+			return nil, err
+		}
+		r.DroppedCardGUID = card.GUID
 	}
 	raw, err := json.Marshal(r)
 	if err != nil {

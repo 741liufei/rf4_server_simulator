@@ -261,7 +261,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 	}
 	it := &store.Item{
 		GUID: guid, UID: uid, ItemID: def.ItemID, NumericID: def.NumericID,
-		WireClass: cls.Class, TypeID: cls.TypeID, Container: container, Qty: rowQty,
+		WireClass: cls.Class, TypeID: cls.TypeID, Container: tradingItemContainer(cls.Class, container), Qty: rowQty,
 		Durability: 1, Workmanship: 1, CreatedTS: float64(time.Now().Unix()),
 	}
 	if cls.Class == "cnolibojkao" {
@@ -270,6 +270,9 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 		}
 	}
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return nil, err
+	}
 	fj, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return nil, err

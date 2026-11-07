@@ -84,10 +84,11 @@ func (s *Server) removeItemsAndRepairRigs(ctx context.Context, uid int64, guids 
 		}
 		clearRigFieldsForBackpack(fields, row.WireClass)
 		row.RigGUID = ""
+		row.Container = tradingItemContainer(row.WireClass, "backpack")
 		if err := updateItemFieldsTx(ctx, s.DB, tx, row, fields); err != nil {
 			return nil, nil, err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE item SET container='backpack', slot=0 WHERE guid=? AND uid=?`, row.GUID, uid); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE item SET container=?, slot=0 WHERE guid=? AND uid=?`, row.Container, row.GUID, uid); err != nil {
 			return nil, nil, err
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE guid=? AND EXISTS
