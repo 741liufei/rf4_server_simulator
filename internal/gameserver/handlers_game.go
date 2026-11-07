@@ -65,6 +65,11 @@ func hItemCount(ctx *Ctx) ([]byte, bool) {
 			used = int64(len(n))
 		}
 		cap, capMember = 100, 150
+	case 10, 11:
+		// 房屋仓库：容量按 100 起步。回 0 时客户端认为仓库容量为零，
+		// 存放交互在 UI 层就被拦下。
+		used, _ = srv.DB.CountItemsByContainers(cctx, ctx.Sess.Userid, []string{"house"})
+		cap = 100
 	default:
 		if names := nativeInventoryContainers(container); names != nil {
 			used, _ = srv.DB.CountItemsByContainers(cctx, ctx.Sess.Userid, names)

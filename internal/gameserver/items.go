@@ -443,10 +443,15 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 		}
 	}
 	if idx := fieldIdxByCS(class, csSlotEnum); idx >= 0 && fieldOpAt(class, idx) == "BYTE" {
-		// 卡片属于专用收藏库存；其余根物品即使已装配，wire 容器枚举仍为 0。
+		// 卡片属于专用收藏库存；背包/装备中的根物品 wire 容器枚举为 0，
+		// 存入房屋的物品为 10——客户端物品管理器（eegjkjenhoe）按该枚举
+		// 把物品挂进对应容器字典，恒 0 会让房屋仓库永远收不到物品。
 		// container='rig' 是服务端归属，不是物品对象的 lmmhdlhogdc；
 		// 只有母物品内部的嵌套子实例使用 rig(4)。
 		kind := rootItemStorageKind(class)
+		if it.Container == "house" {
+			kind = 10
+		}
 		if u64Of(fields[idx].Num) != kind {
 			fields[idx].Num = ptrU64(kind)
 			changed = true

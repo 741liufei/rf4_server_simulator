@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"rf4server/internal/proto"
+	"rf4server/internal/store"
 )
 
 // world 命令族（25/29）和背包变动命令（4/6-4/8）。
@@ -74,6 +75,11 @@ func hWorldNull(ctx *Ctx) ([]byte, bool) {
 }
 
 // hItemMove 4/6：guids + [源容器, 目标容器] → 移动 → 回快照。
+//
+// 移动完成后按 4/21(删旧)+4/22(推新树) 增量同步客户端：物品树的容器
+// 枚举由 canonicalizeItemPhysicalFields 按新容器投影（房屋=10），客户端
+// 物品管理器据此把物品挂进目标容器字典。仅回 800 快照时客户端房屋
+// 仓库不刷新，存放交互表现为"没反应"。
 func hItemMove(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv
 	if !srv.requireDB(ctx) {
@@ -81,6 +87,7 @@ func hItemMove(ctx *Ctx) ([]byte, bool) {
 	}
 	guids := deepGUIDs(ctx.Tree)
 	ints := treeIntsDeep(ctx.Tree)
+	var moved []*store.Item
 	if len(guids) > 0 {
 		dst := "backpack"
 		if len(ints) > 1 {
@@ -89,9 +96,17 @@ func hItemMove(ctx *Ctx) ([]byte, bool) {
 		for _, g := range guids {
 			if row, err := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), g); err == nil && row.UID == ctx.Sess.Userid {
 				row.Container = dst
-				_, _ = srv.DB.SQL.ExecContext(ctx.Sess.pushCtx(),
-					`UPDATE item SET container=? WHERE guid=?`, dst, g)
+				if _, err := srv.DB.SQL.ExecContext(ctx.Sess.pushCtx(),
+					`UPDATE item SET container=? WHERE guid=?`, dst, g); err == nil {
+					moved = append(moved, row)
+				}
 			}
+		}
+	}
+	for _, row := range moved {
+		if tree, terr := srv.ItemToTree(ctx.Sess.pushCtx(), row); terr == nil {
+			ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{row.GUID})))
+			ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
 		}
 	}
 	return srv.rigSnapshot800(ctx), true
