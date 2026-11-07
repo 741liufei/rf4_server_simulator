@@ -24,6 +24,8 @@ var PlayerTables = []string{
 	"fishing_state", "item_damage_log", "membership_order", "reel_performance", "cafe_order", "cafe_order_completion",
 	"player_condition", "campfire_state", "happy_hour_state",
 	"drink_bonus_clock", "drink_bonus_effect", "trip_state", "trip_grant",
+	// 窝料账本随玩家投放/咬口/衰减变化，必须进玩家存档与备份。
+	"groundbait_deposit", "groundbait_clock",
 }
 
 // RuntimeTables 是运营/运行时/迁移元数据表，不属于静态资料或玩家存档。

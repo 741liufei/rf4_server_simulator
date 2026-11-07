@@ -61,6 +61,10 @@ func TestBaitWeightDistributionDBAndFallback(t *testing.T) {
 				name = "fallback"
 			}
 			t.Run(name+"/rules="+strict, func(t *testing.T) {
+				// 这组断言比较两次独立抽样的均重，固定随机序列才能避免 CI 上
+				// 因 150 条样本的抖动误报“零权重改变了分布”。
+				t.Setenv("GODEBUG", "randseednop=0")
+				rand.Seed(20261107)
 				s, db := seedBaitWeightTest(t)
 				if err := db.TunableSet(t.Context(), "bait_pref_weight_shift", "2", "test"); err != nil {
 					t.Fatal(err)

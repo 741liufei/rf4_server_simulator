@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"strings"
 
@@ -59,6 +60,16 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 			break
 		}
 	}
+	// 弹弓抛饵前先把弹药格里的物品号取出来：投放账本要按它查窝料档案，
+	// 消耗完之后这个引用会被清掉，所以必须在扣料之前读。
+	baitItemID := ""
+	if handGUID != "" && handGUID != zeroGUID {
+		if loaded := srv.handitemLoadedGuid(ctx.Sess.pushCtx(), handGUID); loaded != "" && loaded != zeroGUID {
+			if row, rerr := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), loaded); rerr == nil && row != nil {
+				baitItemID = row.ItemID
+			}
+		}
+	}
 	var upserts []*proto.Value
 	var removed []string
 	if dist > 0 && handGUID != "" && handGUID != zeroGUID {
@@ -66,11 +77,23 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 		upserts = got.upserts
 		removed = got.removed
 	}
-	// f2 是姿态块 pmdcpeegbbd：客户端用它写全局时间与玩家生物特征；
-	// f4 是本次抛出的物件实例数组，客户端读到新实例才会生成飞行中的饵。
-	// 两个字段各由一个 tunable 控制，便于实机单变量验证（缺省都开）。
+	// 窝料系统：这一弹的饵落到落点格子里（通道=catapult）。落点只有距离，
+	// 世界坐标取服务端已经存下的本次抛竿落点。
+	if dist > 0 && handGUID != "" && handGUID != zeroGUID && baitItemID != "" {
+		if uid := ctx.Sess.Userid; uid != 0 {
+			st := srv.stateFor(uid)
+			if st != nil {
+				st.mu.Lock()
+				gbLoc, gbX, gbZ, gbHas, gbSpot := st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot
+				st.mu.Unlock()
+				srv.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot,
+					baitItemID, 1, "catapult", fmt.Sprintf("catapult:%s:%d:%d", shortGUID(handGUID), ctx.Sess.ID, ctx.CallID))
+			}
+		}
+	}
+	// f2 是姿态块；额外抛出物实例缺省关闭，避免和客户端自行绘制的飞行饵重复。
 	withPose := srv.tunableF("handitem_throw_pose", 1) != 0
-	withProj := srv.tunableF("handitem_throw_projectile", 1) != 0
+	withProj := srv.tunableF("handitem_throw_projectile", 0) != 0
 	var pose *proto.Value
 	if withPose {
 		pose = srv.buildPose308(ctx.Sess.pushCtx(), ctx.Sess.Userid)
@@ -83,8 +106,6 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 		thrown = proto.Args(proto.S("61"), pj)
 		thrownGUID = throwProjectileGUID(pj)
 	}
-	// 一次性自清：把抛出物 GUID 同时放进 f5 移除列表，客户端建好飞行体后
-	// 这条临时实例就不会留在弹弓弹药格里（实测缺省 0=不启用）。
 	if thrownGUID != "" && srv.tunableF("handitem_throw_selfclean", 0) != 0 {
 		removed = append(removed, thrownGUID)
 	}

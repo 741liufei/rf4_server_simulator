@@ -304,3 +304,40 @@ func TestDynamicEquippedItemsUsesRigRows(t *testing.T) {
 		t.Fatalf("3/41 合同守卫误拒: %s", reason)
 	}
 }
+
+// 同一弹弓、同一 CallID 分属两次登录时，窝账幂等键必须包含会话号。
+func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	registerDynamicProtocolHandlers(srv.dispatch)
+	setWeatherTestTunable(t, srv, "groundbait_enabled", "1")
+	ctx := context.Background()
+	const uid = int64(1000001)
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.Loc = "gb-test-loc"
+	st.mu.Unlock()
+	hand, err := srv.CreateItem(ctx, uid, "wh_pc_gb", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bait, err := srv.CreateItem(ctx, uid, "worm_01", "rig", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.setStackCount(ctx, bait, 2)
+	srv.setHanditemLoadedRef(ctx, hand.GUID, bait.GUID)
+	target := wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(10)})
+	req := rigRequestTree(t, proto.Guid(hand.GUID), target)
+	for _, sessID := range []uint64{11, 12} {
+		sess := newProbeSess(srv)
+		sess.ID = sessID
+		c := &Ctx{Sess: sess, Tree: req, DecodeOK: true, ExpectResponse: true,
+			CallID: 35, Log: logging.Discard()}
+		if _, ok := hDynamicHanditemThrow(c); !ok {
+			t.Fatalf("会话 %d 的 13/5 未处理", sessID)
+		}
+	}
+	if n := gbCount(t, srv, uid); n != 2 {
+		t.Fatalf("两次登录同 CallID 应有 2 笔窝账，实得 %d", n)
+	}
+}
