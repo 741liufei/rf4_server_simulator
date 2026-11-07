@@ -92,7 +92,7 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 	if math.IsNaN(scatter) || math.IsInf(scatter, 0) {
 		scatter = 5.0
 	}
-	scatter = groundbaitClamp(scatter, 0, 100)
+	scatter = math.Max(0, math.Min(100, scatter))
 	ctx.Log.Info("805 落点与抛出物", "hand", shortGUID(handGUID), "dist_m", dist,
 		"scatter_pct", scatter, "upserts", len(upserts), "removed", len(removed),
 		"pose", withPose, "projectile", thrown.ArgCount())
