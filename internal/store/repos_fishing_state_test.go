@@ -23,6 +23,7 @@ func TestFishingStateRoundTrip(t *testing.T) {
 	biteAt := castAt.Add(13 * time.Second)
 	want := &FishingState{
 		UID:            1000001,
+		RodGUID:        "11111111111111111111111111111111",
 		GearGUID:       "11111111111111111111111111111111",
 		RigType:        12,
 		Loc:            "level_019_american_pond",

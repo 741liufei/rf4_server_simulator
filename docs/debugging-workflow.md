@@ -64,6 +64,8 @@
 | 21/2 组件数组 | 元素类 `poolccanfhd` = `hlopebmchhp`/504 → args code **143** |
 | poolccanfhd 字段 5 | `ojoboopbaec[]` = `hpopgbjohpk`/507 → 空数组也要发 args code **146**，发 null 会让客户端 `foreach` 崩 |
 | 21/5 | args code **145**（空兑换列表） |
+| 卡片/卡册实例数组 | 客户端真实类型注册表：**362**=`ipdpoaiekem`、**364**=`imdcjllgdcn`；363是`phjbhljooid`卡册定义。使用`by_elem`显式映射，不能用`by_type_id`合成值或未注册的DTO名称替代 |
+| 卡片入册同步 | 800更新列表同时发送原卡及卡册，移除列表为空；原卡StorageType仍为18，父GUID指向卡册。4/1、4/4、4/5也需包含已入册原卡，客户端按父GUID填卡位；卡册f0快照不能替代库存卡片 |
 | 竿的零件 | 客户端工作坊按竿 `f5` 的 `gcfcdnfmnbh` 列表渲染；出厂部件（竿坯/手柄/导环）必须同时写进 f5，只写 f0~f2 不够 |
 | 装配派生表 | `rig_component` 由 `f5` 单向投影；历史数据可能为空，`reconcileRigProjection` 可回填 |
 

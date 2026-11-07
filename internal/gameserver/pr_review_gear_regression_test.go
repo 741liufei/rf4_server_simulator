@@ -260,8 +260,8 @@ func TestLeadcoreBreakReportAcceptedOnRealRig(t *testing.T) {
 	}
 }
 
-// P2：强钩配弱线时，客户端上报"钩断了"也必须按最弱环判弱线。
-func TestStrongHookWeakLineReportsHookButBreaksLine(t *testing.T) {
+// 客户端上报钩断时，按上报件摘钩；即使钩强于主线，也不改判成断线。
+func TestReportedHookBreakDetachesHookEvenIfLineWeaker(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -286,26 +286,29 @@ func TestStrongHookWeakLineReportsHookButBreaksLine(t *testing.T) {
 	before := lineLengthOfTestItem(t, srv, line.GUID)
 	out, err := srv.breakLineOrRod(ctx, uid, rod.GUID, hook.GUID)
 	if err != nil {
-		t.Fatalf("上报钩断应被受理并进入物理裁决: %v", err)
+		t.Fatalf("上报钩断应被受理: %v", err)
 	}
-	if out.BreakPart != "line" || out.BrokenGUID != line.GUID {
-		t.Fatalf("强钩弱线应判弱线: %+v，期望断主线 %s", out, line.GUID)
+	if !out.ComponentBroken || out.BreakPart != "component" || out.BrokenGUID != hook.GUID {
+		t.Fatalf("应按上报件摘钩: %+v", out)
 	}
-	if !out.LineBroken || out.ComponentBroken {
-		t.Fatalf("应按断线结算而不是丢钩: %+v", out)
+	if out.LineBroken {
+		t.Fatalf("上报钩断不应改判成断线: %+v", out)
 	}
-	if after := lineLengthOfTestItem(t, srv, line.GUID); after >= before {
-		t.Fatalf("断主线应扣长度: %d -> %d", before, after)
+	if after := lineLengthOfTestItem(t, srv, line.GUID); after != before {
+		t.Fatalf("摘钩不应扣主线长度: %d -> %d", before, after)
 	}
-	// 钩会随主线一起丢失（主线断会带走挂载件），但不能被记成"钩自身断裂"。
 	logs, err := db.ListItemDamageLogs(ctx, uid, 50)
 	if err != nil {
 		t.Fatal(err)
 	}
+	found := false
 	for _, entry := range logs {
 		if entry.ItemGUID == hook.GUID && entry.Event == damageEventComponentBreak {
-			t.Fatal("强钩不应被记成钩自身断裂（客户端上报的钩断必须由服务端改判）")
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("上报钩断应记录 component_break")
 	}
 }
 

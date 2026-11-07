@@ -239,6 +239,8 @@ func TestBaitMountExhaustWritesRebaitAndAutoRemountsSameCount(t *testing.T) {
 	if !s.rigSetType(t.Context(), 1000001, rod.GUID, 29) {
 		t.Fatal("rigSetType 失败")
 	}
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod.GUID, 0)
 	saveMountTypeForTest(t, s, rod.GUID, 65536) // 玉米浮+蛆5
 	_, child := mountBaitForCountTest(t, s, rod.GUID, "bloodworm", 5)
 	for i := 1; i <= 5; i++ {

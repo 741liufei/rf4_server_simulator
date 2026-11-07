@@ -69,7 +69,7 @@ func TestWeatherAndBaitAffectActualBitesWithIndependentSwitches(t *testing.T) {
 	}
 }
 
-func TestWeatherRetryPreservesCastAndStopsWhenDisabledOrHooked(t *testing.T) {
+func TestEmptyBiteRetryPreservesCastAndStopsWhenHooked(t *testing.T) {
 	s, _ := seedBaitRuleTest(t)
 	setWeatherTestTunable(t, s, "fish_weather_enabled", "1")
 	setWeatherTestTunable(t, s, "bite_probability", "0")
@@ -82,7 +82,7 @@ func TestWeatherRetryPreservesCastAndStopsWhenDisabledOrHooked(t *testing.T) {
 		hooked  bool
 		enabled string
 		retry   bool
-	}{{1, false, "1", true}, {12, false, "1", true}, {5, false, "1", false}, {1, true, "1", false}, {1, false, "0", false}} {
+	}{{1, false, "1", true}, {12, false, "1", true}, {5, false, "1", true}, {1, true, "1", false}, {1, false, "0", true}} {
 		setWeatherTestTunable(t, s, "fish_weather_enabled", scenario.enabled)
 		st.mu.Lock()
 		st.CastActive, st.InWater, st.Resolved, st.PushSent, st.Hooked = true, true, false, false, scenario.hooked

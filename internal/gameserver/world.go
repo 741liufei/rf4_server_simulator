@@ -9,10 +9,9 @@ import (
 	"time"
 
 	"rf4server/internal/proto"
-	"rf4server/internal/wiregen"
 )
 
-// world 命令族（25/27/29）和背包变动命令（4/6-4/8）。
+// world 命令族（25/29）和背包变动命令（4/6-4/8）。
 // world 族通常返回 800 容器快照。
 
 // rigSnapshot800 构造背包和装备容器的 800 快照。
@@ -44,11 +43,6 @@ func (s *Server) rigSnapshot800(ctx *Ctx) []byte {
 }
 
 func registerWorldHandlers(d *Dispatch) {
-	// 27/x RemoteSettings：返回容器快照，27/4 返回空集合。
-	d.Register(27, 1, hWorldSnapshot)
-	d.Register(27, 2, hWorldSnapshot)
-	d.Register(27, 3, hWorldSnapshot)
-	d.Register(27, 4, hWorldRemoteSettingsEmpty)
 	// 25/x 船只与燃料：返回容器快照。
 	d.Register(25, 1, hWorldSnapshot)
 	d.Register(25, 2, hWorldSnapshot)
@@ -73,20 +67,6 @@ func hWorldSnapshot(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	return ctx.Sess.Srv.rigSnapshot800(ctx), true
-}
-
-func hWorldRemoteSettingsEmpty(ctx *Ctx) ([]byte, bool) {
-	obj := wiregen.MustMakeObj("gglppphenoi", map[int]*proto.Value{
-		0: proto.Null(),
-		1: proto.Null(),
-		2: proto.Null(),
-		3: proto.Null(),
-	})
-	body, err := proto.EncodeValue(obj, ctx.Sess.Table())
-	if err != nil {
-		return nil, false
-	}
-	return body, true
 }
 
 func hWorldNull(ctx *Ctx) ([]byte, bool) {

@@ -17,7 +17,7 @@ import (
 
 // 钓鱼状态、判鱼、咬钩调度和 14/14 推送。
 
-// FishState 保存单个玩家的钓鱼状态，重连后继续使用。
+// FishState 保存玩家单根竿的钓鱼状态，重连后继续使用。
 type FishState struct {
 	mu          fishStateMutex
 	finishMu    sync.Mutex
@@ -26,7 +26,7 @@ type FishState struct {
 	Loc         string
 	Spot        uint64
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
-	ReelSetting int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
+	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
 	CastActive  bool
 	InWater     bool
 	NeedBite    bool
@@ -219,14 +219,14 @@ func (s *Server) armBiteTimerLocked(uid int64, st *FishState, due time.Time) {
 	st.cancelBiteTimerLocked()
 	st.BiteAt = due
 	ticket := fishingTimerTicket{st.castGeneration, st.biteTicket}
-	st.biteTimer = time.AfterFunc(time.Until(due), func() { s.onBiteTimerTicket(uid, ticket) })
+	st.biteTimer = time.AfterFunc(time.Until(due), func() { s.onRodBiteTimerTicket(uid, st, ticket) })
 }
 
 func (s *Server) armPendingTimerLocked(uid int64, st *FishState, delay time.Duration) {
 	st.cancelPendingTimerLocked()
 	ticket := fishingTimerTicket{st.castGeneration, st.pendingTicket}
 	fish := st.Pending
-	st.pendingTimer = time.AfterFunc(delay, func() { s.repushPendingTicket(uid, ticket, fish) })
+	st.pendingTimer = time.AfterFunc(delay, func() { s.repushRodPendingTicket(uid, st, ticket, fish) })
 }
 
 // maxPendingRepush 限制 14/12 f0=3/5/6 连续拒收鱼实体时的重推次数。
@@ -235,6 +235,7 @@ const maxPendingRepush = 2
 
 // RolledFish 待结算/已结算的鱼。
 type RolledFish struct {
+	GearGUID       string // 发鱼时的原竿；切手持竿不能改变这尾鱼的归属。
 	HookGUID       string
 	HappyHour      bool
 	HappyHourKnown bool
@@ -259,18 +260,6 @@ type RolledFish struct {
 func (s *Server) stateFor(uid int64) *FishState {
 	st := s.fishingState(uid)
 	s.resumeFishingState(st)
-	return st
-}
-
-// fishingState 读取状态，不因欢乐时光计时查询重排钓鱼回调。
-func (s *Server) fishingState(uid int64) *FishState {
-	s.fishMu.Lock()
-	st, ok := s.fishStates[uid]
-	if !ok {
-		st = s.newFishState(uid)
-		s.fishStates[uid] = st
-	}
-	s.fishMu.Unlock()
 	return st
 }
 
@@ -507,10 +496,10 @@ const (
 	verifiedStaminaPerGram      = 2.3880400747623083
 	verifiedInitialStaminaRatio = 0.5628187656402588
 	verifiedForcePerGram        = 0.009806650025503976
-	// 实机反馈鱼体力见底过快：默认把体力池放大 4 倍，并让鱼以 85% 体力开局。
-	// 两项都可通过 tunables 的 fish_stamina_scale / fish_initial_stamina_ratio 调整。
-	defaultFishStaminaScale        = 4.0
-	defaultFishInitialStaminaRatio = 0.85
+	// 默认使用真实样本校准值；需要调整手感时只通过 tunables 显式覆盖，
+	// 不再把主观补偿值作为全体鱼的基准。
+	defaultFishStaminaScale        = 1.0
+	defaultFishInitialStaminaRatio = verifiedInitialStaminaRatio
 )
 
 // lengthSeed 保存体长公式 k*w^p 的参数。
@@ -1451,6 +1440,7 @@ func (s *Session) Push14_14(f *RolledFish, hookGUID, gearGuid string) bool {
 	initialStamina := s.Srv.fishInitialStaminaRatio()
 	force := s.Srv.fishFightPullFor(f, profile)
 	s.log.Info("14/14 发鱼",
+		"rod", shortGUID(gearGuid), "fish", shortGUID(f.FishGUID), "hook", shortGUID(hookGUID),
 		"鱼种", f.Species, "重量_g", f.WeightG, "体力池", stamina,
 		"初始体力", initialStamina, "拉力", force, "体型比例", profile.SizeRatio,
 		"冲刺倍率", profile.ForceScale, "耐力倍率", profile.StaminaScale)
@@ -1520,7 +1510,7 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	now := time.Now()
-	bonus := s.fishingBonus(sess.pushCtx(), sess.Userid, st.RigType)
+	bonus := s.fishingBonus(sess.pushCtx(), sess.Userid, st.RigType, st.GearGuid)
 	st.mu.Lock()
 	if completedCatchPending(st) {
 		st.mu.Unlock()
@@ -1574,11 +1564,14 @@ func (s *Server) onBiteTimer(uid int64) {
 }
 
 func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
+	s.onRodBiteTimerTicket(uid, s.fishingState(uid), ticket)
+}
+
+func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTimerTicket) {
 	sess := s.liveSessionByUID(uid)
 	if sess != nil {
 		sess.updateHappyHour(time.Now(), false)
 	}
-	st := s.fishingState(uid)
 	st.mu.Lock()
 	if ticket.generation != st.castGeneration || ticket.sequence != st.biteTicket {
 		st.mu.Unlock()
@@ -1667,6 +1660,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		probability = math.Min(.95, probability)
 	}
 	if rand.Float64() >= probability {
+		s.log.Info("鱼口未命中，继续等待", "rod", shortGUID(st.GearGuid), "rig_type", st.RigType)
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()
 		return
@@ -1687,6 +1681,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		now: now, weather: sess.weatherAt(st.Loc, now), happyBite: sess.currentHappyHour().BiteBonus,
 	})
 	if f == nil {
+		s.log.Info("本轮无符合条件的鱼，继续等待", "rod", shortGUID(st.GearGuid), "rig_type", st.RigType)
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()
 		return
@@ -1720,7 +1715,10 @@ func (s *Server) repushPending14_14(uid int64, expectedFishGUID ...string) {
 }
 
 func (s *Server) repushPendingTicket(uid int64, ticket fishingTimerTicket, fish *RolledFish) {
-	st := s.fishingState(uid)
+	s.repushRodPendingTicket(uid, s.fishingState(uid), ticket, fish)
+}
+
+func (s *Server) repushRodPendingTicket(uid int64, st *FishState, ticket fishingTimerTicket, fish *RolledFish) {
 	sess := s.liveSessionByUID(uid)
 	st.mu.Lock()
 	if ticket.generation != st.castGeneration || ticket.sequence != st.pendingTicket || st.Pending != fish {
@@ -1750,6 +1748,9 @@ func (s *Server) pushPendingBite(sess *Session, st *FishState, f *RolledFish, ge
 		return
 	}
 	st.pushing = f
+	if f.GearGUID == "" {
+		f.GearGUID = gear
+	}
 	st.persist.recoverPending = false
 	st.mu.Unlock()
 	sent := s.pushBaitedFish(sess, f, gear)

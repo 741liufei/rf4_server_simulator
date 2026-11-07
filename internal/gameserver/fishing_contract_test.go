@@ -21,12 +21,19 @@ func TestFish27UsesVerifiedFightFields(t *testing.T) {
 	f := &RolledFish{FishGUID: "11111111111111111111111111111111", Species: "c.roach", Grade: 1, WeightG: 186, LengthM: 0.1981}
 	profile := srv.fishFightProfileFor(f)
 	tree := srv.buildFish27(f, "22222222222222222222222222222222", "33333333333333333333333333333333")
-	wantStamina := verifiedStaminaPerGram * 186 * defaultFishStaminaScale * profile.StaminaScale
+	if defaultFishStaminaScale != 1 {
+		t.Fatalf("默认体力倍率=%f，期望使用真实样本校准值 1", defaultFishStaminaScale)
+	}
+	if defaultFishInitialStaminaRatio != verifiedInitialStaminaRatio {
+		t.Fatalf("默认初始体力=%f，期望真实样本校准值 %f",
+			defaultFishInitialStaminaRatio, verifiedInitialStaminaRatio)
+	}
+	wantStamina := verifiedStaminaPerGram * 186 * profile.StaminaScale
 	if got := f32At(tree, 5); math.Abs(got-wantStamina) > 0.001 {
 		t.Fatalf("c.roach f5 体力池=%f，期望%f", got, wantStamina)
 	}
-	if got := f32At(tree, 6); math.Abs(got-0.85) > 1e-6 {
-		t.Fatalf("c.roach f6 初始体力=%f，期望0.85", got)
+	if got := f32At(tree, 6); math.Abs(got-verifiedInitialStaminaRatio) > 1e-6 {
+		t.Fatalf("c.roach f6 初始体力=%f，期望%f", got, verifiedInitialStaminaRatio)
 	}
 	wantPull := verifiedForcePerGram * 186 * profile.ForceScale
 	if got := f32At(tree, 8); math.Abs(got-wantPull) > 0.0001 {
@@ -57,12 +64,12 @@ func TestFish27UnknownSpeciesFallback(t *testing.T) {
 	f := &RolledFish{FishGUID: "55555555555555555555555555555555", Species: "not_in_calib", Grade: 1, WeightG: 100, LengthM: 0.2}
 	profile := srv.fishFightProfileFor(f)
 	tree := srv.buildFish27(f, "", "")
-	wantStamina := verifiedStaminaPerGram * 100 * defaultFishStaminaScale * profile.StaminaScale
+	wantStamina := verifiedStaminaPerGram * 100 * profile.StaminaScale
 	if got := f32At(tree, 5); math.Abs(got-wantStamina) > 0.001 {
 		t.Fatalf("未知鱼 f5 体力池=%f，期望%f", got, wantStamina)
 	}
-	if got := f32At(tree, 6); math.Abs(got-0.85) > 1e-6 {
-		t.Fatalf("未知鱼 f6 初始体力=%f，期望0.85", got)
+	if got := f32At(tree, 6); math.Abs(got-verifiedInitialStaminaRatio) > 1e-6 {
+		t.Fatalf("未知鱼 f6 初始体力=%f，期望%f", got, verifiedInitialStaminaRatio)
 	}
 	if got := f32At(tree, 9); got < 1.35 || got > 1.37 {
 		t.Fatalf("未知鱼 f9=%f，期望按94/189g校准约1.3607", got)

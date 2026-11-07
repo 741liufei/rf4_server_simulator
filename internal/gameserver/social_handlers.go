@@ -46,8 +46,18 @@ func bytesWrappedObject(inner *proto.Value, table *proto.OpsTable) (*proto.Value
 
 func hSocialUserProfile(ctx *Ctx) ([]byte, bool) {
 	uid := firstRequestUID(ctx)
+	decks := tradingDeckList()
+	if s := ctx.Sess.Srv; s != nil && s.DB != nil {
+		var err error
+		decks, err = s.playerTradingDecks(ctx.Sess.pushCtx(), uid)
+		if err != nil {
+			ctx.ReplyFailure("System.IO.IOException", "卡册记录读取失败")
+			return nil, true
+		}
+	}
 	inner := wiregen.MustMakeObj("feaidppnpch", map[int]*proto.Value{
 		0: proto.U32(uint32(uid)),
+		9: decks,
 	})
 	outer, err := bytesWrappedObject(inner, ctx.Sess.Table())
 	if err != nil {
