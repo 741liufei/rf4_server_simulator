@@ -144,6 +144,10 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 		t.Fatalf("创建装填物失败: %v", err)
 	}
 	srv.setStackCount(ctx, bait, 2)
+	// 这段锁的是「f4 抛出物注入」这条链路本身，所以把开关显式打开。
+	// 出厂缺省已改成 0：实机看客户端自己就会画这一发抛投（设计稿 §17.2），
+	// 缺省不下发；缺省行为由本测试末尾那段守。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	srv.setHanditemLoadedRef(ctx, hand.GUID, bait.GUID)
 
 	target := wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(17.5)})
@@ -163,6 +167,10 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	gotDist := float64(proto.F32FromBits(f0.U32()))
 	if math.Abs(gotDist-17.5) > 0.001 {
 		t.Fatalf("13/5 f0=%f, 期望 17.5", gotDist)
+	}
+	scatterField := dec.Field(1)
+	if gotScatter := float64(proto.F32FromBits(scatterField.U32())); math.Abs(gotScatter-5.0) > 0.001 {
+		t.Fatalf("13/5 f1=%f, 期望缺省散布 5%%", gotScatter)
 	}
 	upserts := dec.Field(3).Val
 	if upserts == nil || upserts.ArgCount() != 1 {
@@ -224,6 +232,48 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	}
 	if reason := srv.dispatch.checkRegisteredResponse(13, 5, body, srv.Table()); reason != "" {
 		t.Fatalf("13/5 合同守卫误拒: %s", reason)
+	}
+
+	// 缺省（tunable=0）：不再下发抛出物实例，但扣料、姿态块、落点照旧。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "0")
+	bait2, err := srv.CreateItem(ctx, uid, "worm_01", "rig", 1)
+	if err != nil {
+		t.Fatalf("创建第二发装填物失败: %v", err)
+	}
+	srv.setStackCount(ctx, bait2, 2)
+	srv.setHanditemLoadedRef(ctx, hand.GUID, bait2.GUID)
+	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 缺省关闭抛出物时未处理")
+	}
+	dec, _, err = proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj := dec.Field(4).Val; proj == nil || proj.ArgCount() != 0 {
+		t.Fatalf("缺省应不下发抛出物实例，实得 %#v", proj)
+	}
+	if pose := dec.Field(2).Val; pose == nil || pose.Class != "pnbphpdmppe" {
+		t.Fatalf("关掉抛出物不该影响 f2 姿态块，实得 %#v", pose)
+	}
+	setWeatherTestTunable(t, srv, "handitem_throw_scatter", "0")
+	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 散布归零时未处理")
+	}
+	dec, _, err = proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scatterField = dec.Field(1)
+	if gotScatter := float64(proto.F32FromBits(scatterField.U32())); gotScatter != 0 {
+		t.Fatalf("散布开关调 0 后 f1=%f，期望 0", gotScatter)
+	}
+	if fresh2, _ := srv.DB.GetItemByGUID(ctx, bait2.GUID); fresh2 != nil {
+		t.Fatalf("第二发用尽后 bait2 应删除，实得 %#v", fresh2)
+	}
+	if loaded := srv.handitemLoadedGuid(ctx, hand.GUID); loaded != "" {
+		t.Fatalf("两发用尽后装填引用应清空，实得 %s", loaded)
 	}
 }
 
