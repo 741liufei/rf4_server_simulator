@@ -374,6 +374,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	loc := st.Loc
+	rigType := st.RigType
 	st.mu.Unlock()
 
 	if pending != nil {
@@ -407,7 +408,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		}
 		ratio := s.tunableF("release_xp_ratio", 0.5)
 		bonus := int64(math.Round(float64(base) * ratio))
-		result, replayed, err := s.releaseCatchOnce(cctx, uid, pending.FishGUID, bonus)
+		result, gifts, replayed, err := s.releaseCatchOnce(cctx, uid, pending.FishGUID, bonus, rigType)
 		if err != nil {
 			ctx.Log.Warn("放生保存失败", "err", err)
 			ctx.ReplyFailure("System.IO.IOException", "放生未能保存，请重试")
@@ -428,6 +429,13 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 			ctx.Sess.Push2_1()
 			if result.LevelsGained > 0 {
 				ctx.Sess.Push2_6(max64(1, result.Level-1))
+			}
+		}
+		// 放生路径的升级礼物：807 无奖励列表字段，推 4/22 同步背包即可
+		//（与该路径既有 Push2_9/Push2_1 同一时机）。
+		for _, row := range gifts {
+			if row != nil {
+				s.pushItemUpdate(uid, row)
 			}
 		}
 		s.notifyFishReleased(ctx.Sess, pending)

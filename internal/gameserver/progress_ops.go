@@ -24,16 +24,17 @@ type settleXpResult struct {
 	droppedCardGUID string
 	premiumXP       int64
 	replayed        bool
-	baseXP          int64   // 技能倍率后的裸经验（分解中的"基础经验"）
-	totalXP         int64   // 310.f0 = 本条鱼总经验
-	silver          int64   // 展示用银价（catch_silver_cents 口径，不入账）
-	prevBest        int64   // 该鱼种已有纪录重量（813.f6）
-	newLevel        int64   // grant 后等级
-	totalXp         int64   // grant 后累计经验
-	levelsGained    int64   // 本次升级数（310.f1）
-	isRecord        bool    // 是否破个人纪录
-	skillID         int64   // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
-	skillGain       float64 // 310.f3 本次实际熟练度增量
+	baseXP          int64         // 技能倍率后的裸经验（分解中的"基础经验"）
+	totalXP         int64         // 310.f0 = 本条鱼总经验
+	silver          int64         // 展示用银价（catch_silver_cents 口径，不入账）
+	prevBest        int64         // 该鱼种已有纪录重量（813.f6）
+	newLevel        int64         // grant 后等级
+	totalXp         int64         // grant 后累计经验
+	levelsGained    int64         // 本次升级数（310.f1）
+	isRecord        bool          // 是否破个人纪录
+	skillID         int64         // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
+	skillGain       float64       // 310.f3 本次实际熟练度增量
+	giftItems       []*store.Item // 本次结算直发的升级礼物（仅非重放；挂 801 f8 奖励列表）
 }
 
 // grantXpMonotonic 增加累计经验并重算等级，保证等级不下降。
@@ -383,9 +384,20 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	if hasFish && profileTree != nil {
 		f7 = profileTree
 	}
-	// 801 继承的 f8 是本次获得的物品。仅发送 4/22 不会把卡片
-	// 加入钓获结果的奖励列表；重放已入册的卡片也不能把它移回散卡库存。
+	// 801 继承的 f8 是本次获得的物品。仅发送 4/22 不会把物品加入钓获结果的
+	// 奖励列表；重放已入册的卡片也不能把它移回散卡库存。
+	// 升级礼物与钓获卡片同列：礼物行来自结算直发（非重放才有）。
 	grants := proto.Args(proto.S("61"))
+	if hasFish && res != nil {
+		for _, row := range res.giftItems {
+			if row == nil {
+				continue
+			}
+			if tree, terr := s.ItemToTree(cctx, row); terr == nil {
+				grants.Items = append(grants.Items, tree)
+			}
+		}
+	}
 	if hasFish && res.droppedCardGUID != "" {
 		card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID)
 		if err != nil {
@@ -435,6 +447,17 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		if card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID); err == nil && card.UID == uid && card.Container == tradingCardContainer {
 			ctx.AfterResponse(func() { s.pushItemUpdate(uid, card) })
 		}
+	}
+	// 礼物 4/22 与卡片同步：801 响应发送后再更新背包缓存，避免与结算快照竞态。
+	if hasFish && res != nil && len(res.giftItems) > 0 {
+		gifts := res.giftItems
+		ctx.AfterResponse(func() {
+			for _, row := range gifts {
+				if row != nil {
+					s.pushItemUpdate(uid, row)
+				}
+			}
+		})
 	}
 	// 收竿时补挂同种库存，供客户端校验下一次抛竿；搏鱼中不补挂。
 	// 补挂后的钓组和背包数量在 801 响应发送后同步，避免结算覆盖数量更新。
