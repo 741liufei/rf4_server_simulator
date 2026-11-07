@@ -132,6 +132,7 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 
 func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	srv, _ := newRigTestServer(t)
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -339,5 +340,36 @@ func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
 	}
 	if n := gbCount(t, srv, uid); n != 2 {
 		t.Fatalf("两次登录同 CallID 应有 2 笔窝账，实得 %d", n)
+	}
+}
+
+// 客户端会自行绘制飞行饵，服务端额外抛出物实例缺省关闭，避免双份饵团。
+func TestDynamicHanditemThrowProjectileDisabledByDefault(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	registerDynamicProtocolHandlers(srv.dispatch)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	hand, err := srv.CreateItem(ctx, uid, "wh_pc_gb", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bait, err := srv.CreateItem(ctx, uid, "worm_01", "rig", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.setStackCount(ctx, bait, 2)
+	srv.setHanditemLoadedRef(ctx, hand.GUID, bait.GUID)
+	req := rigRequestTree(t, proto.Guid(hand.GUID),
+		wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(12)}))
+	body, ok := hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 未处理")
+	}
+	dec, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj := dec.Field(4).Val; proj == nil || proj.Kind != proto.KindArgs || proj.ArgCount() != 0 {
+		t.Fatalf("缺省 f4 应为空 args，实得 %#v", proj)
 	}
 }

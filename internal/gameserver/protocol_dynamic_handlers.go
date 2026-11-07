@@ -91,7 +91,9 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 			}
 		}
 	}
-	// f2 是姿态块；额外抛出物实例缺省关闭，避免和客户端自行绘制的飞行饵重复。
+	// f2 是姿态块 pmdcpeegbbd：客户端用它写全局时间与玩家生物特征；
+	// f4 是本次抛出的物件实例数组。客户端通常会自行绘制飞行饵，
+	// 因此额外抛出物实例缺省关闭，避免同一发出现两份饵团。
 	withPose := srv.tunableF("handitem_throw_pose", 1) != 0
 	withProj := srv.tunableF("handitem_throw_projectile", 0) != 0
 	var pose *proto.Value
