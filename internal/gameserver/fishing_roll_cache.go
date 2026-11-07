@@ -135,7 +135,8 @@ func (s *Server) cachedSpeciesLengthKP(ctx context.Context, c fishRollContext, k
 	}
 	cache := rollCache(c)
 	if cache == nil {
-		return s.DB.SpeciesLengthKP(ctx, key)
+		k, p := s.DB.SpeciesLengthKP(ctx, key)
+		return calibratedLengthK(key, k), p
 	}
 	cache.mu.Lock()
 	if values, ok := cache.lengthKP[key]; ok {
@@ -144,6 +145,7 @@ func (s *Server) cachedSpeciesLengthKP(ctx context.Context, c fishRollContext, k
 	}
 	cache.mu.Unlock()
 	k, p := s.DB.SpeciesLengthKP(ctx, key)
+	k = calibratedLengthK(key, k)
 	cache.mu.Lock()
 	cache.lengthKP[key] = [2]float64{k, p}
 	cache.mu.Unlock()
