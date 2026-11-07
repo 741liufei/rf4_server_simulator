@@ -96,6 +96,33 @@ func (d *DB) ClaimAchievement(ctx context.Context, uid, achID int64) (bool, erro
 	return n > 0, err
 }
 
+// UnlockAndClaimAchievement 用一条 SQL 同时写入 unlocked=1 / progress / claimed=1，
+// 返回本次是否首次点亮。客户端只有 claimed=1 会点亮图标，本模拟器无发奖链路，
+// 所以解锁与点亮本就是同一次状态变更；单条 UPSERT 不会留下
+// unlocked=1, claimed=0 的中间态，WHERE 子句保证已点亮的成就不再返回 true。
+func (d *DB) UnlockAndClaimAchievement(ctx context.Context, uid, achID int64, progress, ts float64) (bool, error) {
+	if ts <= 0 {
+		ts = float64(time.Now().Unix())
+	}
+	res, err := d.SQL.ExecContext(ctx, `
+		INSERT INTO player_achievements(uid, ach_id, unlocked, progress, claimed, ts)
+		VALUES(?, ?, 1, ?, 1, ?)
+		ON CONFLICT(uid, ach_id) DO UPDATE SET
+			unlocked=1,
+			progress=CASE WHEN excluded.progress > player_achievements.progress
+			              THEN excluded.progress ELSE player_achievements.progress END,
+			claimed=1,
+			ts=CASE WHEN player_achievements.ts > 0 THEN player_achievements.ts
+			        ELSE excluded.ts END
+		WHERE player_achievements.claimed=0`,
+		uid, achID, progress, ts)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 // CatchRecord 是 catch_log 的个人纪录行，也是 3/17、24/22 与竞赛计分的数据源。
 type CatchRecord struct {
 	ID       int64
