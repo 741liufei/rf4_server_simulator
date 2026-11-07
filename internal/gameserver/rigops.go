@@ -1907,15 +1907,16 @@ func (s *Server) rigSetType(ctx context.Context, uid int64, rodGUID string, rigT
 	if !validRigGUID(rodGUID) {
 		return false
 	}
-	if row, err := s.DB.GetItemByGUID(ctx, rodGUID); err == nil && row != nil {
-		// 玩家显式选择优先。已装组件与新类型不完全匹配时也不拒绝，
-		// 后续矫正不能用组件推断覆盖该选择。
-		// 钓组 ↔ 挂饵方式联动：mutate 里 buildRig153Like 已按新类型重算
-		// f9 并把失效的 f8 清零；存档里的旧选择由 savedBaitMount 按同一
-		// 可选集判为未设置，挂饵份数自动回退一份，无需在此删记录。
-		s.rigItemMutate(ctx, rodGUID, nil, nil, &rigType, collect...)
-		_ = s.DB.UpsertRodSetting(ctx, rodGUID, "rig_type_explicit", "1")
+	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
+	if err != nil || row == nil || row.UID != uid {
+		return false
 	}
+	// 玩家显式选择优先。已装组件与新类型不完全匹配时也不拒绝，
+	// 后续矫正不能用组件推断覆盖该选择。
+	// 钓组与挂饵方式联动：mutate 里 buildRig153Like 已按新类型重算 f9，
+	// 并把失效的 f8 清零；旧选择由 savedBaitMount 按同一可选集判为未设置。
+	s.rigItemMutate(ctx, rodGUID, nil, nil, &rigType, collect...)
+	_ = s.DB.UpsertRodSetting(ctx, rodGUID, "rig_type_explicit", "1")
 	_ = s.DB.UpsertRig(ctx, rodGUID, uid, rigType, "", "{}")
 	_ = s.DB.UpdateRigType(ctx, rodGUID, rigType)
 	s.log.Info("竿钓组类型更新", "rod", shortGUID(rodGUID), "rig_type", rigType)
@@ -2747,7 +2748,10 @@ func hRigSetType(ctx *Ctx) ([]byte, bool) {
 	}
 	cctx := ctx.Sess.pushCtx()
 	var released []*rigReleased
-	srv.rigSetType(cctx, ctx.Sess.Userid, rodGUID, rigType, &released)
+	if !srv.rigSetType(cctx, ctx.Sess.Userid, rodGUID, rigType, &released) {
+		ctx.Log.Warn("17/1 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+		return emptyArgsBody(), true
+	}
 	body, err := proto.EncodeValue(
 		srv.buildRigSnapshotForParent(cctx, rodGUID, "", "", released), ctx.Sess.Table())
 	if err != nil {
@@ -2770,13 +2774,17 @@ func hRigBaitMount(ctx *Ctx) ([]byte, bool) {
 	}
 	cctx := ctx.Sess.pushCtx()
 	if len(ints) > 1 {
+		rodGUID := guids[0]
+		if srv.ownedRodRow(cctx, ctx.Sess.Userid, rodGUID) == nil {
+			ctx.Log.Warn("17/6 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return emptyArgsBody(), true
+		}
 		mask := clampBaitMount(int64(ints[len(ints)-1]))
-		// 客户端 17/6 只带一个整数，没有语义名；落库前先记一条，
-		// 便于把「卡片 ↔ 数值」对上（BaitMountType 取值尚未逐个确认）。
-		ctx.Log.Info("17/6 挂饵方式", "rod", shortGUID(guids[0]), "mask", mask, "guids", len(guids), "ints", len(ints))
-		_ = srv.DB.UpsertRodSetting(cctx, guids[0], baitMountSettingKey, strconv.FormatInt(mask, 10))
-		if err := srv.applyRigBaitMount(cctx, guids[0], mask); err != nil {
-			ctx.Log.Warn("写入挂饵方式失败", "rod", shortGUID(guids[0]), "mask", mask, "err", err)
+		// 客户端 17/6 只带一个整数，没有语义名；落库前先记一条。
+		ctx.Log.Info("17/6 挂饵方式", "rod", shortGUID(rodGUID), "mask", mask, "guids", len(guids), "ints", len(ints))
+		_ = srv.DB.UpsertRodSetting(cctx, rodGUID, baitMountSettingKey, strconv.FormatInt(mask, 10))
+		if err := srv.applyRigBaitMount(cctx, rodGUID, mask); err != nil {
+			ctx.Log.Warn("写入挂饵方式失败", "rod", shortGUID(rodGUID), "mask", mask, "err", err)
 		}
 	}
 	body, err := proto.EncodeValue(srv.buildRigSnapshotFull(cctx, ctx.Sess.Userid), ctx.Sess.Table())

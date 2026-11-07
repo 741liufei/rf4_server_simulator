@@ -63,3 +63,78 @@ func TestRodSetClipRejectsForeignRod(t *testing.T) {
 		t.Fatalf("外玩家竿 f5.f5 轮管卡被改成 %d，期望保持默认 0", after)
 	}
 }
+
+func TestRodSetQuivertipRejectsForeignRod(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建竿失败: %v", err)
+	}
+	srv.ensureRig(ctx, testUID, rod.GUID)
+	beforeTip, _ := rodTipOf(t, db, rod.GUID)
+
+	attacker := &Session{ID: 2, Userid: 2000002, Srv: srv, log: logging.Discard()}
+	tree := proto.Args524(proto.U32(0), proto.Guid(rod.GUID), proto.StrVal("kam_quiv_1.0"))
+	if _, handled := hSetQuivertip(&Ctx{Sess: attacker, Main: 17, Sub: 5, Tree: tree,
+		DecodeOK: true, Log: logging.Discard()}); !handled {
+		t.Fatal("17/5 未处理")
+	}
+
+	if got, err := db.GetRodSetting(ctx, rod.GUID, "quivertip"); err == nil || got != "" {
+		t.Fatalf("外玩家竿被写入竿稍设置: got=%q err=%v", got, err)
+	}
+	if afterTip, _ := rodTipOf(t, db, rod.GUID); afterTip != beforeTip {
+		t.Fatalf("外玩家竿稍被改成 %q，期望保持 %q", afterTip, beforeTip)
+	}
+}
+
+func TestRodSetRigTypeRejectsForeignRod(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建竿失败: %v", err)
+	}
+	srv.ensureRig(ctx, testUID, rod.GUID)
+	beforeType := storedRigField(t, db, rod.GUID, 1)
+
+	attacker := &Session{ID: 2, Userid: 2000002, Srv: srv, log: logging.Discard()}
+	tree := proto.Args524(proto.U32(0), proto.Guid(rod.GUID), proto.U32(12))
+	if _, handled := hRigSetType(&Ctx{Sess: attacker, Main: 17, Sub: 1, Tree: tree,
+		DecodeOK: true, Log: logging.Discard()}); !handled {
+		t.Fatal("17/1 未处理")
+	}
+
+	if got, err := db.GetRodSetting(ctx, rod.GUID, "rig_type_explicit"); err == nil || got != "" {
+		t.Fatalf("外玩家竿被写入钓组类型标记: got=%q err=%v", got, err)
+	}
+	if afterType := storedRigField(t, db, rod.GUID, 1); afterType != beforeType {
+		t.Fatalf("外玩家竿钓组类型被改成 %d，期望保持 %d", afterType, beforeType)
+	}
+}
+
+func TestRodBaitMountRejectsForeignRod(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建竿失败: %v", err)
+	}
+	srv.ensureRig(ctx, testUID, rod.GUID)
+	beforeMount := storedRigField(t, db, rod.GUID, 8)
+
+	attacker := &Session{ID: 2, Userid: 2000002, Srv: srv, log: logging.Discard()}
+	tree := proto.Args524(proto.U32(0), proto.Guid(rod.GUID), proto.U32(64))
+	if _, handled := hRigBaitMount(&Ctx{Sess: attacker, Main: 17, Sub: 6, Tree: tree,
+		DecodeOK: true, Log: logging.Discard()}); !handled {
+		t.Fatal("17/6 未处理")
+	}
+
+	if got, err := db.GetRodSetting(ctx, rod.GUID, baitMountSettingKey); err == nil || got != "" {
+		t.Fatalf("外玩家竿被写入挂饵方式: got=%q err=%v", got, err)
+	}
+	if afterMount := storedRigField(t, db, rod.GUID, 8); afterMount != beforeMount {
+		t.Fatalf("外玩家竿挂饵方式被改成 %d，期望保持 %d", afterMount, beforeMount)
+	}
+}

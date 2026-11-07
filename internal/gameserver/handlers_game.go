@@ -690,33 +690,36 @@ func hSetQuivertip(ctx *Ctx) ([]byte, bool) {
 		return nil, false // 交给兜底
 	}
 	cctx := ctx.Sess.pushCtx()
+	row := srv.ownedRodRow(cctx, ctx.Sess.Userid, rodGUID)
+	if row == nil {
+		ctx.Log.Warn("17/5 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+		return nil, true
+	}
 	_ = srv.DB.UpsertRodSetting(cctx, rodGUID, "quivertip", tip)
-	if row, err := srv.DB.GetItemByGUID(cctx, rodGUID); err == nil && row != nil {
-		if fields, ferr := FieldsFromJSON(row.FieldsJSON); ferr == nil {
-			tidx := fieldIdxByCS(row.WireClass, "kjphlnnlflh")
-			if tidx >= 0 {
-				for len(fields) <= tidx {
-					zf, zerr := proto.ZeroField(fieldOpAt(row.WireClass, len(fields)))
-					if zerr != nil {
-						break
-					}
-					fields = append(fields, zf)
+	if fields, ferr := FieldsFromJSON(row.FieldsJSON); ferr == nil {
+		tidx := fieldIdxByCS(row.WireClass, "kjphlnnlflh")
+		if tidx >= 0 {
+			for len(fields) <= tidx {
+				zf, zerr := proto.ZeroField(fieldOpAt(row.WireClass, len(fields)))
+				if zerr != nil {
+					break
 				}
-				fields[tidx].Str = &tip
-				// 落库时将 U32N 的字符串值写成 STR 标签；
-				// fields_json 读取侧会丢弃 u32n 标签下的字符串。
-				fields[tidx].Op = "STR"
-				if fj, jerr := FieldsToJSON(fields); jerr == nil {
-					_ = srv.DB.UpdateItemFields(cctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID)
-				}
+				fields = append(fields, zf)
+			}
+			fields[tidx].Str = &tip
+			// 兼容旧版把 U32N 的字符串值写进 STR 标签；
+			// fields_json 读取会丢失 u32n 标签下的字符串。
+			fields[tidx].Op = "STR"
+			if fj, jerr := FieldsToJSON(fields); jerr == nil {
+				_ = srv.DB.UpdateItemFields(cctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID)
 			}
 		}
-		// 响应 800：Field 1（更新段）= 带新尖梢的竿实例
-		if tree, terr := srv.ItemToTree(cctx, row); terr == nil {
-			body, encErr := proto.EncodeValue(build800(proto.Null(), proto.Args(proto.S("61"), tree), proto.Null()), ctx.Sess.Table())
-			if encErr == nil {
-				return body, true
-			}
+	}
+	// 响应 800，Field 1（更新段）= 刚更新的竿实例。
+	if tree, terr := srv.ItemToTree(cctx, row); terr == nil {
+		body, encErr := proto.EncodeValue(build800(proto.Null(), proto.Args(proto.S("61"), tree), proto.Null()), ctx.Sess.Table())
+		if encErr == nil {
+			return body, true
 		}
 	}
 	return nil, false

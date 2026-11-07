@@ -1676,6 +1676,9 @@ func hRodSetSpeed(ctx *Ctx) ([]byte, bool) {
 
 // ownedRodRow 返回属于 uid 的竿实例行；竿不存在或归属不符时返回 nil。
 func (s *Server) ownedRodRow(ctx context.Context, uid int64, rodGUID string) *store.Item {
+	if s == nil || s.DB == nil {
+		return nil
+	}
 	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
 	if err != nil || row == nil || row.UID != uid {
 		return nil
