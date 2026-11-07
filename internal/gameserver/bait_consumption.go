@@ -26,6 +26,9 @@ type groundbaitUse struct {
 	ItemID   string  `json:"item_id"`
 	Units    float64 `json:"units"`
 	Category int64   `json:"category"`
+	// GUID 是这份窝料的物品实例。自制窝料没有独立 item_id，能不能吸引对口的鱼
+	// 全看这个实例当初是用什么原料做的。
+	GUID string `json:"guid,omitempty"`
 }
 
 type baitedHookSet struct {
@@ -443,7 +446,8 @@ func (s *Server) consumeBaitEvent(ctx context.Context, uid int64, rod, event str
 		if cast && (def.Category == 46 || def.Category == 30) {
 			// 挂在竿上的窝子（食笼/PVA 棒）入水即投放：这份料要进落点格子的窝料账本，
 			// 否则attraction 系统看不见它。
-			out.Groundbait = append(out.Groundbait, groundbaitUse{ItemID: def.ItemID, Units: 1, Category: def.Category})
+			out.Groundbait = append(out.Groundbait, groundbaitUse{ItemID: def.ItemID, Units: 1,
+				Category: def.Category, GUID: row.GUID})
 		}
 		if row.Qty > 0 {
 			out.Updated = append(out.Updated, guid)

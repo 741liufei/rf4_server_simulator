@@ -221,6 +221,22 @@ func TestCraftBatchCapsAndSlotScaling(t *testing.T) {
 			*fields[nameIdx].Str != "我的窝料" {
 			t.Fatalf("成品窝料应保留自定义名称，实得 %v", fields[nameIdx].Str)
 		}
+		// 同一袋料还要记下制作时实际扣掉的原料：客户端只看得到 feedcompleted，
+		// 吸引判定得靠这份实例用料才知道它到底是植物配还是动物配。
+		var feedGUID, matsJSON string
+		if err := db.SQL.QueryRowContext(ctx,
+			`SELECT guid FROM item WHERE uid=? AND item_id='feedcompleted' AND qty=60
+			 ORDER BY created_ts DESC LIMIT 1`, uid).Scan(&feedGUID); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SQL.QueryRowContext(ctx,
+			`SELECT mats_json FROM groundbait_recipe WHERE instance_guid=?`, feedGUID).Scan(&matsJSON); err != nil {
+			t.Fatalf("自制窝料实例没有记下用料: %v", err)
+		}
+		mats := groundbaitDecodeMaterials(matsJSON)
+		if len(mats) != 1 || mats[0] != "mix_combi" {
+			t.Fatalf("自制窝料应记下实际用料 mix_combi，实得 %q", mats)
+		}
 	})
 
 	pvaCases := []struct {

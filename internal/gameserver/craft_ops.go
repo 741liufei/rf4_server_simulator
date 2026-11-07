@@ -472,6 +472,9 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 	defer func() { _ = tx.Rollback() }()
 
 	touched := []string{}
+	// usedMats 记下本次真的扣掉了哪些原料 item_id（不是槽里的需求 id）。
+	// 自制窝料的产物没有独立 item_id，只能按实例把用料记下来。
+	usedMats := []string{}
 	var leaderMaterials craftedLeaderMaterials
 	fail := func(reason string, args ...any) ([]byte, bool) {
 		ctx.Log.Warn("9/1 制作失败："+reason, args...)
@@ -513,8 +516,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 						return fail("扣材料失败", "item", accept, "err", cerr)
 					}
 					remaining -= got
-					if got > 0 && !containsGUID(touched, it.GUID) {
-						touched = append(touched, it.GUID)
+					if got > 0 {
+						usedMats = append(usedMats, it.ItemID)
+						if !containsGUID(touched, it.GUID) {
+							touched = append(touched, it.GUID)
+						}
 					}
 				}
 			}
@@ -567,6 +573,7 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 					return fail("材料不足", "item", row.ItemID, "missing", need-got)
 				}
 				consumed = true
+				usedMats = append(usedMats, row.ItemID)
 				if !containsGUID(touched, row.GUID) {
 					touched = append(touched, row.GUID)
 				}
@@ -611,6 +618,9 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 						touched = append(touched, it.GUID)
 					}
 					remaining -= got
+					if got > 0 {
+						usedMats = append(usedMats, it.ItemID)
+					}
 					consumed = true
 				}
 				if remaining > 0 || !consumed {
@@ -662,6 +672,15 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 	if err != nil {
 		return fail("产出物入库失败", "output", outputID, "err", err)
 	}
+	// 自制窝料/PVA 棒：产物在客户端只有一个 item_id（feedcompleted），五个槽怎么
+	// 配都叫这个名字，所以「这袋料到底用了什么」必须按实例记下来。等投进窝里
+	// 再回查就晚了：那份料可能早被吃掉删掉，而窝还要活几个小时。
+	if outputDef != nil && (outputDef.Category == catGroundbaitMix || outputDef.Category == catPVAStick) {
+		if err := groundbaitRecordInstanceMaterialsTx(cctx, tx, row.GUID, usedMats); err != nil {
+			return fail("窝料用料记录写入失败", "err", err)
+		}
+	}
+
 	if err := addTxnTx(cctx, tx, uid, "craft", outputID, "",
 		0, 0, fmt.Sprintf("recipe=%s qty=%d", recipe.RecipeID, times)); err != nil {
 		return fail("制作流水写入失败", "err", err)
