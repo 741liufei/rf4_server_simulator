@@ -340,29 +340,47 @@ func (s *Server) biteDelay(st *FishState, bonuses ...fishingSkillBonus) float64 
 	return s.biteDelayInWeather(st, fishingWeather{}, time.Now(), bonuses...)
 }
 
-func (s *Server) biteDelayInWeather(st *FishState, weather fishingWeather, now time.Time, bonuses ...fishingSkillBonus) float64 {
-	bonus := neutralFishingSkillBonus()
-	if len(bonuses) > 0 {
-		bonus = bonuses[0]
+// biteDelaySettings 是一次咬钩实际使用的参数。全局参数会被水域级 fish_bite_setting 覆盖，
+// 延迟采样和落水保护必须共用同一份结果，否则两者会按不同配置工作。
+type biteDelaySettings struct {
+	fixed    float64
+	scale    float64
+	maxDelay float64
+	lureMax  float64
+}
+
+func (s *Server) effectiveBiteDelaySettings(st *FishState) biteDelaySettings {
+	cfg := biteDelaySettings{
+		fixed:    s.tunableF("bite_delay_fixed", 0),
+		scale:    s.tunableF("bite_delay_scale", 1.0),
+		maxDelay: s.tunableF("bite_delay_max", 20.0),
+		lureMax:  s.tunableF("bite_delay_lure_max", 6.0),
 	}
-	fixed := s.tunableF("bite_delay_fixed", 0)
-	scale := s.tunableF("bite_delay_scale", 1.0)
-	maxDelay := s.tunableF("bite_delay_max", 20.0)
-	lureMax := s.tunableF("bite_delay_lure_max", 6.0)
 	if st != nil && st.Loc != "" && s.DB != nil {
 		biteLoc := st.Loc
 		if resolved := s.DB.ResolveStatLoc(s.dbCtx(), biteLoc); resolved != "" {
 			biteLoc = resolved
 		}
 		if setting, err := s.DB.GetFishBiteSetting(s.dbCtx(), biteLoc); err == nil && setting.HasOverride {
-			fixed = setting.BiteDelayFixed
-			scale = setting.BiteDelayScale
-			maxDelay = setting.BiteDelayMax
-			lureMax = setting.BiteDelayLureMax
+			cfg = biteDelaySettings{
+				fixed:    setting.BiteDelayFixed,
+				scale:    setting.BiteDelayScale,
+				maxDelay: setting.BiteDelayMax,
+				lureMax:  setting.BiteDelayLureMax,
+			}
 		}
 	}
-	if fixed > 0 {
-		return math.Max(0.05, fixed)
+	return cfg
+}
+
+func (s *Server) biteDelayInWeather(st *FishState, weather fishingWeather, now time.Time, bonuses ...fishingSkillBonus) float64 {
+	bonus := neutralFishingSkillBonus()
+	if len(bonuses) > 0 {
+		bonus = bonuses[0]
+	}
+	cfg := s.effectiveBiteDelaySettings(st)
+	if cfg.fixed > 0 {
+		return math.Max(0.05, cfg.fixed)
 	}
 	weatherDelay := s.weatherBiteDelayFactor(st, weather, now)
 	if st != nil && rigTypeLureFamily[st.RigType] {
@@ -371,16 +389,46 @@ func (s *Server) biteDelayInWeather(st *FishState, weather fishingWeather, now t
 		if d < 0.8 {
 			d = 0.8
 		}
-		if capS := lureMax; capS > 0 && d > capS {
+		if capS := cfg.lureMax; capS > 0 && d > capS {
 			d = capS
 		}
-		if scale != 1.0 {
-			d *= scale
+		if cfg.scale != 1.0 {
+			d *= cfg.scale
 		}
 		return math.Max(0.8, d)
 	}
 	d := officialPushDelay() * weatherDelay
-	return standardBiteDelay(d, bonus.BiteSpeed, maxDelay, scale)
+	return standardBiteDelay(d, bonus.BiteSpeed, cfg.maxDelay, cfg.scale)
+}
+
+// biteFloorDelay 返回落水保护时长。
+//
+// 浮钓/底钓的基础保护是 6 秒；该值必须跟随 effective bite config，
+// 否则把倍率调快后第一轮到点仍会被"落水未满 6 秒"顺延回去，
+// 玩家看到的就是固定 6 秒延迟。下限 800ms，避免倍率极小时立刻判鱼。
+// 路亚族固定 1.2 秒：拟饵落水即生效，没有"浮标立稳"这一环，也不吃倍率。
+func biteFloorDelay(cfg biteDelaySettings, lure bool) time.Duration {
+	if cfg.fixed > 0 {
+		// fixed 是管理员明确指定的延迟，不能被默认落水保护反向覆盖。
+		return time.Duration(math.Max(0.05, cfg.fixed) * float64(time.Second))
+	}
+	if lure {
+		return 1200 * time.Millisecond
+	}
+	base := 6.0
+	if cfg.maxDelay > 0 && cfg.maxDelay < base {
+		// 普通竿的上限可能低于默认落水保护；否则 bite_delay_max 永远不会生效。
+		base = cfg.maxDelay
+	}
+	floor := time.Duration(base * float64(time.Second))
+	if cfg.scale > 0 {
+		scaled := time.Duration(float64(floor) * cfg.scale)
+		if scaled < 800*time.Millisecond {
+			scaled = 800 * time.Millisecond
+		}
+		floor = scaled
+	}
+	return floor
 }
 
 func standardBiteDelay(sample, biteSpeed, capS, scale float64) float64 {
@@ -1606,11 +1654,9 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		base = st.FallTs
 	}
 	lure := rigTypeLureFamily[st.RigType]
-	// 路亚族 floor 降 1.2s：拟饵落水即生效，没有"浮标立稳"这回事。
-	floor := 6 * time.Second
+	floor := biteFloorDelay(s.effectiveBiteDelaySettings(st), lure)
 	minWait := time.Second
 	if lure {
-		floor = 1200 * time.Millisecond
 		minWait = 500 * time.Millisecond
 	}
 	now := time.Now()
