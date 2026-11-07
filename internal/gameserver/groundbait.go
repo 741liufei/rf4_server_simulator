@@ -258,7 +258,10 @@ func (s *Server) groundbaitDeposit(ctx context.Context, uid int64, loc string, x
 		return
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		// 幂等命中：这条上报已经投过。
+		// 幂等命中：这条上报已经投过。这里必须留一行日志——幂等键撞车时
+		// 饵照扣但窝账没记，静默吞掉过整批发窝（见 handitemThrowTxn）。
+		s.log.Info("窝料投放重复上报已忽略", "uid", uid, "channel", channel,
+			"item", itemID, "txn", txnGuid)
 		return
 	}
 	if err := tx.Commit(); err != nil {
