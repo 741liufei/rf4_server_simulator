@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"rf4server/internal/proto"
@@ -1273,6 +1274,26 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	}
 	st.mu.Lock()
 	ctx.Log.Info("14/12 鱼状态", "rod", shortGUID(st.GearGuid), "f0", f0, "hooked", st.Hooked)
+	// 14/12 顶层 args 为 [竿 GUID, 鱼 GUID, 状态对象]（实机 TRACE 与 14/14
+	// 推送核对）。鱼 GUID 与当前 Pending 不一致的是陈旧/异常帧：它描述的是
+	// 别的鱼，不得影响正在搏斗或待入护的这条。
+	reported := ""
+	if guids := deepGUIDs(ctx.Tree); len(guids) >= 2 {
+		reported = guids[1]
+	}
+	if st.Pending != nil && reported != "" && !strings.EqualFold(reported, st.Pending.FishGUID) {
+		ctx.Log.Info("14/12 忽略不一致的鱼 GUID", "f0", f0,
+			"reported", shortGUID(reported), "pending", shortGUID(st.Pending.FishGUID))
+		st.mu.Unlock()
+		return nil, true
+	}
+	if completedCatchPending(st) {
+		// 14/4 已结算、等待 14/5 入护 / 14/6 放生：经验已落账，任何迟到的
+		// 状态上报不得清掉这尾鱼，否则结算无处安放（幽灵鱼）。
+		ctx.Log.Info("14/12 已结算渔获等待处理，忽略状态上报", "f0", f0)
+		st.mu.Unlock()
+		return nil, true
+	}
 	if f0 == 6 {
 		st.cancelPendingTimerLocked()
 		st.PushSent = true

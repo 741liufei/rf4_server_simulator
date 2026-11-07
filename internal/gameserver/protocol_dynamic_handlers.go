@@ -116,6 +116,31 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 		rodGUID = zeroGUID
 	}
 
+	// 已结算、等待 14/5 入护 / 14/6 放生的渔获：断件上报迟于落网（同一
+	// realtime 连接 TCP 有序，14/4 之后到达的只能是迟到/重复帧）。此刻
+	// 不再动装备，也不清鱼，否则 XP 已入账而渔获无处安放（幽灵鱼）；
+	// 回零断件结果保持 11028 形状，搏鱼中（CastActive=true）不受影响。
+	st.mu.Lock()
+	settledPending := completedCatchPending(st)
+	st.mu.Unlock()
+	if settledPending {
+		ctx.Log.Info("17/9 已结算渔获等待处理，忽略断件上报",
+			"rod", shortGUID(rodGUID), "part", shortGUID(brokenGUID))
+		echo := brokenGUID
+		if echo == "" {
+			echo = rodGUID
+		}
+		obj, berr := buildGearBreakResult(&gearBreakOutcome{BrokenGUID: echo})
+		if berr != nil {
+			return nil, false
+		}
+		body, berr := proto.EncodeValue(obj, ctx.Sess.Table())
+		if berr != nil {
+			return nil, false
+		}
+		return body, true
+	}
+
 	if srv.DB != nil && rodGUID != zeroGUID && ctx.DecodeOK {
 		outcome, err := srv.breakLineOrRod(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID, brokenGUID)
 		if err == nil {
