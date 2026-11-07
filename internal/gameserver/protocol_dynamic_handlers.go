@@ -110,11 +110,21 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 			if st != nil {
 				st.mu.Lock()
 				gbLoc, gbSpot := st.Loc, st.Spot
-				gbX, gbZ, gbHas := st.CastPosX, st.CastPosZ, st.HasCastPos
+				gbX, gbZ, gbHas, gbSrc := st.CastPosX, st.CastPosZ, st.HasCastPos, "cast"
+				if !gbHas && srv.tunableF("groundbait_throw_pos_fallback", 1) != 0 && st.HasPos {
+					// 一坨饵都没抛过就没有浮标落点可用，退一步记在玩家自己站的格子上。
+					// 玩家坐标来自 3/9：每 5 秒上报一次，实测与 14/2 的落点数值逐条吻合
+					// （loc10_12 抛竿 x=362.76 z=236.92，同一时刻 3/9 f0=362.76 f2=236.92）。
+					gbX, gbZ, gbHas, gbSrc = st.PosX, st.PosZ, true, "player"
+				}
 				if srv.tunableF("handitem_throw_land_cell", 0) != 0 && land.OK {
-					gbX, gbZ, gbHas = land.X, land.Z, true
+					gbX, gbZ, gbHas, gbSrc = land.X, land.Z, true, "computed"
 				}
 				st.mu.Unlock()
+				// 落点来源进日志：窝到底记在浮标格、玩家脚下格还是算出来的格，
+				// 现场一眼能分清楚，调参不用再猜。
+				ctx.Log.Info("手持工具窝料落点", "src", gbSrc, "x", gbX, "z", gbZ,
+					"has_pos", gbHas, "dist", dist)
 				srv.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot,
 					baitItemID, 1, "catapult", handitemThrowTxn(handGUID, ctx.Sess.ID, ctx.CallID))
 			}

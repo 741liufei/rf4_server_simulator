@@ -1,6 +1,7 @@
 package gameserver
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -339,5 +340,246 @@ func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
 	}
 	if left < 6.99 || left > 7.01 {
 		t.Fatalf("咬口应从没落点的窝行里扣掉 1 份（8→7），实得 %.3f", left)
+	}
+}
+
+// TestGroundbaitInstanceCarriesUnitWeight 窝料实例必须自带单件克重。
+// 原生品类 46 的 11 个定义 ijbjficbhog 全是 0（实测连商店买的「干混合」在客户端
+// 也显示「质量 0 克」），真实服务端是按实例下发的。客户端「质量」那行读实例
+// 重量字段的 IEEE754 位模式、单位克：写 30.0 显示「30 克」，写 30000.0 显示
+// 「30 公斤」（2026-11-07 两堆各写一个值实测）。
+func TestGroundbaitInstanceCarriesUnitWeight(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	const uid = int64(1000001)
+	cases := []struct {
+		item  string
+		grams float32
+	}{
+		{"feed_karp", 45},          // 窝料档案里带 unit_grams
+		{"feed_probe_missing", 30}, // 档案缺项 â 兜底一球 30 克
+	}
+	for i, c := range cases {
+		if def, err := s.DB.GetItemDefByItemID(ctx, c.item); err != nil || def == nil {
+			if _, err := s.DB.SQL.ExecContext(ctx,
+				`INSERT INTO item_def(numeric_id,item_id,category,attrs_json)
+				 VALUES(999860,?,46,'{"fopbhlmkcpe":1,"ijbjficbhog":0,"ljnnpokapig":0,"hgaijieklek":1069120}')`,
+				c.item); err != nil {
+				t.Fatal(err)
+			}
+		}
+		row, err := s.CreateItem(ctx, uid, c.item, "backpack", 60)
+		if err != nil {
+			t.Fatalf("第 %d 个 %s 建实例失败: %v", i+1, c.item, err)
+		}
+		if row.WireClass != "cilmgoaoofg" {
+			t.Fatalf("窝料实例类应为 cilmgoaoofg，实得 %s", row.WireClass)
+		}
+		fields, err := FieldsFromJSON(row.FieldsJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx := fieldIdxByCS(row.WireClass, castAttrWaterWeight)
+		if idx < 0 || idx >= len(fields) {
+			t.Fatalf("%s 没有重量字段 %s", row.WireClass, castAttrWaterWeight)
+		}
+		if got := math.Float32frombits(uint32(u64Of(fields[idx].Num))); got != c.grams {
+			t.Fatalf("第 %d 个 %s 的实例克重应为 %.1f，实得 %.4f", i+1, c.item, c.grams, got)
+		}
+	}
+}
+
+// TestGroundbaitRepairBackfillsZeroWeight 老库存里照抄定义生成的窝料实例重量恒 0，
+// 启动修复必须补回单件克重，否则玩家已经做好的那几堆永远显示「质量 0 克」。
+func TestGroundbaitRepairBackfillsZeroWeight(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	row, err := s.CreateItem(ctx, 1000001, "feed_karp", "backpack", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := fieldIdxByCS(row.WireClass, castAttrWaterWeight)
+	if idx < 0 || idx >= len(fields) {
+		t.Fatalf("%s 没有重量字段", row.WireClass)
+	}
+	fields[idx].Num = ptrU64(0) // 模拟旧版本照抄定义产生的「0 克」实例
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.UpdateItemFields(ctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RepairItemPhysics(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.DB.GetItemByGUID(ctx, row.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == nil {
+		t.Fatal("修复后物品消失")
+	}
+	fields, err = FieldsFromJSON(after.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := math.Float32frombits(uint32(u64Of(fields[idx].Num))); got != 45 {
+		t.Fatalf("启动修复应把窝料实例克重补成 45 克，实得 %.4f", got)
+	}
+}
+
+// TestGroundbaitNeighborCellCountsWeaker 邻格容差。弹弓与手抛只报距离，落点只能算到
+// 几米精度；实测客户端本次抛饵散布 scatter=3.0 米，5 米方格很容易把同一团窝切在边界
+// 两侧。相邻一格的窝按衰减系数计入，隔两格以上才算无关；咬口扣份先扣本格再扣邻格。
+func TestGroundbaitNeighborCellCountsWeaker(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const (
+		uidNear = int64(1000001)
+		uidFar  = int64(1000002)
+		uidSame = int64(1000003)
+	)
+	// 浮标在 (300,300)，即格子 (60,60)。
+	s.groundbaitDeposit(ctx, uidNear, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:nb1")
+	s.groundbaitDeposit(ctx, uidFar, "gb-test-loc", 320, 300, true, 7, "feed_karp", 8, "catapult", "gb:nb2")
+	s.groundbaitDeposit(ctx, uidSame, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:nb3")
+
+	roll := func(uid int64) float64 {
+		c := fishRollContext{
+			uid: uid, loc: "gb-test-loc", x: 300, z: 300, hasPos: true, spot: 7,
+			now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), rigType: 1, depthCM: 100,
+			cache:   newFishingRollCache(),
+			weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 18, wind: 3},
+		}
+		keys := []string{"carp", "n.pike"}
+		wts := []float64{100, 100}
+		s.applyGroundbaitWeight(ctx, &c, keys, wts)
+		if wts[1] != 100 {
+			t.Fatalf("掠食者任何时候都不该蹭窝，实得 %.2f", wts[1])
+		}
+		return wts[0]
+	}
+
+	near := roll(uidNear)
+	same := roll(uidSame)
+	far := roll(uidFar)
+	if near <= 100 {
+		t.Fatalf("相邻一格的窝也应在浮标格生效，实得 %.2f", near)
+	}
+	if far != 100 {
+		t.Fatalf("隔四格的窝不该影响浮标格，实得 %.2f", far)
+	}
+	if near >= same {
+		t.Fatalf("邻格抬升（%.2f）必须低于同份数本格窝（%.2f）", near, same)
+	}
+
+	bx, bz := int64(300/groundbaitCellSizeM), int64(300/groundbaitCellSizeM)
+	st := s.groundbaitSpot(ctx, uidNear, "gb-test-loc", bx, bz)
+	if st.batches != 1 || st.near != 1 || st.diffuse != 0 {
+		t.Fatalf("应看到 1 批邻格窝且不算落点未知，实得 batches=%d near=%d diffuse=%d", st.batches, st.near, st.diffuse)
+	}
+	if st.units < 3.19 || st.units > 3.21 {
+		t.Fatalf("8 份邻格窝按 0.40 衰减应得 N=3.2，实得 %.3f", st.units)
+	}
+
+	// 容差调 0：退回严格同格，邻格窝彻底无关。
+	setWeatherTestTunable(t, s, "groundbait_neighbor_cells", "0")
+	if back := roll(uidNear); back != 100 {
+		t.Fatalf("容差=0 时邻格窝不该影响浮标格，实得 %.2f", back)
+	}
+	setWeatherTestTunable(t, s, "groundbait_neighbor_cells", "1")
+
+	// 咬口扣份优先本格：本格只剩 1 份，先吃掉它，邻格那 8 份此刻不动。
+	const uidMix = int64(1000004)
+	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 300, 300, true, 7, "feed_karp", 1, "feeder", "gb:mix1")
+	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:mix2")
+	s.groundbaitConsumeBite(ctx, uidMix, "gb-test-loc", 300, 300, true, 7, 1)
+	var sameLeft, nearLeft float64
+	if err := s.DB.SQL.QueryRow(`SELECT units_left FROM groundbait_deposit WHERE txn_guid='gb:mix1'`).Scan(&sameLeft); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.SQL.QueryRow(`SELECT units_left FROM groundbait_deposit WHERE txn_guid='gb:mix2'`).Scan(&nearLeft); err != nil {
+		t.Fatal(err)
+	}
+	if sameLeft > 0.001 {
+		t.Fatalf("咬口应先扣掉本格那 1 份，实得剩余 %.3f", sameLeft)
+	}
+	if nearLeft < 7.99 || nearLeft > 8.01 {
+		t.Fatalf("邻格那 8 份此刻不该被扣，实得 %.3f", nearLeft)
+	}
+}
+
+// TestGroundbaitThrowFallsBackToPlayerCell 还没抛过竿时弹弓的窝记在玩家自己站的格子。
+// 玩家坐标来自 3/9（每 5 秒上报，实测与 14/2 的落点数值逐条吻合），比「整个钓点一格」
+// 的模糊窝准得多；关掉兜底要能原样退回落点未知那一格。
+func TestGroundbaitThrowFallsBackToPlayerCell(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const uid = int64(1000001)
+
+	hand, err := s.CreateItem(ctx, uid, "wh_pc_gb", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建弹弓失败: %v", err)
+	}
+	stack, err := s.CreateItem(ctx, uid, "feedcompleted", "rig", 1)
+	if err != nil {
+		t.Fatalf("创建窝料失败: %v", err)
+	}
+	s.setStackCount(ctx, stack, 5)
+	s.setHanditemLoadedRef(ctx, hand.GUID, stack.GUID)
+
+	st := s.stateFor(uid)
+	st.mu.Lock()
+	// 人站在钓点上，但一竿都没抛过：没有浮标落点，只有 3/9 报上来的玩家坐标。
+	st.Loc, st.Spot = "gb-test-loc", 7
+	st.PosX, st.PosZ, st.HasPos, st.HasCastPos = 101, 99, true, false
+	st.mu.Unlock()
+
+	sess, _ := newTunnelProbe(t, s)
+	throwOnce := func(callID uint32) {
+		t.Helper()
+		req := rigRequestTree(t, proto.Guid(hand.GUID),
+			wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(12)}))
+		hctx := &Ctx{Sess: sess, Main: 13, Sub: 5, CallID: callID, Tree: req,
+			DecodeOK: true, ExpectResponse: true, Log: logging.Discard()}
+		if _, ok := hDynamicHanditemThrow(hctx); !ok {
+			t.Fatalf("13/5 未处理（call=%d）", callID)
+		}
+	}
+
+	throwOnce(9101)
+	var (
+		hasPosRow int
+		bx, bz    int64
+	)
+	if err := s.DB.SQL.QueryRowContext(ctx, `SELECT has_pos,bx,bz FROM groundbait_deposit WHERE uid=? AND txn_guid LIKE '%9101'`, uid).
+		Scan(&hasPosRow, &bx, &bz); err != nil {
+		t.Fatalf("第一弹没落账: %v", err)
+	}
+	wantBX, wantBZ := groundbaitCell(101, 99)
+	if hasPosRow != 1 || bx != wantBX || bz != wantBZ {
+		t.Fatalf("没抛过竿时应记在玩家脚下格子，期望 has_pos=1 (%d,%d)，实得 has_pos=%d (%d,%d)",
+			wantBX, wantBZ, hasPosRow, bx, bz)
+	}
+	if got := s.groundbaitSpot(ctx, uid, "gb-test-loc", wantBX, wantBZ).units; got < 0.99 || got > 1.01 {
+		t.Fatalf("玩家格上的窝应全额生效 1 份，实得 %.3f", got)
+	}
+
+	// 兜底关掉：退回原来的「整个钓点一格」落点未知。
+	setWeatherTestTunable(t, s, "groundbait_throw_pos_fallback", "0")
+	throwOnce(9102)
+	if err := s.DB.SQL.QueryRowContext(ctx, `SELECT has_pos FROM groundbait_deposit WHERE uid=? AND txn_guid LIKE '%9102'`, uid).
+		Scan(&hasPosRow); err != nil {
+		t.Fatalf("第二弹没落账: %v", err)
+	}
+	if hasPosRow != 0 {
+		t.Fatalf("兜底关闭后应退回落点未知，实得 has_pos=%d", hasPosRow)
 	}
 }
