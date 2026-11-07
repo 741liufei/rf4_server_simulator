@@ -139,6 +139,10 @@ cat > "${RELEASE_NOTES}" <<EOF
 
 - QQ 群：379233540
 - GitHub Issues：https://github.com/glance522/rf4_server_simulator/issues
+
+## 最近提交
+
+$(git log --invert-grep --grep='^chore(release):' --format='- @%h %s')
 EOF
 cp "${RELEASE_NOTES}" "${STAGE}/发布说明.md"
 
