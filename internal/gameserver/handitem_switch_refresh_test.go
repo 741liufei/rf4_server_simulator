@@ -193,6 +193,9 @@ func TestHanditemThrowSelfcleanRemovesProjectileInstance(t *testing.T) {
 	ctx := t.Context()
 	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	setWeatherTestTunable(t, srv, "handitem_throw_selfclean", "1")
+	// 这两个测试都要 f4 里有抛出物才能验证清理开关，所以显式打开发射开关；
+	// 出厂缺省已经是 0（客户端自己会画抛投）。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 
 	hand, err := srv.CreateItem(ctx, 1000001, "wh_pc_gb", "backpack", 1)
 	if err != nil {
@@ -248,6 +251,9 @@ func TestHanditemThrowKeepsProjectileWhenSelfcleanOff(t *testing.T) {
 	ctx := t.Context()
 	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	setWeatherTestTunable(t, srv, "handitem_throw_selfclean", "0")
+	// 这两个测试都要 f4 里有抛出物才能验证清理开关，所以显式打开发射开关；
+	// 出厂缺省已经是 0（客户端自己会画抛投）。
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 
 	hand, err := srv.CreateItem(ctx, 1000001, "wh_pc_gb", "backpack", 1)
 	if err != nil {
