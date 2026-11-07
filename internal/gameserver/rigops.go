@@ -1187,14 +1187,18 @@ type rigSetOpts struct {
 // rigSetResult 保存装配结果和 800 快照素材。
 type rigSetResult struct {
 	Rejected     bool
-	MountedGUID  string         // 实际挂进钓组的 guid（计件拆分时 = 子实例，非调用方原 guid）
-	ReplacedGUID string         // 被替换卸下的旧组件 guid
-	AddedTrees   []*proto.Value // nil 表示无新增段（非拆分挂载时 f0 为 null）
-	UpdatedTrees []*proto.Value
-	RemovedGUIDs []string
-	SourceGUID   string         // 拆分挂载后的来源堆 guid（回包后强制刷新客户端计数）
-	SourceTree   *proto.Value   // 来源堆减一后的新树
-	Released     []*rigReleased // 去重清理退回的组件（树已并入 UpdatedTrees，来源堆刷新走 queueReleasedStackRefresh）
+	MountedGUID  string // 实际挂进钓组的 guid（计件拆分时 = 子实例，非调用方原 guid）
+	ReplacedGUID string // 被替换卸下的旧组件 guid
+	// ReplacedToBackpack 是被替换后退回背包的旧组件 guid（仅退回背包分支赋值）。
+	// 手持工具换弹需要它做「移除+重加」；不复用 ReplacedGUID 是为了不影响
+	// 17/2 等既有读者。
+	ReplacedToBackpack string
+	AddedTrees         []*proto.Value // nil 表示无新增段（非拆分挂载时 f0 为 null）
+	UpdatedTrees       []*proto.Value
+	RemovedGUIDs       []string
+	SourceGUID         string         // 拆分挂载后的来源堆 guid（回包后强制刷新客户端计数）
+	SourceTree         *proto.Value   // 来源堆减一后的新树
+	Released           []*rigReleased // 去重清理退回的组件（树已并入 UpdatedTrees，来源堆刷新走 queueReleasedStackRefresh）
 }
 
 // hasMaterials 判断装配是否产生了新增、更新或移除。
@@ -1371,6 +1375,7 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 			} else {
 				// 普通物品退回背包并清空父引用，避免继续显示为已挂载。
 				s.returnToBackpack(ctx, prev)
+				res.ReplacedToBackpack = oldGUID
 				if fresh, ferr := s.DB.GetItemByGUID(ctx, oldGUID); ferr == nil && fresh != nil {
 					if t, terr := s.itemTree(ctx, fresh); terr == nil {
 						updated = append(updated, t)
@@ -2967,6 +2972,19 @@ func hHanditemSetComp(ctx *Ctx) ([]byte, bool) {
 		// 返回三段增量：f0 新子实例，f1 来源堆和父对象，f2 移除项。
 		// 不能返回全量快照。
 		snap := buildRigSnapshot800(res.AddedTrees, res.UpdatedTrees, res.RemovedGUIDs)
+		// 客户端只在创建时建立父子归属，同 guid 的数量更新会被忽略：被替换
+		// 下来的旧弹药只作为 f1 更新回传时，弹药格里仍留着它（2026-11-07 实测
+		// 连装两袋后格子里出现两份、切换看起来无效）。回包后用 4/21 移除 +
+		// 4/22 重加把它真正落回背包；tunable handitem_switch_refresh 缺省开。
+		if res.ReplacedToBackpack != "" && srv.tunableF("handitem_switch_refresh", 1) != 0 {
+			if prev, perr := srv.DB.GetItemByGUID(cctx, res.ReplacedToBackpack); perr == nil && prev != nil {
+				if t, terr := srv.itemTree(cctx, prev); terr == nil {
+					srv.queueStackRefresh(ctx, []string{res.ReplacedToBackpack}, []*proto.Value{t})
+					srv.log.Info("13/1 替换旧弹药：回包后移除+重加", "old", shortGUID(res.ReplacedToBackpack),
+						"parent", shortGUID(parentGUID))
+				}
+			}
+		}
 		body, err := proto.EncodeValue(snap, ctx.Sess.Table())
 		if err != nil {
 			return nil, false
