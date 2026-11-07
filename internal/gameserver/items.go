@@ -895,14 +895,22 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 		}
 	}
 	clipM, _ := s.savedReelClipM(ctx, it.GUID)
+	drag := int64(15)
+	if saved, ok := s.rodReelDragSetting(ctx, it.GUID); ok {
+		drag = saved
+	}
+	speed := defaultReelSpeed
+	if saved, ok := s.rodReelSpeedSetting(ctx, it.GUID); ok {
+		speed = saved
+	}
 	return wiregen.MustMakeObj("gbbhdkefnkn", map[int]*proto.Value{
 		0: proto.StrVal(name),
 		1: proto.U32(uint32(rigType)),
 		2: components,
 		4: proto.U32(uint32(depth)),
 		5: proto.U32(uint32(clipM)),
-		6: proto.U32(15),
-		7: proto.U32(15),
+		6: proto.U32(uint32(drag)),
+		7: proto.U32(uint32(speed)),
 	})
 }
 
