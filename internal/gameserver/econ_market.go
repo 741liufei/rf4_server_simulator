@@ -1292,15 +1292,6 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 			continue
 		}
 		fields[idx].Val = child
-		// 齿轮决定母轮顶层显示/运算使用的传动比。子件换了而母轮 f0 不变，
-		// 客户端和服务端都会继续使用出厂参数。
-		if def.Category == 52 {
-			if ratio := itemDefF32(def, gearAttrRatio); ratio > 0 {
-				if pidx := fieldIdxByCS(row.WireClass, csStrength); pidx >= 0 {
-					setWireFloat(fields, row.WireClass, pidx, ratio*row.Workmanship)
-				}
-			}
-		}
 		ps, pg := srv.partPrice(cctx, o.SysID, def.Category)
 		silver += ps
 		gold += pg
@@ -1341,6 +1332,15 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 	fj, jerr := FieldsToJSON(fields)
 	if jerr != nil {
 		return nil, false
+	}
+	// Use the updated parts when normalizing the snapshot before persistence.
+	snapshot := *row
+	snapshot.FieldsJSON = fj
+	if row.WireClass == "dgjinoebdop" && srv.canonicalizeReelStrength(cctx, &snapshot, fields) {
+		fj, jerr = FieldsToJSON(fields)
+		if jerr != nil {
+			return nil, false
+		}
 	}
 	if err := srv.DB.UpdateItemFields(cctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
 		return nil, false
