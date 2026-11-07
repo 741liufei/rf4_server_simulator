@@ -132,6 +132,7 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 
 func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	srv, _ := newRigTestServer(t)
+	setWeatherTestTunable(t, srv, "handitem_throw_projectile", "1")
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -174,6 +175,34 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 	}
 	if left := srv.stackCountOf(ctx, fresh); left != 1 {
 		t.Fatalf("第一次抛投后剩 %d 份，期望 1", left)
+	}
+
+	// f2 姿态块与 f4 抛出物：客户端凭 f2 写全局时间，凭 f4 的新实例生成飞行中的饵。
+	if pose := dec.Field(2).Val; pose == nil || pose.Class != "pnbphpdmppe" {
+		t.Fatalf("13/5 f2 应为姿态块 pnbphpdmppe，实得 %#v", pose)
+	}
+	proj := dec.Field(4).Val
+	if proj == nil || proj.ArgCount() != 1 {
+		t.Fatalf("13/5 f4 应下发 1 个抛出物，实得 %#v", proj)
+	}
+	pj := proj.ArgItem(0)
+	gi := fieldIdxByCS(pj.Class, csGUID)
+	if gi < 0 {
+		t.Fatalf("抛出物类 %s 没有 GUID 槽", pj.Class)
+	}
+	pjID := pj.Field(gi)
+	g := pjID.GuidHex()
+	if g == "" || g == bait.GUID {
+		t.Fatalf("抛出物必须是新实例 GUID，实得 %q（装填物 %s）", g, bait.GUID)
+	}
+	if qi := fieldIdxByCS(pj.Class, csQty); qi >= 0 {
+		pjQty := pj.Field(qi)
+		if got := pjQty.U32(); got != 1 {
+			t.Fatalf("抛出物数量=%d，期望 1", got)
+		}
+	}
+	if row, _ := srv.DB.GetItemByGUID(ctx, g); row != nil {
+		t.Fatal("抛出物是一次性记录，不应落库")
 	}
 
 	body, ok = hDynamicHanditemThrow(dynamicTestCtx(srv, req))
@@ -261,5 +290,36 @@ func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
 	}
 	if n := gbCount(t, srv, uid); n != 2 {
 		t.Fatalf("两次登录同 CallID 应有 2 笔窝账，实得 %d", n)
+	}
+}
+
+// 客户端会自行绘制飞行饵，服务端额外抛出物实例缺省关闭，避免双份饵团。
+func TestDynamicHanditemThrowProjectileDisabledByDefault(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	registerDynamicProtocolHandlers(srv.dispatch)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	hand, err := srv.CreateItem(ctx, uid, "wh_pc_gb", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bait, err := srv.CreateItem(ctx, uid, "worm_01", "rig", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.setStackCount(ctx, bait, 2)
+	srv.setHanditemLoadedRef(ctx, hand.GUID, bait.GUID)
+	req := rigRequestTree(t, proto.Guid(hand.GUID),
+		wiregen.MustMakeObj("olieodeoaof", map[int]*proto.Value{0: proto.F32(12)}))
+	body, ok := hDynamicHanditemThrow(dynamicTestCtx(srv, req))
+	if !ok {
+		t.Fatal("13/5 未处理")
+	}
+	dec, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proj := dec.Field(4).Val; proj == nil || proj.Kind != proto.KindArgs || proj.ArgCount() != 0 {
+		t.Fatalf("缺省 f4 应为空 args，实得 %#v", proj)
 	}
 }
