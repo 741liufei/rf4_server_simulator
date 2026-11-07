@@ -151,6 +151,21 @@ func TestCraftBatchCapsAndSlotScaling(t *testing.T) {
 		}
 		return u64Of(v.Fields[0].Num) == 1
 	}
+	craftNamed := func(box *handlerBox, recipe string, slots []craftSlot, qty uint64, name string) bool {
+		t.Helper()
+		tree := craftObj8(recipe, slots, qty)
+		tree.Fields[4] = proto.FStr("U16STR", &name)
+		box.tree = proto.Args524(tree)
+		body, ok := box.invoke(t)
+		if !ok {
+			t.Fatalf("%s 未处理", recipe)
+		}
+		v := decodeTreeValue(t, srv, body)
+		if !v.IsKind(proto.KindObj) || v.TypeID != 803 {
+			t.Fatalf("%s 响应应为 803，实得 %v/%d", recipe, v.Kind, v.TypeID)
+		}
+		return u64Of(v.Fields[0].Num) == 1
+	}
 
 	t.Run("窝料钳到60并按份扣料", func(t *testing.T) {
 		uid := int64(2200001)
@@ -185,6 +200,26 @@ func TestCraftBatchCapsAndSlotScaling(t *testing.T) {
 		}
 		if got := countOf(uid, "mix_combi"); got != 30 {
 			t.Fatalf("类目补扣后应剩 30 份混合饲料，实得 %d", got)
+		}
+		// 自定义名称必须原样落进实例名称字段。
+		if !craftNamed(box, "craft_feed_universal", slot, 1, "我的窝料") {
+			t.Fatal("带自定义名称的制作应成功")
+		}
+		var feedFields string
+		if err := db.SQL.QueryRowContext(ctx,
+			`SELECT fields_json FROM item WHERE uid=? AND item_id='feedcompleted' AND qty=60
+			 ORDER BY created_ts DESC LIMIT 1`,
+			uid).Scan(&feedFields); err != nil {
+			t.Fatal(err)
+		}
+		fields, err := FieldsFromJSON(feedFields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nameIdx := fieldIdxByCS("cilmgoaoofg", csCustomName)
+		if nameIdx < 0 || nameIdx >= len(fields) || fields[nameIdx].Str == nil ||
+			*fields[nameIdx].Str != "我的窝料" {
+			t.Fatalf("成品窝料应保留自定义名称，实得 %v", fields[nameIdx].Str)
 		}
 	})
 

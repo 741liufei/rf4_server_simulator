@@ -13,6 +13,7 @@ const (
 	csStateEnum   = "hgaijieklek" // CS_STATE_ENUM  状态位
 	csSubtype     = "dbgaheblmei" // CS_SUBTYPE_ENUM
 	csQty         = "ljnnpokapig" // 数量（可堆叠件）
+	csCustomName  = "phoglfnffah" // 自定义名称（客户端制作时填写的名字）
 	csStrength    = "nlmnpekipjc" // 强度（受力部件）
 	csDragForce   = "ppibbfgiffa" // 渔轮刹车片子实例的曳力物理值（loedbndnill.f0）
 	csOrigin      = "effnpjlfjai" // 购买收据 166 pcfflcdpjgk 内嵌位
