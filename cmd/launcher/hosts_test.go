@@ -5,6 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/windows"
 
 	"rf4server/internal/config"
 )
@@ -28,6 +31,87 @@ func readHosts(t *testing.T, path string) string {
 }
 
 var testDomains = []string{"api.rf4game.ru", "api.rf4game.com"}
+
+func TestWriteFileAtomicOverwrites(t *testing.T) {
+	path := writeHosts(t, "old")
+
+	if err := writeFileAtomic(path, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := readHosts(t, path); got != "new" {
+		t.Fatalf("内容=%q", got)
+	}
+
+	// 替换成功后不应残留临时文件
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".tmp-") {
+			t.Fatalf("残留临时文件: %s", e.Name())
+		}
+	}
+}
+
+// hosts 位于 System32\drivers\etc，被杀软/索引服务短暂独占是常态。
+// 这个用例独占目标文件 30ms，验证替换会重试而不是立刻报错。
+func TestWriteFileAtomicRetriesWhenTargetBusy(t *testing.T) {
+	path := writeHosts(t, "old")
+
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		time.Sleep(30 * time.Millisecond)
+		_ = windows.CloseHandle(h)
+	}()
+
+	if err := writeFileAtomic(path, []byte("new"), 0o644); err != nil {
+		t.Fatalf("占用释放后应重试成功，实际失败: %v", err)
+	}
+	if got := readHosts(t, path); got != "new" {
+		t.Fatalf("内容=%q", got)
+	}
+}
+
+// 证明「单次 MoveFileEx 在目标被独占时确实会失败」，
+// 从而说明 replaceFileWithRetry 的重试不是多余的防御。
+func TestMoveFileExFailsWhenTargetBusy(t *testing.T) {
+	path := writeHosts(t, "old")
+	tmp := filepath.Join(filepath.Dir(path), "candidate")
+	if err := os.WriteFile(tmp, []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := windows.CreateFile(p, windows.GENERIC_READ, 0, nil,
+		windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(h)
+
+	from, _ := windows.UTF16PtrFromString(tmp)
+	to, _ := windows.UTF16PtrFromString(path)
+	err = windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING)
+	if err == nil {
+		t.Fatal("目标被独占时单次 MoveFileEx 应当失败")
+	}
+	if !isTransientReplaceError(err) {
+		t.Fatalf("应判定为可重试错误，实际: %v", err)
+	}
+}
 
 func TestHostsSetLocalAppends(t *testing.T) {
 	path := writeHosts(t, "127.0.0.1 localhost\n")
