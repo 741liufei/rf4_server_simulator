@@ -40,9 +40,10 @@ func hProfile(ctx *Ctx) ([]byte, bool) {
 
 // 客户端库存枚举。
 const (
-	containerBackpack     = 0
-	containerKeepnet      = 5
-	containerTradingCards = 18
+	containerBackpack      = 0
+	containerKeepnet       = 5
+	containerTradingCards  = 18
+	houseContainerCapacity = 100
 )
 
 // ---- 4/1 items/count ----
@@ -65,6 +66,11 @@ func hItemCount(ctx *Ctx) ([]byte, bool) {
 			used = int64(len(n))
 		}
 		cap, capMember = 100, 150
+	case 10, 11:
+		// 房屋仓库：容量按 100 起步。回 0 时客户端认为仓库容量为零，
+		// 存放交互在 UI 层就被拦下。
+		used, _ = srv.DB.CountItemsByContainers(cctx, ctx.Sess.Userid, []string{"house"})
+		cap = houseContainerCapacity
 	default:
 		if names := nativeInventoryContainers(container); names != nil {
 			used, _ = srv.DB.CountItemsByContainers(cctx, ctx.Sess.Userid, names)
