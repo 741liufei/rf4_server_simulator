@@ -81,6 +81,12 @@ var rigTypeLureFamily = map[int64]bool{
 
 func marineRigType(rigType int64) bool { return rigType >= 50 && rigType <= 60 }
 
+// rigTypeSpod 打窝器竿（18 = rig_BottomFeedRocket）：竿只把窝料送去落点，
+// 自己不钓鱼，所以客户端不发 14/7 钓组动画，入水信号只有 14/3 那一条。
+const rigTypeSpod = int64(18)
+
+var spodRigTypes = map[int64]bool{rigTypeSpod: true}
+
 // defaultRigTypeForRod 按竿型选择第一个有资源名映射的允许钓组。
 func (s *Server) defaultRigTypeForRod(ctx context.Context, rodItemID string) int64 {
 	def, err := s.DB.GetItemDefByItemID(ctx, rodItemID)
