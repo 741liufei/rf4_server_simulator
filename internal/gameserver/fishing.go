@@ -77,6 +77,8 @@ type FishState struct {
 	Armed           *RolledFish // GM 武装"下一杆必上"（唯一绕过重量上限的路径）
 	Bonus           fishingSkillBonus
 	persist         fishPersistMeta
+
+	hookedChatFishGUID string // 仅进程内：同一尾鱼的确认与拒收重推共用播报标记。
 }
 
 // effectiveBaitDepthCMLocked 返回当前有效饵深。手杆从落水开始按固定
@@ -1531,6 +1533,7 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.CastActive = true
 	st.Resolved = false
 	st.Pending = nil
+	st.hookedChatFishGUID = ""
 	st.PendingRepush = 0
 	if !preserveHooked {
 		st.Hooked = false

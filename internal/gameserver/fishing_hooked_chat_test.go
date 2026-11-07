@@ -1,6 +1,7 @@
 package gameserver
 
 import (
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -183,5 +184,147 @@ func TestHookedChatDisabledAndInvalidEvents(t *testing.T) {
 	}
 	if got := finishHookedChat(t, sess, ch); len(got) != 0 {
 		t.Fatalf("disabled or invalid hook was announced: %q", got)
+	}
+}
+
+func TestHookedChatRejectedFishRepushOnce(t *testing.T) {
+	for _, rigType := range []int64{2, 50} {
+		for _, status := range []uint64{3, 5} {
+			t.Run(fmt.Sprintf("rig%d/status%d", rigType, status), func(t *testing.T) {
+				s, _ := newRigTestServer(t)
+				t.Cleanup(func() { stopFishingRecoveryTimers(s) })
+				setWeatherTestTunable(t, s, "fish_hooked_chat", "1")
+				sess, peer := newTunnelProbe(t, s)
+				s.sessions[sess.ID] = sess
+				ch := collectHookedChat(peer)
+				rod := "11111111111111111111111111111111"
+				fish := &RolledFish{FishGUID: newFishGUID(), Species: "perch", WeightG: 1234}
+				st := s.fishingStateForRod(sess.Userid, rod)
+				st.mu.Lock()
+				st.RigType, st.Pending, st.CastActive, st.InWater = rigType, fish, true, true
+				st.persist.sessionID = sess.ID
+				st.mu.Unlock()
+				hook := func() {
+					if marineRigType(rigType) {
+						hFishingPull(miscCtx(sess, 14, 9, rigRequestTree(t, proto.Guid(rod))))
+					} else {
+						hFishingHooked(miscCtx(sess, 14, 11, rigRequestTree(t, proto.Guid(rod))))
+					}
+				}
+				hook()
+				left := proto.Args524(proto.Guid(rod), proto.Obj("lhicjpmglbo", 0,
+					proto.Field{Op: "U32", Num: ptrU64(status)}))
+				hFishingLeft(miscCtx(sess, 14, 12, left))
+				st.mu.Lock()
+				if st.Pending != fish || st.Hooked || st.pendingTimer == nil {
+					st.mu.Unlock()
+					t.Fatal("rejection did not retain the fish for repush")
+				}
+				st.pendingTimer.Stop()
+				ticket := fishingTimerTicket{st.castGeneration, st.pendingTicket}
+				st.mu.Unlock()
+				s.repushRodPendingTicket(sess.Userid, st, ticket, fish)
+				st.mu.Lock()
+				repushed := st.PushSent && st.Pending == fish
+				st.mu.Unlock()
+				if !repushed {
+					t.Fatal("the original fish was not repushed")
+				}
+				hook()
+				hFishingHooked(miscCtx(sess, 14, 11, rigRequestTree(t, proto.Guid(rod))))
+				want := "[上钩] 鱼竿（11111111）：perch 1.234kg"
+				if got := finishHookedChat(t, sess, ch); !slices.Equal(got, []string{want}) {
+					t.Fatalf("repushed fish chat = %q, want one %q", got, want)
+				}
+			})
+		}
+	}
+}
+
+func TestHookedChatEarlyConfirmation(t *testing.T) {
+	for _, rigType := range []int64{2, 50} {
+		t.Run(fmt.Sprintf("rig%d", rigType), func(t *testing.T) {
+			s, _ := newRigTestServer(t)
+			t.Cleanup(func() { stopFishingRecoveryTimers(s) })
+			setWeatherTestTunable(t, s, "fish_hooked_chat", "1")
+			sess, peer := newTunnelProbe(t, s)
+			s.sessions[sess.ID] = sess
+			ch := collectHookedChat(peer)
+			rod := "11111111111111111111111111111111"
+			fish := &RolledFish{FishGUID: newFishGUID(), Species: "perch", WeightG: 1234}
+			st := s.fishingStateForRod(sess.Userid, rod)
+			st.mu.Lock()
+			st.RigType, st.CastActive, st.InWater = rigType, true, true
+			st.CastTs, st.Armed = time.Now().Add(-20*time.Second), fish
+			st.persist.sessionID = sess.ID
+			st.mu.Unlock()
+			ctx := miscCtx(sess, 14, 11, rigRequestTree(t, proto.Guid(rod)))
+			hFishingHooked(ctx)
+			st.mu.Lock()
+			if !st.Hooked || st.Pending != nil || st.biteTimer == nil {
+				st.mu.Unlock()
+				t.Fatal("early confirmation did not schedule the missing fish")
+			}
+			st.cancelBiteTimerLocked()
+			ticket := fishingTimerTicket{st.castGeneration, st.biteTicket}
+			st.mu.Unlock()
+			if got := finishHookedChat(t, sess, ch); len(got) != 0 {
+				t.Fatalf("early confirmation without a fish was announced: %q", got)
+			}
+			s.onRodBiteTimerTicket(sess.Userid, st, ticket)
+			st.mu.Lock()
+			generated := st.Pending == fish && st.Hooked && st.PushSent
+			st.mu.Unlock()
+			if !generated {
+				t.Fatal("bite did not generate and push the fish while preserving Hooked")
+			}
+			if marineRigType(rigType) {
+				hFishingPull(miscCtx(sess, 14, 9, rigRequestTree(t, proto.Guid(rod))))
+			} else {
+				hFishingHooked(ctx)
+			}
+			want := "[上钩] 鱼竿（11111111）：perch 1.234kg"
+			if got := finishHookedChat(t, sess, ch); !slices.Equal(got, []string{want}) {
+				t.Fatalf("early hook fish chat = %q, want one %q", got, want)
+			}
+			hFishingHooked(ctx)
+			hFishingHooked(ctx)
+			if got := finishHookedChat(t, sess, ch); len(got) != 0 {
+				t.Fatalf("repeated hook confirmation was announced: %q", got)
+			}
+		})
+	}
+}
+
+func TestHookedChatRestoredPendingFish(t *testing.T) {
+	s, db := newRigTestServer(t)
+	rod := "11111111111111111111111111111111"
+	st := s.fishingStateForRod(1000001, rod)
+	st.mu.Lock()
+	st.CastActive, st.Hooked = true, true
+	st.Pending = &RolledFish{FishGUID: newFishGUID(), Species: "perch", WeightG: 1234}
+	st.mu.Unlock()
+
+	restored := newFishingRecoveryServer(t, db)
+	setWeatherTestTunable(t, restored, "fish_hooked_chat", "1")
+	sess, peer := newTunnelProbe(t, restored)
+	sess.Srv.sessions[sess.ID] = sess
+	ch := collectHookedChat(peer)
+	st = restored.fishingStateForRod(sess.Userid, rod)
+	st.mu.Lock()
+	if !st.Hooked || st.Pending == nil {
+		st.mu.Unlock()
+		t.Fatal("hooked fish was not restored from storage")
+	}
+	fish, generation := st.Pending, st.castGeneration
+	st.persist.sessionID = sess.ID
+	st.mu.Unlock()
+	restored.pushPendingBite(sess, st, fish, rod, generation)
+	ctx := miscCtx(sess, 14, 11, rigRequestTree(t, proto.Guid(rod), proto.Guid(fish.FishGUID)))
+	hFishingHooked(ctx)
+	hFishingHooked(ctx)
+	want := "[上钩] 鱼竿（11111111）：perch 1.234kg"
+	if got := finishHookedChat(t, sess, ch); !slices.Equal(got, []string{want}) {
+		t.Fatalf("restored fish chat = %q, want one %q", got, want)
 	}
 }

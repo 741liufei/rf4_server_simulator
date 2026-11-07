@@ -1180,10 +1180,13 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 		st.recordLurePulseLocked(time.Now())
 	}
 	confirm := marineRigType(rigType) && pending != nil && st.CastActive && !st.Resolved && !st.Hooked
-	var hookedFish RolledFish
 	if confirm {
 		st.Hooked = true
-		hookedFish = *pending
+	}
+	var hookedFish RolledFish
+	var announce bool
+	if marineRigType(rigType) {
+		hookedFish, announce = st.takeHookedChatFishLocked()
 	}
 	st.mu.Unlock()
 	if confirm {
@@ -1201,9 +1204,11 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 		}
 		ctx.Log.Info("14/9 海钓抬竿确认", "rod", shortGUID(gear), "fish", shortGUID(pending.FishGUID),
 			"rig_type", rigType, "14/15", bound)
-		srv.notifyFishHooked(ctx.Sess, hookedFish, gear)
 	} else {
 		ctx.Log.Info("14/9 抬杆/小刺", "len", len(ctx.Body), "hex", traceHexHead(ctx.Body, 96), "rig_type", rigType)
+	}
+	if announce {
+		srv.notifyFishHooked(ctx.Sess, hookedFish, gear)
 	}
 	return nil, true
 }
@@ -1219,11 +1224,7 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	rigType := st.RigType
 	castActive := st.CastActive
 	resolved := st.Resolved
-	announce := pending != nil && !wasHooked && castActive && !resolved
-	var hookedFish RolledFish
-	if announce {
-		hookedFish = *pending
-	}
+	hookedFish, announce := st.takeHookedChatFishLocked()
 	st.mu.Unlock()
 	fishGUID, species := "", ""
 	if pending != nil {

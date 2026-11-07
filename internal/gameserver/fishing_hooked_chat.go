@@ -5,6 +5,17 @@ import (
 	"strings"
 )
 
+// takeHookedChatFishLocked 在 st.mu 内按鱼领取一次播报；Hooked 被拒收重置时保留标记。
+func (st *FishState) takeHookedChatFishLocked() (RolledFish, bool) {
+	fish := st.Pending
+	if fish == nil || fish.FishGUID == "" || !st.CastActive || st.Resolved || !st.Hooked ||
+		st.hookedChatFishGUID == fish.FishGUID {
+		return RolledFish{}, false
+	}
+	st.hookedChatFishGUID = fish.FishGUID
+	return *fish, true
+}
+
 // notifyFishHooked 只通知中鱼玩家，使用本根竿已经生成的鱼，不参与判鱼或结算。
 func (s *Server) notifyFishHooked(sess *Session, fish RolledFish, rod string) bool {
 	if s == nil || sess == nil || fish.FishGUID == "" || fish.Species == "" || fish.WeightG <= 0 ||
