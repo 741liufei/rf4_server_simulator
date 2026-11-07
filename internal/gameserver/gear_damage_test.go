@@ -97,7 +97,7 @@ func TestWeakestLeaderBreaksAndKeepsMainLine(t *testing.T) {
 	}
 	beforeLine, _ := db.GetItemByGUID(ctx, lineGUID)
 
-	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(lineGUID), proto.U32(2), proto.Null())
+	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(leader.GUID), proto.U32(2), proto.Null())
 	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
 	if !ok || len(body) == 0 {
@@ -191,8 +191,8 @@ func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 客户端故意报竿断，服务端仍应按同规格“主线优先于竿”判定为断主线。
-	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(rod.GUID), proto.U32(1), proto.Null())
+	// 客户端上报主线断，服务端按上报件断主线并固定扣 5 米。
+	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(line.GUID), proto.U32(1), proto.Null())
 	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
 	if !ok || len(body) == 0 {
@@ -440,9 +440,10 @@ func TestBrokenHandRodDeletesFloat(t *testing.T) {
 	}
 }
 
-// 钩/拟饵等终端件断裂：组件耐久归零并离竿，竿本体与承力线不受影响
-// （回归：终端件断件上报此前会被物理裁决吞掉——有强度数据时误判为断线并
-// 连带丢失钩/饵/漂，无强度数据时兜底成断竿归零竿耐久）。
+// 钩已进承力链：客户端上报钩断后由服务端按最弱环裁决，只有钩确实最弱时
+// 才摘钩。这里用 3.15kg 弱钩 + 4.09kg 竿 + 13.6kg 强线构造该场景，验证
+// 裁决为断钩时组件耐久归零并离竿，竿本体与承力线不受影响。
+// （回归：旧的"无条件采信钩断"实现会跳过这条物理裁决。）
 func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
@@ -456,7 +457,7 @@ func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hook, err := srv.CreateItem(ctx, uid, "clas_20163", "backpack", 1)
+	hook, err := srv.CreateItem(ctx, uid, "orig_20008_18", "backpack", 1) // 3.15kg，最弱环
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,6 +542,9 @@ func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
 	}
 }
 
+// 钩已移出无条件采信的终端件集合，这里改用浮漂（仍是终端件）验证"仅有
+// rig_component 投影、f5 未同步"时断裂也会清掉投影，避免拿一个不再属于该
+// 路径的品类来断言旧行为。
 func TestTerminalComponentProjectionOnlyBreakCleansProjection(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
@@ -550,33 +554,33 @@ func TestTerminalComponentProjectionOnlyBreakCleansProjection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hook, err := srv.CreateItem(ctx, uid, "clas_20163", "backpack", 1)
+	bobber, err := srv.CreateItem(ctx, uid, "bob_25001", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// 模拟历史/部分同步状态：rig_component 有投影，但竿 f5 尚未包含该组件。
-	if err := db.SetItemRigLink(ctx, hook.GUID, rod.GUID, catHook); err != nil {
+	if err := db.SetItemRigLink(ctx, bobber.GUID, rod.GUID, catFloat); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertRigComponentAt(ctx, rod.GUID, catHook, 0, hook.GUID, 0); err != nil {
+	if err := db.UpsertRigComponentAt(ctx, rod.GUID, catFloat, 0, bobber.GUID, 0); err != nil {
 		t.Fatal(err)
 	}
 
-	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, hook.GUID)
+	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, bobber.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if outcome == nil || !outcome.ComponentBroken {
 		t.Fatalf("应裁决为终端件断裂: %+v", outcome)
 	}
-	if got := rigSlotGUIDs(t, srv, rod.GUID)[catHook]; got != "" {
+	if got := rigSlotGUIDs(t, srv, rod.GUID)[catFloat]; got != "" {
 		t.Fatalf("仅投影存在的组件断裂后仍残留 rig_component: %s", got)
 	}
-	freshHook := mustItem(t, db, hook.GUID)
-	if freshHook.Container != "backpack" || freshHook.RigGUID != "" || freshHook.Slot != 0 {
-		t.Fatalf("损坏组件应退回背包: container=%q rig_guid=%q slot=%d", freshHook.Container, freshHook.RigGUID, freshHook.Slot)
+	freshBobber := mustItem(t, db, bobber.GUID)
+	if freshBobber.Container != "backpack" || freshBobber.RigGUID != "" || freshBobber.Slot != 0 {
+		t.Fatalf("损坏组件应退回背包: container=%q rig_guid=%q slot=%d", freshBobber.Container, freshBobber.RigGUID, freshBobber.Slot)
 	}
-	if got := rigStoredGUID(t, freshHook, csParent); got != "" {
+	if got := rigStoredGUID(t, freshBobber, csParent); got != "" {
 		t.Fatalf("损坏组件快照仍保留父件: %s", got)
 	}
 }

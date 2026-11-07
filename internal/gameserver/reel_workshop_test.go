@@ -259,34 +259,33 @@ func TestReelOverloadUsesDurabilityStages(t *testing.T) {
 	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
 	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
 
-	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, line.GUID)
+	// —— 客户端已上报锁轮（线上 29 / UI 30）：锁轮承力参与最弱环比较 ——
+	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "29"); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decision.Part != "reel" || decision.GUID != reel.GUID {
-		t.Fatalf("锁轮应为最弱环: %+v", decision)
+	if decision.Part != "reel" || decision.ReelSlip {
+		t.Fatalf("锁轮承力最弱时应判渔轮损坏(ReelSlip=false): %+v", decision)
 	}
-	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, line.GUID)
+	lockOutcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.ReelDamaged || outcome.LineBroken || outcome.BreakPart != "reel" {
-		t.Fatalf("轮子超载结果错误: %+v", outcome)
+	if !lockOutcome.ReelDamaged || !lockOutcome.ReelBroken || lockOutcome.FrictionWorn || lockOutcome.LineBroken {
+		t.Fatalf("上报渔轮损坏结果错误: %+v", lockOutcome)
 	}
-	fresh, _ := db.GetItemByGUID(ctx, reel.GUID)
-	if math.Abs(fresh.Durability-0.8) > 1e-9 {
-		t.Fatalf("轮子耐久=%f，期望 0.8", fresh.Durability)
-	}
-	perf, _ := db.GetReelPerformance(ctx, reel.GUID)
-	if math.Abs(perf.LockedDragKg-perf.BaseDragKg*1.3*perf.BearingFactor) > 0.001 {
-		t.Fatalf("80%% 耐久锁轮参数错误: %+v", perf)
-	}
-	if got, _ := db.GetItemByGUID(ctx, reel.GUID); got == nil {
-		t.Fatal("轮子超载只掉耐久，不应从钓组删除")
+	lockFresh, _ := db.GetItemByGUID(ctx, reel.GUID)
+	if lockFresh.Durability != 0 {
+		t.Fatalf("渔轮损坏后耐久应直接归 0，实得 %f", lockFresh.Durability)
 	}
 }
 
-func TestHighQualityReelOilSlowsStageWear(t *testing.T) {
+// TestReelSlipDegradesFrictionWasherByStep 验证单次泄力打滑让摩擦片制动力
+// 按 reelSlipWear 比例衰减，且与轮油无关（摩擦片发热磨损，油润滑齿轮不润滑摩擦片）。
+func TestReelSlipDegradesFrictionWasherByStep(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -294,28 +293,24 @@ func TestHighQualityReelOilSlowsStageWear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Zeiman 原厂油品质 70，单次只累计 18% 档位磨损，不应立即掉 20% 耐久。
-	if _, err := srv.damageReelOverload(ctx, uid, zeroGUID, reel.GUID); err != nil {
+	before, perr := srv.syncReelPerformance(ctx, reel)
+	if perr != nil || before.BaseDragKg <= 0 {
+		t.Fatalf("轮子应有摩擦片制动力: %+v err=%v", before, perr)
+	}
+	if _, err := srv.damageReelSlip(ctx, uid, zeroGUID, reel.GUID); err != nil {
 		t.Fatal(err)
 	}
 	fresh, _ := db.GetItemByGUID(ctx, reel.GUID)
 	if math.Abs(fresh.Durability-1.0) > 1e-9 {
-		t.Fatalf("高品质油首次超载耐久=%f，期望仍为1.0", fresh.Durability)
+		t.Fatalf("首次打滑轮子耐久=%f，期望仍为1.0（磨摩擦片不是本体）", fresh.Durability)
 	}
-	perf, _ := db.GetReelPerformance(ctx, reel.GUID)
-	if perf.OilQuality != 70 || math.Abs(perf.WearProgress-0.18) > 1e-9 {
-		t.Fatalf("高品质油首次磨损累计错误: %+v", perf)
+	after, perr := srv.syncReelPerformance(ctx, fresh)
+	if perr != nil {
+		t.Fatal(perr)
 	}
-	if _, err := srv.damageReelOverload(ctx, uid, zeroGUID, reel.GUID); err != nil {
-		t.Fatal(err)
-	}
-	fresh, _ = db.GetItemByGUID(ctx, reel.GUID)
-	if math.Abs(fresh.Durability-0.8) > 1e-9 {
-		t.Fatalf("高品质油第二次超载耐久=%f，期望0.8", fresh.Durability)
-	}
-	perf, _ = db.GetReelPerformance(ctx, reel.GUID)
-	if math.Abs(perf.WearProgress-0.16) > 1e-9 {
-		t.Fatalf("跨档后剩余磨损累计错误: %+v", perf)
+	want := before.BaseDragKg * (1 - reelSlipWear)
+	if math.Abs(after.BaseDragKg-want) > 0.01 {
+		t.Fatalf("摩擦片制动力应按 2%% 衰减：before=%v after=%v want=%v", before.BaseDragKg, after.BaseDragKg, want)
 	}
 }
 

@@ -240,7 +240,7 @@ func (s *Server) buildPending25(f *RolledFish, st *FishState, levelKey string) *
 		KeepBait: st.Bait,
 		TS:       float64(time.Now().UnixNano()) / 1e9,
 	}
-	return buildKeepnet25(e, levelKey)
+	return buildKeepnet25(e, levelKey, s.rarityOf25(f.Species))
 }
 
 // fishingKeep 14/5 入护。
@@ -257,7 +257,7 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		want = guids[0]
 	}
 	cctx := ctx.Sess.pushCtx()
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 
@@ -363,7 +363,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 	}
 	uid := ctx.Sess.Userid
 	guids := deepGUIDs(ctx.Tree)
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	st.mu.Lock()

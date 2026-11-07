@@ -20,6 +20,7 @@ package gameserver
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"sort"
@@ -851,6 +852,35 @@ func (s *Server) setStackCount(ctx context.Context, row *store.Item, count int64
 	_ = s.DB.UpdateItemFields(ctx, row.GUID, fj, count, row.Durability, row.Workmanship, row.RigGUID)
 }
 
+// setStackCountTx 是 setStackCount 的事务内版本：断件/拆组时把子实例的
+// 数量并回来源堆，必须与删除子实例同事务提交。
+func (s *Server) setStackCountTx(ctx context.Context, tx *sql.Tx, row *store.Item, count int64) error {
+	if row == nil || row.GUID == "" {
+		return nil
+	}
+	if count < 0 {
+		count = 0
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return err
+	}
+	if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
+		fields[q].Num = ptrU64(uint64(count))
+	}
+	bumpCreatedTicks(fields, row.WireClass)
+	fj, jerr := FieldsToJSON(fields)
+	if jerr != nil {
+		return jerr
+	}
+	if err := s.DB.UpdateItemFieldsTx(ctx, tx, row.GUID, fj, count, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+		return err
+	}
+	row.FieldsJSON = fj
+	row.Qty = count
+	return nil
+}
+
 // setWireParent 写入实例的父 GUID。客户端据此判断挂载归属；
 // 退回背包时必须清空，否则物品仍显示为已挂载。
 func (s *Server) setWireParent(ctx context.Context, row *store.Item, parentGUID string) {
@@ -884,7 +914,7 @@ func clearRigFieldsForBackpack(fields []proto.Field, wireClass string) {
 		fields[source].Hex = ""
 	}
 	if sidx := fieldIdxByCS(wireClass, csSlotEnum); sidx >= 0 && fieldOpAt(wireClass, sidx) == "BYTE" {
-		fields[sidx].Num = ptrU64(0) // 背包
+		fields[sidx].Num = ptrU64(rootItemStorageKind(wireClass))
 	}
 }
 
@@ -1023,10 +1053,14 @@ func (s *Server) splitMountableChild(ctx context.Context, uid int64, parentGUID,
 	return childGUID, ""
 }
 
-// materializeHanditemChild 将整堆装填物搬入新的子实例。
-// 返回新子实例 GUID 和已删除的来源堆 GUID。
-// 必须创建新物品，客户端只在创建时建立父子归属。子实例保留整堆数量，
-// 来源堆直接删除，且不保留来源堆引用，避免客户端移除时连带删除子实例。
+// materializeHanditemChild 将装填物搬入新的子实例。缺省只装 1 份
+// （handitem_load_one=1），剩余留在背包；弹弓客户端按装填数量逐颗渲染并抛出
+// （反编译 0xdf2db0 刷新按数量建球进皮兜、0xdf5230 抛投遍历整袋逐颗发射），
+// 整堆装填会一次抛出一大堆而背包只扣 1。抛完由 reloadHanditemAfterThrow
+// 自动从背包补 1 份。handitem_load_one=0 回退整堆装填（来源堆删除）。
+// 返回新子实例 GUID 和已删除的来源堆 GUID（仅整堆搬走时非空）。
+// 必须创建新物品，客户端只在创建时建立父子归属。子实例不写来源堆引用，
+// 换弹时旧子实例按普通物品退回背包（不被 refundableSplitChild 回收）。
 func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parentGUID, itemGUID string) (string, string) {
 	row, err := s.DB.GetItemByGUID(ctx, itemGUID)
 	if err != nil || row == nil {
@@ -1039,6 +1073,10 @@ func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parent
 	if count < 1 {
 		return itemGUID, ""
 	}
+	load := count
+	if s.tunableF("handitem_load_one", 1) != 0 {
+		load = 1 // 弹弓只装 1 颗 ready 球，剩余留背包，抛完自动补 1
+	}
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return itemGUID, ""
@@ -1049,7 +1087,7 @@ func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parent
 	}
 	childGUID := NewItemGUID()
 	if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(childFields) {
-		childFields[q].Num = ptrU64(uint64(count)) // **整堆份数**（不是 1）
+		childFields[q].Num = ptrU64(uint64(load)) // 装填份数（缺省 1，整堆模式为 count）
 	}
 	if p := fieldIdxByCS(row.WireClass, csParent); p >= 0 && p < len(childFields) {
 		childFields[p].Hex = parentGUID
@@ -1070,19 +1108,27 @@ func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parent
 	child := &store.Item{
 		GUID: childGUID, UID: uid, ItemID: row.ItemID, NumericID: row.NumericID,
 		WireClass: row.WireClass, TypeID: row.TypeID, Container: "rig", Slot: 0,
-		RigGUID: parentGUID, Qty: count, FieldsJSON: fj,
+		RigGUID: parentGUID, Qty: load, FieldsJSON: fj,
 		Durability: row.Durability, Workmanship: row.Workmanship,
 		CreatedTS: float64(time.Now().Unix()),
 	}
 	if err := s.DB.InsertItem(ctx, child); err != nil {
-		s.log.Warn("手持物整堆装填失败", "item", shortGUID(itemGUID), "err", err)
+		s.log.Warn("手持物装填失败", "item", shortGUID(itemGUID), "err", err)
 		return itemGUID, ""
 	}
-	// 来源堆必须从客户端移除，否则同一批饵会显示两次。
-	_ = s.DB.DeleteItems(ctx, []string{itemGUID})
-	s.log.Info("手持物装填：整堆搬进新子实例", "src", shortGUID(itemGUID),
-		"count", count, "child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
-	return childGUID, itemGUID
+	if load >= count {
+		// 整堆搬走（整堆模式，或来源堆只剩这一份）：删除来源堆，
+		// 否则同一批饵会显示两次。
+		_ = s.DB.DeleteItems(ctx, []string{itemGUID})
+		s.log.Info("手持物装填：整堆搬进新子实例", "src", shortGUID(itemGUID),
+			"count", count, "child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
+		return childGUID, itemGUID
+	}
+	// 只装 1 份：剩余留在背包，数量减 load（调用方负责推更新树刷新计数）。
+	s.setStackCount(ctx, row, count-load)
+	s.log.Info("手持物装填：只装一份，剩余留背包", "src", shortGUID(itemGUID),
+		"count", count, "load", load, "child", shortGUID(childGUID), "parent", shortGUID(parentGUID))
+	return childGUID, ""
 }
 
 // setHanditemLoadedRef 将手持工具字段 f1 设为当前装填物 GUID；空字符串表示清空。
@@ -1135,7 +1181,7 @@ type rigSetOpts struct {
 	ParentType        int  // 命令族号（13/15/16/17），不是钓组种类
 	EnforceCategory   bool // 显式槽位 ≠ 物品品类时用 fits_slot 校验（17/3/单测路径）
 	SplitStack        bool // 计件物品挂载拆分（钓竿必须拆分；手持工具例外）
-	HanditemFullStack bool // 手持工具 13/x：整堆装填搬进新子实例（来源堆删除）
+	HanditemFullStack bool // 手持工具 13/x：创建装填子实例（缺省只装 1 份）
 }
 
 // rigSetResult 保存装配结果和 800 快照素材。
@@ -1238,8 +1284,8 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 	//     逐份扣减，用尽后写 rebait 记录、抛竿前自动补挂。
 	//   * 其余计件物品（钩、窝料等）：拆出数量为 1 的挂载子实例；
 	//     沉底族多钩需按钩逐份配饵。
-	//   * 手持工具（13/x）：整堆装填搬进新子实例（materializeHanditemChild
-	//     先例）。
+	//   * 手持工具（13/x）：创建装填子实例（materializeHanditemChild）；
+	//     缺省只装 1 份，整堆模式由 handitem_load_one=0 显式回退。
 	// 注：曾短暂实现过浮钓/沉底单钩「整包装填」（来源堆整包搬上钩），
 	// 被反编译证伪：客户端发丝族按子实例数量渲染并计重，整包上钩直接超重；
 	// 整包删源栈还会让第二根竿选不到同种饵。已回归官方的按挂饵方式数量拆分。
@@ -1277,11 +1323,21 @@ func (s *Server) rigSetComponent(ctx context.Context, uid int64, parentGUID stri
 			}
 		}
 	} else if opts.HanditemFullStack {
+		sourceGUID := itemGUID
 		g, srcRemoved := s.materializeHanditemChild(ctx, uid, parentGUID, itemGUID)
 		itemGUID = g
-		if srcRemoved != "" {
-			removed = append(removed, srcRemoved)
-			materialized = true
+		if itemGUID != sourceGUID {
+			materialized = true // 新子实例必须进 f0，客户端才建立父子归属
+			if srcRemoved != "" {
+				removed = append(removed, srcRemoved)
+			} else if src, serr := s.DB.GetItemByGUID(ctx, sourceGUID); serr == nil && src != nil {
+				// 只装 1 份：来源堆留背包、数量减 1，提供新树刷新客户端计数。
+				if t, terr := s.itemTree(ctx, src); terr == nil {
+					res.SourceGUID = sourceGUID
+					res.SourceTree = t
+					updated = append(updated, t)
+				}
+			}
 		}
 	}
 
@@ -1907,15 +1963,16 @@ func (s *Server) rigSetType(ctx context.Context, uid int64, rodGUID string, rigT
 	if !validRigGUID(rodGUID) {
 		return false
 	}
-	if row, err := s.DB.GetItemByGUID(ctx, rodGUID); err == nil && row != nil {
-		// 玩家显式选择优先。已装组件与新类型不完全匹配时也不拒绝，
-		// 后续矫正不能用组件推断覆盖该选择。
-		// 钓组 ↔ 挂饵方式联动：mutate 里 buildRig153Like 已按新类型重算
-		// f9 并把失效的 f8 清零；存档里的旧选择由 savedBaitMount 按同一
-		// 可选集判为未设置，挂饵份数自动回退一份，无需在此删记录。
-		s.rigItemMutate(ctx, rodGUID, nil, nil, &rigType, collect...)
-		_ = s.DB.UpsertRodSetting(ctx, rodGUID, "rig_type_explicit", "1")
+	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
+	if err != nil || row == nil || row.UID != uid {
+		return false
 	}
+	// 玩家显式选择优先。已装组件与新类型不完全匹配时也不拒绝，
+	// 后续矫正不能用组件推断覆盖该选择。
+	// 钓组与挂饵方式联动：mutate 里 buildRig153Like 已按新类型重算 f9，
+	// 并把失效的 f8 清零；旧选择由 savedBaitMount 按同一可选集判为未设置。
+	s.rigItemMutate(ctx, rodGUID, nil, nil, &rigType, collect...)
+	_ = s.DB.UpsertRodSetting(ctx, rodGUID, "rig_type_explicit", "1")
 	_ = s.DB.UpsertRig(ctx, rodGUID, uid, rigType, "", "{}")
 	_ = s.DB.UpdateRigType(ctx, rodGUID, rigType)
 	s.log.Info("竿钓组类型更新", "rod", shortGUID(rodGUID), "rig_type", rigType)
@@ -2370,7 +2427,7 @@ func shortGUID(g string) string {
 // ---- 命令处理器（13/x、15/x、16/x、17/x）----
 
 func registerRigHandlers(d *Dispatch) {
-	d.Register(13, 1, hHanditemSetComp)    // handitem/set_comp 整堆装填（fire-and-forget+推送）
+	d.Register(13, 1, hHanditemSetComp)    // handitem/set_comp 装填（fire-and-forget+推送）
 	d.Register(13, 2, hHanditemRemoveComp) // handitem/remove_comp 按物品 guid 拆
 	d.Register(13, 3, hHanditemRemoveAll)  // handitem/remove_all 全拆
 	d.Register(15, 1, hLureSetComp)        // lure/set_comp
@@ -2383,8 +2440,24 @@ func registerRigHandlers(d *Dispatch) {
 	d.Register(17, 4, hRigRemoveAll)       // rod/remove_all 全拆
 	d.Register(17, 6, hRigBaitMount)       // rod/set_baitmount 挂饵方式
 	d.Register(17, 7, hRodTake)            // rod/take 取竿到手上（158 手持上下文）
+	d.Register(17, 8, hRodPut)             // rod/put 放竿，不结束这根竿的抛投
 	d.Register(13, 4, hHanditemPrepare)    // handitem/prepare 手持物拿到手上（158）
 	d.Register(13, 7, hHanditemSetDist)    // handitem/set_dist 手持物距离（158）
+}
+
+// hRodPut 是 fire-and-forget。竿仍在水中，继续保留自己的鱼和计时器；
+// 放竿不修改背包或钓组，不能用全量物品同步重建客户端的水中装备。
+func hRodPut(ctx *Ctx) ([]byte, bool) {
+	st := ctx.Sess.Srv.fishingStateForRequest(ctx)
+	st.mu.Lock()
+	gear, pending, hooked := st.GearGuid, st.Pending, st.Hooked
+	st.mu.Unlock()
+	fish := ""
+	if pending != nil {
+		fish = shortGUID(pending.FishGUID)
+	}
+	ctx.Log.Info("放竿：保留水中状态", "rod", shortGUID(gear), "fish", fish, "hooked", hooked)
+	return nil, true
 }
 
 // hHanditemPrepare 处理 13/4，将手持物拿到手上并返回 158 手持上下文。
@@ -2399,7 +2472,7 @@ func hHanditemPrepare(ctx *Ctx) ([]byte, bool) {
 	if len(guids) > 0 {
 		gear = guids[0]
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.selectFishingRod(ctx.Sess.Userid, gear)
 	st.mu.Lock()
 	if gear != "" {
 		st.GearGuid = gear // 13/7 读它，不写会让后续 set_dist 回全零
@@ -2543,6 +2616,7 @@ func hRodTake(ctx *Ctx) ([]byte, bool) {
 	if !srv.pendingCatchAllowsCast(ctx, st) {
 		return nil, true
 	}
+	st = srv.selectFishingRod(ctx.Sess.Userid, rod)
 	st.mu.Lock()
 	if rod != "" {
 		st.GearGuid = rod
@@ -2730,7 +2804,10 @@ func hRigSetType(ctx *Ctx) ([]byte, bool) {
 	}
 	cctx := ctx.Sess.pushCtx()
 	var released []*rigReleased
-	srv.rigSetType(cctx, ctx.Sess.Userid, rodGUID, rigType, &released)
+	if !srv.rigSetType(cctx, ctx.Sess.Userid, rodGUID, rigType, &released) {
+		ctx.Log.Warn("17/1 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+		return emptyArgsBody(), true
+	}
 	body, err := proto.EncodeValue(
 		srv.buildRigSnapshotForParent(cctx, rodGUID, "", "", released), ctx.Sess.Table())
 	if err != nil {
@@ -2753,13 +2830,17 @@ func hRigBaitMount(ctx *Ctx) ([]byte, bool) {
 	}
 	cctx := ctx.Sess.pushCtx()
 	if len(ints) > 1 {
+		rodGUID := guids[0]
+		if srv.ownedRodRow(cctx, ctx.Sess.Userid, rodGUID) == nil {
+			ctx.Log.Warn("17/6 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return emptyArgsBody(), true
+		}
 		mask := clampBaitMount(int64(ints[len(ints)-1]))
-		// 客户端 17/6 只带一个整数，没有语义名；落库前先记一条，
-		// 便于把「卡片 ↔ 数值」对上（BaitMountType 取值尚未逐个确认）。
-		ctx.Log.Info("17/6 挂饵方式", "rod", shortGUID(guids[0]), "mask", mask, "guids", len(guids), "ints", len(ints))
-		_ = srv.DB.UpsertRodSetting(cctx, guids[0], baitMountSettingKey, strconv.FormatInt(mask, 10))
-		if err := srv.applyRigBaitMount(cctx, guids[0], mask); err != nil {
-			ctx.Log.Warn("写入挂饵方式失败", "rod", shortGUID(guids[0]), "mask", mask, "err", err)
+		// 客户端 17/6 只带一个整数，没有语义名；落库前先记一条。
+		ctx.Log.Info("17/6 挂饵方式", "rod", shortGUID(rodGUID), "mask", mask, "guids", len(guids), "ints", len(ints))
+		_ = srv.DB.UpsertRodSetting(cctx, rodGUID, baitMountSettingKey, strconv.FormatInt(mask, 10))
+		if err := srv.applyRigBaitMount(cctx, rodGUID, mask); err != nil {
+			ctx.Log.Warn("写入挂饵方式失败", "rod", shortGUID(rodGUID), "mask", mask, "err", err)
 		}
 	}
 	body, err := proto.EncodeValue(srv.buildRigSnapshotFull(cctx, ctx.Sess.Userid), ctx.Sess.Table())
@@ -2864,7 +2945,8 @@ func hRigRemoveCompFamily(ctx *Ctx) ([]byte, bool) {
 }
 
 // hHanditemSetComp 处理 13/1：[容器, 父 GUID, 容器, 物品 GUID]。
-// 整堆装填物搬入新子实例并删除来源堆。该命令无需客户端回包，
+// 缺省只装 1 份，其余留背包，抛后自动补填；handitem_load_one=0 回退整堆装填。
+// 该命令无需客户端回包，
 // 物品变化通过 4/22 和 4/21 推送；响应仍保留完整增量结构。
 func hHanditemSetComp(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv

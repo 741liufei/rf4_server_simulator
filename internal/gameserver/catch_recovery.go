@@ -17,12 +17,14 @@ func (s *Server) recoverCompletedCatchOnLogin(sess *Session) {
 	if s.DB == nil {
 		return
 	}
-	st := s.fishingState(sess.Userid)
-	st.finishMu.Lock()
-	st.mu.Lock()
-	st.persist.recoverCompleted = completedCatchPending(st)
-	st.mu.Unlock()
-	st.finishMu.Unlock()
+	for _, st := range s.fishingStatesFor(sess.Userid) {
+		st.finishMu.Lock()
+		st.mu.Lock()
+		st.persist.recoverCompleted = completedCatchPending(st)
+		st.mu.Unlock()
+		st.finishMu.Unlock()
+		s.resumeFishingState(st)
+	}
 	if err := s.recoverCompletedCatch(sess.Userid, nil); err != nil && !errors.Is(err, store.ErrKeepnetFull) {
 		s.log.Warn("待处理渔获恢复失败，原鱼已保留", "uid", sess.Userid, "err", err)
 	}
@@ -32,14 +34,18 @@ func (s *Server) recoverCompletedCatch(uid int64, notify *Session) error {
 	if s.DB == nil {
 		return nil
 	}
-	st := s.fishingState(uid)
-	st.finishMu.Lock()
-	entry, err := s.recoverCompletedCatchLocked(st)
-	st.finishMu.Unlock()
-	if err == nil && entry != nil && notify != nil {
-		notify.Push(4, 22, proto.Args(proto.S("61"), s.keepnetItemTree(notify.pushCtx(), entry, entry.KeepLevel)))
+	for _, st := range s.fishingStatesFor(uid) {
+		st.finishMu.Lock()
+		entry, err := s.recoverCompletedCatchLocked(st)
+		st.finishMu.Unlock()
+		if err != nil {
+			return err
+		}
+		if entry != nil && notify != nil {
+			notify.Push(4, 22, proto.Args(proto.S("61"), s.keepnetItemTree(notify.pushCtx(), entry, entry.KeepLevel)))
+		}
 	}
-	return err
+	return nil
 }
 
 func (s *Server) recoverCompletedCatchLocked(st *FishState) (*store.KeepnetEntry, error) {

@@ -23,8 +23,10 @@ func newFishingRecoveryServer(t *testing.T, db *store.DB) *Server {
 func stopFishingRecoveryTimers(srv *Server) {
 	srv.fishMu.Lock()
 	states := make([]*FishState, 0, len(srv.fishStates))
-	for _, st := range srv.fishStates {
-		states = append(states, st)
+	for _, rods := range srv.fishStates {
+		for _, st := range rods {
+			states = append(states, st)
+		}
 	}
 	srv.fishMu.Unlock()
 	for _, st := range states {
@@ -64,6 +66,7 @@ func TestFishingStateRestorePendingNoReroll(t *testing.T) {
 	castAt := time.Now().Add(-2 * time.Second)
 	biteAt := castAt.Add(13 * time.Second)
 	want := &RolledFish{
+		GearGUID: "11111111111111111111111111111111",
 		FishGUID: "22222222222222222222222222222222",
 		Species:  "c.roach",
 		Grade:    2,

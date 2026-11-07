@@ -82,11 +82,13 @@ func TestGearWeightCapUsesHookEntryGeometry(t *testing.T) {
 		RodPowerKg: 100, LineStrengthKg: 100, LeaderStrengthKg: 100,
 		HookPresent: true, HookStrengthKg: 80, HookLengthMM: 5, HookSize: 12, LineStretch: 0,
 	}
-	if got := gearWeakestPart(spec); got != "rod" {
-		t.Fatalf("最弱断件=%q，期望 rod；鱼钩只限制派鱼口径，不进入用户定义的炸杆链", got)
+	// 钩虽然装在末端，但它有真实拉力：80kg 的钩就是这副钓组的最弱环，
+	// 大鱼吃小钩时先被拉直/拉断的是钩。
+	if got := gearWeakestPart(spec); got != "hook" {
+		t.Fatalf("最弱断件=%q，期望 hook", got)
 	}
-	if got := gearBreakLimitKg(spec); math.Abs(got-100) > 1e-9 {
-		t.Fatalf("承力链限额=%f，期望竿/线/子线 100kg", got)
+	if got := gearBreakLimitKg(spec); math.Abs(got-80) > 1e-9 {
+		t.Fatalf("承力链限额=%f，期望钩 80kg", got)
 	}
 	// 5mm 钩按立方口径上限 = 8 * 5^3 = 1000g，再允许 35% 控鱼余量。
 	if got := gearWeightCapKg(spec); math.Abs(got-1.35) > 1e-9 {

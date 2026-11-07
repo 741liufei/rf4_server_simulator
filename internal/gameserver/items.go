@@ -119,6 +119,7 @@ var categoryWireClass = map[int64]wireClassEntry{
 	72: {"enikeammfen", 2015},  // case 70 iidloljandl
 	76: {"fdnngkgnmon", 13041}, // case 74 ghikepgmojg
 	78: {"dapkdcghfmg", 11301}, // case 76 ipdpoaiekem
+	82: {"ckfmndabaei", 11304}, // imdcjllgdcn 卡册
 	80: {"ipdakkbfoja", 13301}, // 技能书（客户端按 wrapper 承载书目配置）
 	81: {"kbpmmclfipg", 1470},  // 渔轮电机（装在轮 f14 扩展槽，DTO odlknjlbooh）
 }
@@ -305,6 +306,13 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 	obj := proto.Obj(it.WireClass, uint32(it.TypeID), fields...)
 
 	class := it.WireClass
+	if class == deckClass {
+		cards, err := cardsInDeck(it)
+		if err != nil {
+			return nil, err
+		}
+		obj.Fields[0].Val = tradingCardList(cards...)
+	}
 
 	// 状态位零值兜底（存量行为 0 → 客户端当未初始化）
 	def, derr := s.DB.GetItemDef(ctx, it.NumericID)
@@ -317,6 +325,9 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 		// 强度、曳力、成色、容器枚举都由权威数据推导，保证发给客户端的树一致。
 		s.materializeInto(ctx, class, def, obj, it.GUID, it.Workmanship, it.Durability)
 		s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+		if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+			return nil, err
+		}
 	}
 	// 鱼竿动态接管（竿上组件/钓组/挂线挂轮必须现算，快照过期会让插槽列表失真）
 	if class == "cnolibojkao" {
@@ -330,7 +341,7 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 	return obj, nil
 }
 
-// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f2、拟饵 f0 出厂钩。
+// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f3、拟饵 f0 出厂钩。
 // 只填充空槽，已有子对象的槽保持不变。
 func (s *Server) materializeInto(ctx context.Context, class string, def *store.ItemDef, obj *proto.Value, guid string, workmanship, durability float64) {
 	attrs := defAttrs(def)
@@ -353,7 +364,7 @@ func (s *Server) materializeInto(ctx context.Context, class string, def *store.I
 	switch class {
 	case "dgjinoebdop": // 渔轮 f2..f14
 		fill(reelPartKeys, false)
-	case "oldfpclaabo": // 前导 f1/f2（f3 线槽 def 无配置恒 null）
+	case "oldfpclaabo": // 前导 f1 前导线、f2 连接件、f3 普通主线
 		fill(leaderPartKeys, false)
 		if idx := fieldIdxByCS(class, gearAttrLeaderIn); idx >= 0 && idx < len(obj.Fields) {
 			if normalized, changed := normalizeLeaderInnerWire(obj.Fields[idx].Val); changed {
@@ -432,11 +443,12 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 		}
 	}
 	if idx := fieldIdxByCS(class, csSlotEnum); idx >= 0 && fieldOpAt(class, idx) == "BYTE" {
-		// 根物品即使已装配，wire 容器枚举仍为 0。
+		// 卡片属于专用收藏库存；其余根物品即使已装配，wire 容器枚举仍为 0。
 		// container='rig' 是服务端归属，不是物品对象的 lmmhdlhogdc；
 		// 只有母物品内部的嵌套子实例使用 rig(4)。
-		if u64Of(fields[idx].Num) != 0 {
-			fields[idx].Num = ptrU64(0)
+		kind := rootItemStorageKind(class)
+		if u64Of(fields[idx].Num) != kind {
+			fields[idx].Num = ptrU64(kind)
 			changed = true
 		}
 	}
@@ -449,17 +461,8 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 	// 安装的摩擦片制动力，缺失时才回退到出厂摩擦片；传动比只在齿轮
 	// 子件自己的强度字段里出现，不能污染母轮上限。
 	if class == "dgjinoebdop" {
-		strength := s.reelBaseDragFromRow(ctx, it)
-		if strength > 0 {
-			idx := fieldIdxByCS(class, csStrength)
-			if setWireFloat(fields, class, idx, strength) {
-				changed = true
-			}
-		} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
-			idx := fieldIdxByCS(class, csStrength)
-			if setWireFloat(fields, class, idx, strength) {
-				changed = true
-			}
+		if s.canonicalizeReelStrength(ctx, it, fields) {
+			changed = true
 		}
 	} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
 		idx := fieldIdxByCS(class, csStrength)
@@ -488,10 +491,14 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 					changed = true
 				}
 			}
-			force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
-			si := fieldIdxByCS(sub.Class, csDragForce)
-			if setWireFloat(sub.Fields, sub.Class, si, force) {
-				changed = true
+			// csDragForce 是持久化的磨损状态：字段已存在（含 0=已磨穿）必须原样
+			// 下发，只在字段缺失（新物品/历史档）时用零件定义值初始化。旧实现
+			// 每次下发都重算，会把磨损悄悄刷回满值并随启动修复写回数据库。
+			if _, present, si := frictionWasherDrag(sub); !present && si >= 0 && si < len(sub.Fields) {
+				force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
+				if force > 0 && setWireFloat(sub.Fields, sub.Class, si, force) {
+					changed = true
+				}
 			}
 		}
 	}
@@ -608,6 +615,29 @@ func canonicalizeNestedItemContainers(class string, fields []proto.Field) bool {
 	return changed
 }
 
+// canonicalizeReelStrength updates only the reel root scale, leaving installed
+// parts untouched. FieldsJSON must describe the currently selected parts.
+func (s *Server) canonicalizeReelStrength(ctx context.Context, it *store.Item, fields []proto.Field) bool {
+	if it == nil || it.WireClass != "dgjinoebdop" {
+		return false
+	}
+	if strength, present := s.reelInstalledDragFieldFromRow(ctx, it); present {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	strength := s.reelBaseDragFromRow(ctx, it)
+	if strength > 0 {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	def, err := s.itemDefForRow(ctx, it)
+	if err != nil || def == nil {
+		return false
+	}
+	if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	return false
+}
+
 // setWireFloat 写入 wire 浮点字段；兼容 FLOAT/DOUBLE 与 U32 承载 IEEE754 的
 // registry 布局。返回是否真的改变，供一次性数据修复决定是否落库。
 func setWireFloat(fields []proto.Field, class string, idx int, v float64) bool {
@@ -681,10 +711,9 @@ func (s *Server) rebuildRod(ctx context.Context, it *store.Item, obj *proto.Valu
 	// 都按 f5 的 gcfcdnfmnbh 逐行渲染，缺了它们零件行就是空的。
 	s.appendFactoryPartsToRig(ctx, obj)
 
-	// f16 Ticks now / f18 状态位 = 定义 | 2048
-	if idx := fieldIdxByCS("cnolibojkao", csCreated); idx >= 0 {
-		obj.Fields[idx].Num = ptrU64(uint64(netTicksNow()))
-	}
+	// 版本戳由实际装配/耐久修改推进。读取时变更版本会使客户端把未改动的
+	// 水中鱼竿也当作新快照重建，切竿或同步背包不应改变搏鱼实体。
+	// f18 状态位 = 定义 | 2048
 	if idx := fieldIdxByCS("cnolibojkao", "hgaijieklek"); idx >= 0 {
 		st := u64Of(obj.Fields[idx].Num)
 		if defBits, ok := defAttrU64(def, "hgaijieklek"); ok {
@@ -866,14 +895,22 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 		}
 	}
 	clipM, _ := s.savedReelClipM(ctx, it.GUID)
+	drag := defaultReelDragSetting
+	if saved, ok := s.rodReelDragSetting(ctx, it.GUID); ok {
+		drag = saved
+	}
+	speed := defaultReelSpeed
+	if saved, ok := s.rodReelSpeedSetting(ctx, it.GUID); ok {
+		speed = saved
+	}
 	return wiregen.MustMakeObj("gbbhdkefnkn", map[int]*proto.Value{
 		0: proto.StrVal(name),
 		1: proto.U32(uint32(rigType)),
 		2: components,
 		4: proto.U32(uint32(depth)),
 		5: proto.U32(uint32(clipM)),
-		6: proto.U32(15),
-		7: proto.U32(15),
+		6: proto.U32(uint32(drag)),
+		7: proto.U32(uint32(speed)),
 	})
 }
 
@@ -1061,7 +1098,7 @@ var reclassifyCategories = map[int64]bool{
 	2: true, 19: true, 20: true, 30: true, 33: true, 38: true, 41: true,
 	42: true, 45: true, 47: true, 55: true, 57: true, 58: true, 61: true,
 	62: true, 63: true, 69: true, 70: true, 71: true, 72: true, 76: true,
-	78: true, 79: true,
+	78: true, 79: true, 82: true,
 }
 
 func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *store.ItemDef) (bool, error) {
@@ -1140,6 +1177,9 @@ func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *
 	it.Workmanship = workmanship
 	it.Durability = durability
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return false, err
+	}
 	fieldsJSON, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return false, err
@@ -1221,7 +1261,7 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 
 	it := &store.Item{
 		GUID: guid, UID: uid, ItemID: def.ItemID, NumericID: def.NumericID,
-		WireClass: cls.Class, TypeID: cls.TypeID, Container: container, Slot: 0,
+		WireClass: cls.Class, TypeID: cls.TypeID, Container: tradingItemContainer(cls.Class, container), Slot: 0,
 		Qty: rowQty, Durability: 1.0, Workmanship: 1.0,
 		CreatedTS: float64(time.Now().Unix()),
 	}
@@ -1232,6 +1272,9 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 		}
 	}
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return nil, err
+	}
 	fieldsJSON, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return nil, err

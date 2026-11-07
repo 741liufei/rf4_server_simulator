@@ -18,9 +18,12 @@ func (s *Server) pendingCatchAllowsCast(ctx *Ctx, st *FishState) bool {
 		ctx.ReplyFailure("System.InvalidOperationException", message)
 		return false
 	}
-	st.mu.Lock()
-	blocked := completedCatchPending(st)
-	st.mu.Unlock()
+	blocked := false
+	for _, rod := range s.fishingStatesFor(ctx.Sess.Userid) {
+		rod.mu.Lock()
+		blocked = blocked || completedCatchPending(rod)
+		rod.mu.Unlock()
+	}
 	if blocked {
 		ctx.ReplyFailure("System.InvalidOperationException", "请先将本次渔获入护或放生")
 	}

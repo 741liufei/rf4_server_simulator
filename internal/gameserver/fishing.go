@@ -17,7 +17,7 @@ import (
 
 // 钓鱼状态、判鱼、咬钩调度和 14/14 推送。
 
-// FishState 保存单个玩家的钓鱼状态，重连后继续使用。
+// FishState 保存玩家单根竿的钓鱼状态，重连后继续使用。
 type FishState struct {
 	mu          fishStateMutex
 	finishMu    sync.Mutex
@@ -26,7 +26,7 @@ type FishState struct {
 	Loc         string
 	Spot        uint64
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
-	ReelSetting int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
+	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
 	CastActive  bool
 	InWater     bool
 	NeedBite    bool
@@ -219,14 +219,14 @@ func (s *Server) armBiteTimerLocked(uid int64, st *FishState, due time.Time) {
 	st.cancelBiteTimerLocked()
 	st.BiteAt = due
 	ticket := fishingTimerTicket{st.castGeneration, st.biteTicket}
-	st.biteTimer = time.AfterFunc(time.Until(due), func() { s.onBiteTimerTicket(uid, ticket) })
+	st.biteTimer = time.AfterFunc(time.Until(due), func() { s.onRodBiteTimerTicket(uid, st, ticket) })
 }
 
 func (s *Server) armPendingTimerLocked(uid int64, st *FishState, delay time.Duration) {
 	st.cancelPendingTimerLocked()
 	ticket := fishingTimerTicket{st.castGeneration, st.pendingTicket}
 	fish := st.Pending
-	st.pendingTimer = time.AfterFunc(delay, func() { s.repushPendingTicket(uid, ticket, fish) })
+	st.pendingTimer = time.AfterFunc(delay, func() { s.repushRodPendingTicket(uid, st, ticket, fish) })
 }
 
 // maxPendingRepush 限制 14/12 f0=3/5/6 连续拒收鱼实体时的重推次数。
@@ -235,6 +235,7 @@ const maxPendingRepush = 2
 
 // RolledFish 待结算/已结算的鱼。
 type RolledFish struct {
+	GearGUID       string // 发鱼时的原竿；切手持竿不能改变这尾鱼的归属。
 	HookGUID       string
 	HappyHour      bool
 	HappyHourKnown bool
@@ -259,18 +260,6 @@ type RolledFish struct {
 func (s *Server) stateFor(uid int64) *FishState {
 	st := s.fishingState(uid)
 	s.resumeFishingState(st)
-	return st
-}
-
-// fishingState 读取状态，不因欢乐时光计时查询重排钓鱼回调。
-func (s *Server) fishingState(uid int64) *FishState {
-	s.fishMu.Lock()
-	st, ok := s.fishStates[uid]
-	if !ok {
-		st = s.newFishState(uid)
-		s.fishStates[uid] = st
-	}
-	s.fishMu.Unlock()
 	return st
 }
 
@@ -507,10 +496,10 @@ const (
 	verifiedStaminaPerGram      = 2.3880400747623083
 	verifiedInitialStaminaRatio = 0.5628187656402588
 	verifiedForcePerGram        = 0.009806650025503976
-	// 实机反馈鱼体力见底过快：默认把体力池放大 4 倍，并让鱼以 85% 体力开局。
-	// 两项都可通过 tunables 的 fish_stamina_scale / fish_initial_stamina_ratio 调整。
-	defaultFishStaminaScale        = 4.0
-	defaultFishInitialStaminaRatio = 0.85
+	// 默认使用真实样本校准值；需要调整手感时只通过 tunables 显式覆盖，
+	// 不再把主观补偿值作为全体鱼的基准。
+	defaultFishStaminaScale        = 1.0
+	defaultFishInitialStaminaRatio = verifiedInitialStaminaRatio
 )
 
 // lengthSeed 保存体长公式 k*w^p 的参数。
@@ -1451,6 +1440,7 @@ func (s *Session) Push14_14(f *RolledFish, hookGUID, gearGuid string) bool {
 	initialStamina := s.Srv.fishInitialStaminaRatio()
 	force := s.Srv.fishFightPullFor(f, profile)
 	s.log.Info("14/14 发鱼",
+		"rod", shortGUID(gearGuid), "fish", shortGUID(f.FishGUID), "hook", shortGUID(hookGUID),
 		"鱼种", f.Species, "重量_g", f.WeightG, "体力池", stamina,
 		"初始体力", initialStamina, "拉力", force, "体型比例", profile.SizeRatio,
 		"冲刺倍率", profile.ForceScale, "耐力倍率", profile.StaminaScale)
@@ -1520,9 +1510,16 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	now := time.Now()
-	bonus := s.fishingBonus(sess.pushCtx(), sess.Userid, st.RigType)
+	bonus := s.fishingBonus(sess.pushCtx(), sess.Userid, st.RigType, st.GearGuid)
 	st.mu.Lock()
 	if completedCatchPending(st) {
+		st.mu.Unlock()
+		return false
+	}
+	// 14/7 的“补排咬钩”只用于 14/14 尚未到达的场景。若当前鱼已经
+	// Pending、已推送或正在推送，绝不能再清空状态重排，否则会把第一条鱼
+	// 覆盖成新鱼，几秒后客户端收到第二条 14/14。
+	if !resetCast && (st.Pending != nil || st.PushSent || st.pushing != nil) {
 		st.mu.Unlock()
 		return false
 	}
@@ -1567,11 +1564,14 @@ func (s *Server) onBiteTimer(uid int64) {
 }
 
 func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
+	s.onRodBiteTimerTicket(uid, s.fishingState(uid), ticket)
+}
+
+func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTimerTicket) {
 	sess := s.liveSessionByUID(uid)
 	if sess != nil {
 		sess.updateHappyHour(time.Now(), false)
 	}
-	st := s.fishingState(uid)
 	st.mu.Lock()
 	if ticket.generation != st.castGeneration || ticket.sequence != st.biteTicket {
 		st.mu.Unlock()
@@ -1660,6 +1660,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		probability = math.Min(.95, probability)
 	}
 	if rand.Float64() >= probability {
+		s.log.Info("鱼口未命中，继续等待", "rod", shortGUID(st.GearGuid), "rig_type", st.RigType)
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()
 		return
@@ -1680,6 +1681,7 @@ func (s *Server) onBiteTimerTicket(uid int64, ticket fishingTimerTicket) {
 		now: now, weather: sess.weatherAt(st.Loc, now), happyBite: sess.currentHappyHour().BiteBonus,
 	})
 	if f == nil {
+		s.log.Info("本轮无符合条件的鱼，继续等待", "rod", shortGUID(st.GearGuid), "rig_type", st.RigType)
 		s.emptyWeatherBiteLocked(sess, st, now)
 		st.mu.Unlock()
 		return
@@ -1713,7 +1715,10 @@ func (s *Server) repushPending14_14(uid int64, expectedFishGUID ...string) {
 }
 
 func (s *Server) repushPendingTicket(uid int64, ticket fishingTimerTicket, fish *RolledFish) {
-	st := s.fishingState(uid)
+	s.repushRodPendingTicket(uid, s.fishingState(uid), ticket, fish)
+}
+
+func (s *Server) repushRodPendingTicket(uid int64, st *FishState, ticket fishingTimerTicket, fish *RolledFish) {
 	sess := s.liveSessionByUID(uid)
 	st.mu.Lock()
 	if ticket.generation != st.castGeneration || ticket.sequence != st.pendingTicket || st.Pending != fish {
@@ -1743,6 +1748,9 @@ func (s *Server) pushPendingBite(sess *Session, st *FishState, f *RolledFish, ge
 		return
 	}
 	st.pushing = f
+	if f.GearGUID == "" {
+		f.GearGUID = gear
+	}
 	st.persist.recoverPending = false
 	st.mu.Unlock()
 	sent := s.pushBaitedFish(sess, f, gear)
@@ -1804,8 +1812,9 @@ func gradeZhName(grade int64) string {
 	return "普通"
 }
 
-// fishLandedText 钓获结算提示文本：奖杯/蓝冠与破纪录必报；普通鱼由结算卡
-// 展示，聊天只报重要事件，避免刷屏。空串表示不播报。
+// fishLandedText 钓获结算提示文本（KV 模板未启用时的降级文案）：
+// 达标（Grade 2，超绿旗未到黄旗）及以上、以及破纪录必报；未达标鱼由结算卡
+// 展示，聊天不播报。空串表示不播报。
 func (s *Server) fishLandedText(f *RolledFish, newRecord bool) string {
 	if s == nil || f == nil {
 		return ""
@@ -1813,14 +1822,12 @@ func (s *Server) fishLandedText(f *RolledFish, newRecord bool) string {
 	name := s.speciesZhName(s.dbCtx(), f.Species)
 	weight := formatWeightG(f.WeightG)
 	switch {
-	case f.Grade >= 3:
+	case f.Grade >= 2:
 		text := fmt.Sprintf("钓获%s：%s %s", gradeZhName(f.Grade), name, weight)
 		if newRecord {
 			text += "（新纪录）"
 		}
 		return text
-	case newRecord:
-		return fmt.Sprintf("新纪录：%s %s", name, weight)
 	}
 	return ""
 }
@@ -1858,7 +1865,22 @@ func (s *Server) fishEscapeText(f *RolledFish, reason string) string {
 		s.speciesZhName(s.dbCtx(), f.Species), formatWeightG(f.WeightG), reason)
 }
 
-// notifyFishLanded 播报蓝冠、奖杯和破纪录；普通鱼由结算卡展示。
+// fishAnnouncementKind 返回落地播报使用的聊天模板类型；0 表示不发模板。
+// 25=超级稀有（Grade>=4 蓝冠）、26=稀有（Grade 3 奖杯）、3=达标（Grade 2，
+// 重量超过绿旗但未到黄旗）；未达标（Grade 1）一律不播报。
+func fishAnnouncementKind(grade int64) int {
+	switch {
+	case grade >= 4:
+		return 25
+	case grade == 3:
+		return 26
+	case grade == 2:
+		return 3
+	}
+	return 0
+}
+
+// notifyFishLanded 播报达标、奖杯和蓝冠；普通鱼由结算卡展示。
 func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) {
 	if sess == nil || f == nil {
 		return
@@ -1877,25 +1899,19 @@ func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) 
 		if text := s.fishLandedText(f, newRecord); text != "" {
 			sess.pushSystemChat(text)
 		}
-		return
+	} else if kind := fishAnnouncementKind(f.Grade); kind != 0 {
+		// 25=稀有奖杯（蓝冠，kDlg_Chat_EventFishCaughtRareTrophy）、
+		// 26=奖杯（kDlg_Chat_EventFishCaughtTrophy）、3=达标（玩家，鱼名 X 千克）。
+		sess.pushChatProbe(27, kind, "", kv)
 	}
-	switch {
-	case f.Grade >= 4:
-		sess.pushChatProbe(27, 25, "", kv) // 超级稀有鱼 X 千克
-	case f.Grade == 3:
-		sess.pushChatProbe(27, 26, "", kv) // 稀有鱼 X 千克
-	case newRecord:
-		sess.pushChatProbe(27, 3, "", kv) // 玩家，鱼名 X 千克
-	}
+
 }
 
-// notifyFishKept 入护播报。
+// notifyFishKept 入护播报已永久停用：结算卡已经展示入护结果，
+// 聊天里再补一条白色“入护：…”只是重复信息，未达标/达标鱼都不再发。
 func (s *Server) notifyFishKept(sess *Session, f *RolledFish) {
-	if sess == nil {
+	if sess == nil || f == nil {
 		return
-	}
-	if text := s.fishKeptText(f); text != "" {
-		sess.pushSystemChat(text)
 	}
 }
 
@@ -1970,8 +1986,9 @@ func (s *Server) notifyFishEscape(sess *Session, f *RolledFish, reason string) {
 		}
 	}
 	taunt := fishEscapeTaunts[rand.Intn(len(fishEscapeTaunts))]
-	// 客户端 KV 模板恒在句尾追加“X 克/公斤”段（缺键2 显示“0 克”），
-	// 重量只能放句尾：文案不带重量数字，键2 带真实重量。
+	// 客户端 KV 模板恒在文案末尾追加“X 克/公斤”（缺键2 显示“0 克”），
+	// 服务端无法把重量插到句子中间。想让重量紧跟鱼名，只能把鱼名放到句尾：
+	//   "这都能跑！你的 稀有 丁鱵" + 客户端追加 " 1.5 千克"
 	text := "你的 " + tier + name + "，跑掉了，" + taunt + "！"
 	sess.pushChatProbe(27, 3, "", fishTVKv(text, weight))
 }

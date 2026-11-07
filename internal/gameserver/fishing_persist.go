@@ -3,6 +3,7 @@ package gameserver
 import (
 	"encoding/json"
 	"sync"
+	"time"
 
 	"rf4server/internal/store"
 )
@@ -19,6 +20,7 @@ type fishPersistMeta struct {
 	sync.Mutex
 	server           *Server
 	uid              int64
+	rodGUID          string // 不可变快照键；装备失效清GearGuid时仍更新原行
 	lastSnapshot     string
 	sessionID        uint64 // 仅进程内：检测重连/会话接管
 	recoverPending   bool   // 仅进程内：重连后重推同一尾 pending，不重新 roll
@@ -49,7 +51,7 @@ func (m *fishStateMutex) Unlock() {
 }
 
 // newFishState 首次建内存状态时从 DB 恢复。Keepnet 不在此恢复：DB 是权威源。
-func (s *Server) newFishState(uid int64) *FishState {
+func (s *Server) newFishState(uid int64, saved *store.FishingState) *FishState {
 	st := &FishState{
 		Loc:  "loc1_02",
 		Spot: 573,
@@ -62,14 +64,10 @@ func (s *Server) newFishState(uid int64) *FishState {
 	st.persist.server = s
 	st.persist.uid = uid
 
-	if s.DB != nil {
-		saved, err := s.DB.LoadFishingState(s.dbCtx(), uid)
-		if err != nil {
-			s.log.Warn("读取钓鱼恢复状态失败", "uid", uid, "err", err)
-		} else if saved != nil {
-			applyPersistedFishingState(st, saved)
-			st.persist.recoverPending = saved.Pending != nil
-		}
+	if saved != nil {
+		st.persist.rodGUID = saved.RodGUID
+		applyPersistedFishingState(st, saved)
+		st.persist.recoverPending = saved.Pending != nil
 	}
 	if raw, err := json.Marshal(fishingStateSnapshot(st)); err == nil {
 		st.persist.lastSnapshot = string(raw)
@@ -99,6 +97,9 @@ func applyPersistedFishingState(st *FishState, saved *store.FishingState) {
 	st.Hooked = saved.Hooked
 	st.Resolved = saved.Resolved
 	st.Pending = rolledFishFromStore(saved.Pending)
+	if st.Pending != nil && st.Pending.GearGUID == "" {
+		st.Pending.GearGUID = saved.GearGUID
+	}
 	if saved.Bait != "" {
 		st.Bait = saved.Bait
 	}
@@ -121,6 +122,7 @@ func fishingStateSnapshot(st *FishState) *store.FishingState {
 	}
 	return &store.FishingState{
 		UID:            st.persist.uid,
+		RodGUID:        st.persist.rodGUID,
 		GearGUID:       st.GearGuid,
 		RigType:        st.RigType,
 		Loc:            st.Loc,
@@ -153,6 +155,7 @@ func rolledFishToStore(f *RolledFish) *store.FishingFish {
 		return nil
 	}
 	return &store.FishingFish{
+		GearGUID:   f.GearGUID,
 		HookGUID:   f.HookGUID,
 		BaitGUIDs:  f.BaitGUIDs,
 		BaitsKnown: f.BaitsKnown,
@@ -175,6 +178,7 @@ func rolledFishFromStore(f *store.FishingFish) *RolledFish {
 		return nil
 	}
 	return &RolledFish{
+		GearGUID:   f.GearGUID,
 		HookGUID:   f.HookGUID,
 		BaitGUIDs:  f.BaitGUIDs,
 		BaitsKnown: f.BaitsKnown,
@@ -205,7 +209,8 @@ func (s *Server) resumeFishingState(st *FishState) {
 	}
 
 	st.mu.Lock()
-	if st.persist.sessionID != sess.ID {
+	resumed := st.persist.sessionID != sess.ID
+	if resumed {
 		st.persist.sessionID = sess.ID
 		if st.Pending != nil && st.CastActive && !st.Resolved {
 			st.persist.recoverPending = true
@@ -228,12 +233,21 @@ func (s *Server) resumeFishingState(st *FishState) {
 		st.mu.Unlock()
 		return
 	}
-
 	due := st.BiteAt
 	if due.IsZero() {
 		// 快照缺少 BiteAt 时从 CastTs 重新计算；
 		// onBiteTimer 的落水保护仍会阻止过早判鱼。
 		due = st.CastTs
+	}
+	if !resumed && due.Before(time.Now()) {
+		// 同一会话内 BiteAt 已过期，说明该咬钩时刻已被消费——典型是
+		// “饵未入水”到点自毁的 NeedBite 等待态，应等 14/7 补排重新排期。
+		// 用过期时刻重排会 arm 出立即触发的 timer，与补排赛跑：timer 先
+		// 判鱼推出，补排随后清场抹掉再排一枪——搏鱼中被推出第二尾不同
+		// 鱼种，入库与搏鱼所见不符（2026-11-06 23:57 日志实证）。
+		// 过期补枪只保留给重启/重连恢复（resumed 为真）。
+		st.mu.Unlock()
+		return
 	}
 	s.armBiteTimerLocked(st.persist.uid, st, due)
 	st.mu.Unlock()

@@ -38,6 +38,19 @@ func TestCheckTicket(t *testing.T) {
 		t.Fatalf("3/7 应回 type_id=%d 的 obj，实得 kind=%s type=%d class=%s",
 			boatTicketTypeID, dec.Kind, dec.TypeID, dec.Class)
 	}
+	anchorIdx := fieldIdxByCS(dec.Class, "oieepfcgjgn")
+	activeIdx := fieldIdxByCS(dec.Class, "knpoijanngk")
+	if anchorIdx < 0 || activeIdx < 0 {
+		t.Fatal("3/7 响应缺少船票锚点或激活字段")
+	}
+	if got := u64Of(dec.Fields[activeIdx].Num); got != 1 {
+		t.Fatalf("3/7 激活字段=%d，期望 1", got)
+	}
+	wantAnchor := uint64(worldTotalGameMin(time.Now()))
+	gotAnchor := u64Of(dec.Fields[anchorIdx].Num)
+	if diff := int64(gotAnchor) - int64(wantAnchor); diff < -2 || diff > 2 {
+		t.Fatalf("3/7 锚点=%d，期望世界时钟坐标约 %d", gotAnchor, wantAnchor)
+	}
 
 	// 3/7 重新上船必须覆盖更早的 3/10 下船事件。
 	st := srv.stateFor(sess.Userid)
@@ -92,5 +105,55 @@ func TestOnBoatStateNeedsBoardingEvidence(t *testing.T) {
 	}
 	if on, known := st.onBoatLocked(2500); on || !known {
 		t.Fatal("船票到期后应判定为已下船")
+	}
+}
+
+func TestActiveRentalTicketRepairsLegacyWorldAnchor(t *testing.T) {
+	srv, sess, ctx := newMiscProbe(t)
+	it, err := srv.CreateItem(ctx, 1000001, "ticket_boat_komar_24", "backpack", 1)
+	if err != nil || it == nil {
+		t.Fatalf("创建船票失败: %v", err)
+	}
+
+	activate := proto.Args524(proto.U32(1), proto.GuidArr([]string{it.GUID}))
+	if body, ok := hCheckTicket(miscCtx(sess, 3, 7, activate)); !ok || len(body) == 0 {
+		t.Fatal("3/7 激活船票失败")
+	}
+
+	row, err := srv.DB.GetItemByGUID(ctx, it.GUID)
+	if err != nil || row == nil {
+		t.Fatalf("读取船票失败: %v", err)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorIdx := fieldIdxByCS(row.WireClass, "oieepfcgjgn")
+	if anchorIdx < 0 {
+		t.Fatal("船票缺少世界时钟锚点")
+	}
+	fields[anchorIdx].Num = ptrU64(1)
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.DB.UpdateItemFields(ctx, row.GUID, fj, row.Qty, row.Durability,
+		row.Workmanship, row.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+
+	query := proto.Args524(proto.U32(1), proto.Guid(strings.Repeat("0", 32), 0x17))
+	body, ok := hCheckTicket(miscCtx(sess, 3, 7, query))
+	if !ok || len(body) == 0 {
+		t.Fatal("3/7 按站点复用有效票失败")
+	}
+	dec, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotAnchor := u64Of(dec.Fields[anchorIdx].Num)
+	wantAnchor := uint64(worldTotalGameMin(time.Now()))
+	if diff := int64(gotAnchor) - int64(wantAnchor); diff < -5 || diff > 5 {
+		t.Fatalf("复用票锚点=%d，期望世界时钟坐标约 %d", gotAnchor, wantAnchor)
 	}
 }

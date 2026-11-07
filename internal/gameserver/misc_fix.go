@@ -378,9 +378,9 @@ func (s *Session) pushChatProbe(channel, kind int, text string, kv *proto.Value)
 		kind, outerU32, haveOuter = 26, proto.F32Bits(7777), true
 	case -33: // 外层=频道名+重量裸值
 		kind, outerU32, haveOuter = 26, 7777, true
-	case -34: // f1=重量数字文本，k26 稀有鱼模板
+	case -34: // f1=重量数字文本，k26 奖杯模板
 		kind = 26
-	case -35: // f1=重量数字文本，k25 超级稀有鱼模板
+	case -35: // f1=重量数字文本，k25 稀有奖杯（蓝冠）模板
 		kind = 25
 	case -36: // f1=重量数字文本，k03 普通钓获模板
 		kind = 3

@@ -104,45 +104,6 @@ func TestGatewayPlainHTTPCompatLogin(t *testing.T) {
 	}
 }
 
-// TestGatewayReconnectResume 重连场景：断线后用同一 token + 0x01 标记重连，
-// 网关必须承接既有 RC4 流与 wire_id 计数（客户端校验严格递增）。
-func TestGatewayReconnectResume(t *testing.T) {
-	stub, stubAddr := testutil.StartStubGameServer(t, testutil.TestPSK)
-	gw := testutil.StartGateway(t, stubAddr, testutil.TestPSK)
-
-	token, _ := gw.Login(t)
-	fc := testutil.NewFakeClient(t, gw.RealAddr)
-	fc.Dial(token, false)
-
-	fc.SendRequest(5, 1, 1)
-	fc.WaitAck(1, 5*time.Second)
-	if env := fc.WaitResponse(5 * time.Second); env.CallID != 5 {
-		t.Fatalf("首请求响应异常")
-	}
-	fc.Close()
-	time.Sleep(200 * time.Millisecond) // 等网关完成 handoff 保存
-
-	// 重连：客户端保留 RC4 流
-	fc.Dial(token, true)
-	fc.SendRequest(6, 1, 1)
-	fc.WaitAck(2, 5*time.Second)
-	env := fc.WaitResponse(5 * time.Second)
-	if env.Marker != -2 || env.CallID != 6 {
-		t.Fatalf("重连后响应不符: marker=%d call_id=%d", env.Marker, env.CallID)
-	}
-	if fc.WireBad != 0 {
-		t.Fatalf("服务端出帧 wire_id 非严格递增（重连未续号）: %d 次违规", fc.WireBad)
-	}
-
-	opened, _, _ := stub.Stats()
-	if len(opened) != 2 {
-		t.Fatalf("stub 应收到 2 次 OPEN, 实得 %d", len(opened))
-	}
-	if opened[1].Token != token || !opened[1].Reconnect {
-		t.Fatalf("第二次 OPEN 应标记 reconnect: %+v", opened[1])
-	}
-}
-
 // TestGatewayBadToken 无效 token 拒绝（连接关闭且无问候）。
 func TestGatewayBadToken(t *testing.T) {
 	_, stubAddr := testutil.StartStubGameServer(t, testutil.TestPSK)

@@ -53,9 +53,51 @@ func TestFishStats321FromCatchLog(t *testing.T) {
 	if got := f4.U32(); got != 4 {
 		t.Fatalf("f4 单日数量纪录=%d，期望4", got)
 	}
+	// f5 客户端 DTO cpenllldpnk 是 float（kg），必须按 F32 位型解码。
 	f5 := dec.Field(5)
 	if got := float64(proto.F32FromBits(f5.U32())); got < 2.1359 || got > 2.1361 {
 		t.Fatalf("f5 单日重量纪录=%f kg，期望2.136", got)
+	}
+	// f6 鱼列表：每鱼种最重一张 320 卡，按重量降序（c.roach 500 / bream 650 / perch 800）。
+	fishList := dec.Field(6).Val
+	if got := fishList.ArgCount(); got != 3 {
+		t.Fatalf("f6 鱼列表条数=%d，期望3（每鱼种一张卡）", got)
+	}
+	if got := fishList.Items[0].Field(0).Str; got == nil || *got != "perch" {
+		t.Fatalf("f6 首卡鱼种=%v，期望 perch（800g 最重）", got)
+	}
+	if got := fishList.Items[0].Field(2).Num; got == nil || *got != 800 {
+		t.Fatalf("f6 首卡重量=%v，期望800", got)
+	}
+	if got := fishList.Items[2].Field(0).Str; got == nil || *got != "c.roach" {
+		t.Fatalf("f6 末卡鱼种=%v，期望 c.roach（500g 最轻）", got)
+	}
+	counts := []struct {
+		name                       string
+		total, trophy, superTrophy int64
+	}{
+		{"perch", 1, 1, 1},
+		{"bream", 1, 1, 0},
+		{"c.roach", 2, 0, 0},
+	}
+	for i, want := range counts {
+		card := fishList.Items[i]
+		nameField := card.Field(0)
+		if got := nameField.StrOr(); got != want.name {
+			t.Fatalf("f6[%d] 鱼种=%q，期望 %q", i, got, want.name)
+		}
+		totalField := card.Field(9)
+		if got := int64(totalField.U32()); got != want.total {
+			t.Fatalf("f6[%d] %s 总钓获=%d，期望 %d", i, want.name, got, want.total)
+		}
+		trophyField := card.Field(10)
+		if got := int64(trophyField.U32()); got != want.trophy {
+			t.Fatalf("f6[%d] %s 奖杯数=%d，期望 %d", i, want.name, got, want.trophy)
+		}
+		superTrophyField := card.Field(11)
+		if got := int64(superTrophyField.U32()); got != want.superTrophy {
+			t.Fatalf("f6[%d] %s 超稀有数=%d，期望 %d", i, want.name, got, want.superTrophy)
+		}
 	}
 	card := dec.Field(7).Val
 	if card == nil || card.Class != "ippcfiphgfl" {

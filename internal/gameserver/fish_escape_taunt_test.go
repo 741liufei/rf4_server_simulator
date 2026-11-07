@@ -46,12 +46,12 @@ func TestFishEscapeTauntBroadcastShape(t *testing.T) {
 	// f4 是原始 typed KV 字节，直接按报文断言：容器类型名 135、键1 文案、
 	// 键2 重量（u32le），重量必须排在文案之后（客户端模板句尾追加重量）。
 	body := env.Body
-	for _, want := range [][]byte{[]byte("135"), []byte("g_tench"), []byte("稀有"), []byte("跑掉了")} {
+	for _, want := range [][]byte{[]byte("135"), []byte("g_tench"), []byte("稀有"), []byte("你的")} {
 		if !bytes.Contains(body, want) {
 			t.Fatalf("推送报文缺少 %q: %x", want, body)
 		}
 	}
-	textAt := bytes.Index(body, []byte("跑掉了"))
+	textAt := bytes.Index(body, []byte("你的"))
 	weight := []byte{0x0b, 0x06, 0x00, 0x00} // 1547g
 	weightAt := bytes.Index(body, weight)
 	if weightAt < 0 || weightAt < textAt {

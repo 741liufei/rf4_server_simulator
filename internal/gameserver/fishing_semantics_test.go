@@ -54,6 +54,46 @@ func TestCastSetsCastTsAndHookedSchedulePreservesIt(t *testing.T) {
 	st.mu.Unlock()
 }
 
+func TestFishingTickRepairKeepsPendingFish(t *testing.T) {
+	srv, _ := newDetachTestServer(t)
+	sess := newProbeSess(srv)
+	st := srv.stateFor(sess.Userid)
+	fish := &RolledFish{FishGUID: "11111111111111111111111111111111", Species: "m_scorpius"}
+
+	st.mu.Lock()
+	st.CastActive = true
+	st.InWater = false
+	st.NeedBite = true
+	st.Pending = fish
+	st.PushSent = true
+	st.Hooked = true
+	st.Resolved = false
+	const generation = uint64(7)
+	st.castGeneration = generation
+	st.mu.Unlock()
+
+	fields := make([]proto.Field, 7)
+	for i := range fields {
+		fields[i] = proto.Field{Op: "U32", Num: ptrU64(0)}
+	}
+	fields[5] = proto.Field{Op: "U32", Num: ptrU64(0x400)}
+	fields[6] = proto.Field{Op: "STR", Str: strPtr("loc1_02")}
+	tree := proto.Args524(proto.Obj("lobemkloehp", 0, fields...))
+	if _, ok := hFishingStep(&Ctx{Sess: sess, Main: 14, Sub: 7, Tree: tree, DecodeOK: true, Log: logging.Discard()}); !ok {
+		t.Fatal("14/7 未处理")
+	}
+
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.Pending != fish || !st.PushSent || st.biteTimer != nil || st.castGeneration != generation {
+		t.Fatalf("补排覆盖当前鱼: pending_same=%v pushed=%v timer=%v generation=%d->%d",
+			st.Pending == fish, st.PushSent, st.biteTimer != nil, generation, st.castGeneration)
+	}
+	if !st.InWater || st.NeedBite {
+		t.Fatalf("水中状态未正确更新: in_water=%v need_bite=%v", st.InWater, st.NeedBite)
+	}
+}
+
 func TestFindObjSecondU32ForCastSpot(t *testing.T) {
 	obj := proto.Obj("olieodeoaof", 0,
 		proto.Field{Op: "U32", Num: ptrU64(111)},
@@ -121,9 +161,9 @@ func TestFishingTickRecomputesSettledAndLocation(t *testing.T) {
 
 func TestKeepnetVersionTicksStrictlyIncreaseAndKeepMap(t *testing.T) {
 	e := &store.KeepnetEntry{EchoGUID: "11111111111111111111111111111111", Species: "c.roach", WeightG: 100, LengthM: 0.2, Cat: 1, KeepLevel: "level_019_american_pond"}
-	a := buildKeepnet25(e, "level_001_lake")
+	a := buildKeepnet25(e, "level_001_lake", 0)
 	time.Sleep(2 * time.Millisecond)
-	b := buildKeepnet25(e, "level_001_lake")
+	b := buildKeepnet25(e, "level_001_lake", 0)
 	fa, fb := a.Field(22), b.Field(22)
 	if fa.U64() == 0 || fb.U64() <= fa.U64() {
 		t.Fatalf("25.f22 必须非 0 且严格递增: %d -> %d", fa.U64(), fb.U64())
@@ -191,6 +231,34 @@ func TestFishingLeftBumpsEscapes(t *testing.T) {
 	}
 	if n != 1 {
 		t.Fatalf("escapes=%d，期望1", n)
+	}
+}
+
+func TestFishingEndSettleUnhookedDoesNotCountEscape(t *testing.T) {
+	srv, db := newDetachTestServer(t)
+	const uid = int64(1000001)
+	sess := newProbeSess(srv)
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.Pending = &RolledFish{
+		FishGUID: "77777777777777777777777777777777", Species: "c.roach", Grade: 1, WeightG: 400,
+	}
+	st.CastActive = true
+	st.Hooked = false
+	st.Resolved = false
+	st.mu.Unlock()
+
+	body, ok := srv.fishingEndSettle(&Ctx{Sess: sess, Main: 14, Sub: 4, DecodeOK: true, Log: logging.Discard()})
+	if !ok || len(body) == 0 {
+		t.Fatalf("14/4 未处理: ok=%v bytes=%d", ok, len(body))
+	}
+
+	var escapes int
+	if err := db.SQL.QueryRow(`SELECT COALESCE((SELECT value FROM player_counters WHERE uid=? AND key='escapes'),0)`, uid).Scan(&escapes); err != nil {
+		t.Fatal(err)
+	}
+	if escapes != 0 {
+		t.Fatalf("14/4 咬钩未中钩不应计为跑鱼，escapes=%d", escapes)
 	}
 }
 
