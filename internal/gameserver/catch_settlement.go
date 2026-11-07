@@ -132,7 +132,7 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	if xp < 1 {
 		xp = 1
 	}
-	state := s.stateFor(uid)
+	state := s.fishingStateForFish(uid, f)
 	state.mu.Lock()
 	gear := state.GearGuid
 	if !f.HappyHourKnown {

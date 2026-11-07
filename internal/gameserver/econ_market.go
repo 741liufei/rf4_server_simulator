@@ -1611,7 +1611,7 @@ func hRodSetDepth(ctx *Ctx) ([]byte, bool) {
 	if rodGUID == "" || depthCM <= 0 {
 		return nil, true
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.DepthCM = depthCM
 	st.mu.Unlock()
@@ -1633,7 +1633,7 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	ctx.Log.Info("17/14 设置摩擦/转速", "竿", shortGUID(rodGUID), "值", value)
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.ReelSetting = value
 	st.mu.Unlock()

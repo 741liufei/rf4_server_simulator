@@ -19,23 +19,26 @@ func (sess *Session) updateHappyHour(now time.Time, closing bool) store.HappyHou
 	closing = closing || sess.Closed()
 	fishing := false
 	if !closing {
-		st := s.fishingState(sess.Userid)
-		st.mu.Lock()
-		fishing = st.CastActive && st.InWater && !st.Resolved
-		gear := st.GearGuid
-		pending := st.Pending != nil
-		st.mu.Unlock()
-		if fishing && gear != "" {
-			rod, err := s.DB.GetItemByGUID(sess.pushCtx(), gear)
-			fishing = err == nil && rod != nil && rod.UID == sess.Userid && rod.Durability > 0
-			if fishing {
-				def, err := s.itemDefForRow(sess.pushCtx(), rod)
-				fishing = err == nil && def != nil && def.Category == gearCatRod && (pending || s.canFishWithBait(sess.pushCtx(), sess.Userid, gear))
+		for _, st := range s.fishingStatesFor(sess.Userid) {
+			st.mu.Lock()
+			active := st.CastActive && st.InWater && !st.Resolved
+			gear, pending := st.GearGuid, st.Pending != nil
+			st.mu.Unlock()
+			if !active || gear == "" {
+				continue
 			}
-		} else {
-			fishing = false
+			rod, err := s.DB.GetItemByGUID(sess.pushCtx(), gear)
+			if err != nil || rod == nil || rod.UID != sess.Userid || rod.Durability <= 0 {
+				continue
+			}
+			def, err := s.itemDefForRow(sess.pushCtx(), rod)
+			if err == nil && def != nil && def.Category == gearCatRod && (pending || s.canFishWithBait(sess.pushCtx(), sess.Userid, gear)) {
+				fishing = true
+				break
+			}
 		}
 	}
+
 	owner := fmt.Sprintf("%d:%d", sess.ID, sess.startedAt.UnixNano())
 	status, err := s.DB.AdvanceHappyHour(s.dbCtx(), sess.Userid, owner, now, fishing, !closing,
 		max(30*time.Second, 3*s.cfg.KeepaliveInterval()))

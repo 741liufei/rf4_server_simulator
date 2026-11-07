@@ -71,7 +71,7 @@ func (s *Server) settleCatchXP(ctx context.Context, uid int64, f *RolledFish, ri
 		s.log.Warn("钓获结算未保存", "err", err)
 		return nil
 	}
-	st := s.stateFor(uid)
+	st := s.fishingStateForFish(uid, f)
 	st.mu.Lock()
 	f.XP, f.Silver = r.totalXP, r.silver
 	st.mu.Unlock()
@@ -301,7 +301,7 @@ func (s *Server) buildSettle813(ctx context.Context, uid int64, f *RolledFish, r
 		5: proto.U32(uint32(max64(0, r.levelsGained))),
 		6: bonuses,
 	})
-	keep25 := s.buildPending25(f, s.stateFor(uid), s.currentLevel(uid))
+	keep25 := s.buildPending25(f, s.fishingStateForFish(uid, f), s.currentLevel(uid))
 	// ndiejnnioni.f0..f6 必须按 U32 克重编码；写成 F32 位型会导致客户端显示错误。
 	return wiregen.MustMakeObj("ndiejnnioni", map[int]*proto.Value{
 		0: proto.U32(uint32(statics[0])),
@@ -323,7 +323,7 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	uid := ctx.Sess.Userid
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	st.mu.Lock()

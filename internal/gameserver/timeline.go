@@ -148,8 +148,7 @@ func hBoatUse(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	srv := ctx.Sess.Srv
-	st := srv.stateFor(ctx.Sess.Userid)
-	if st != nil {
+	for _, st := range srv.fishingStatesFor(ctx.Sess.Userid) {
 		st.mu.Lock()
 		st.markBoatClientEventLocked(time.Now().Unix(), board)
 		st.mu.Unlock()
