@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-// 主资料页等级旁的星标（307.f16）应等于"稀有鱼数"：catch_log 里 grade>=3 的条数。
-// 该字段此前写死 1，钓到稀有鱼后资料页数字不动。
+// 主资料页奖杯数（307.f16/trph）应等于 catch_log 里 grade>=3 的条数。
+// 客户端把 f16 映射到资料卡奖杯位；该字段此前写死 1，钓到奖杯鱼后数字不动。
 func TestProfile307StarCountsRareCatches(t *testing.T) {
 	db := connectTestDB(t)
 	srv := NewServerForGearTest(t, db)
@@ -34,6 +34,6 @@ func TestProfile307StarCountsRareCatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := u32Of(p.Fields[16].Num); got != 3 {
-		t.Fatalf("307.f16 稀有鱼数应为 3，实得 %d", got)
+		t.Fatalf("307.f16 奖杯数应为 3，实得 %d", got)
 	}
 }

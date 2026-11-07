@@ -202,9 +202,10 @@ func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*
 		}))
 	}
 
-	// f16 是资料页等级旁的星标计数（稀有鱼数），与统计页「钓到的稀有鱼数」
-	// 和 24/19 玩家卡片同源：catch_log 里 grade>=3 的条数。此前写死 1，
-	// 表现为钓到稀有鱼后主资料页的数字不动。
+	// f16=kgpgemhhiik 是资料页奖杯数（trophy/trph），不是布尔值。客户端
+	// hnocpfeadfc 把 f16 映射到 ifbfdldbana.gebeadddmlp；RUIUserInfoWidget
+	// 的 m_trph 和 ddkpcmhdfdb.fgnijlofipp 都显示该值，24/19 的 f5 也同口径。
+	// 因此按 catch_log 中 grade>=3 的条数统计，与 24/19 玩家卡保持一致。
 	rareCatches, rareErr := s.DB.CatchCountAtLeastGrade(ctx, uid, 3)
 	if rareErr != nil {
 		s.log.Warn("稀有鱼计数读取失败，按 0 下发", "uid", uid, "err", rareErr)
