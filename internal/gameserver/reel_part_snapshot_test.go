@@ -63,8 +63,8 @@ func assertReelSnapshot(t *testing.T, srv *Server, guid, gearID string, drag flo
 	if math.IsNaN(expected) || math.IsInf(expected, 0) {
 		t.Fatal("invalid root")
 	}
-	if drag > 0 && math.Abs(expected-drag) > 1e-5 {
-		t.Fatal("root does not use installed washer")
+	if math.Abs(expected-drag) > 1e-5 {
+		t.Fatalf("root does not use installed washer: got %g want %g", expected, drag)
 	}
 	if got := snapshotFloat(fields, row.WireClass, csStrength); math.IsNaN(got) || math.IsInf(got, 0) || math.Abs(got-expected) > 1e-5 {
 		t.Fatalf("stored root=%g, normalized=%g", got, expected)
@@ -482,5 +482,244 @@ func TestReelPartSnapshotBatchAndUnrelatedParts(t *testing.T) {
 			// Even after building and sending a projected tree, the persistent child state remains untouched.
 			checkProtected()
 		})
+	}
+}
+
+func TestReelZeroDragRootPaths(t *testing.T) {
+	for _, path := range []string{"tree", "repair", "workshop"} {
+		t.Run(path, func(t *testing.T) {
+			srv, db := newRigTestServer(t)
+			defer db.Close()
+			ctx := t.Context()
+			const uid = int64(1000001)
+			if err := srv.EnsurePlayer(ctx, uid); err != nil {
+				t.Fatal(err)
+			}
+			profile, err := db.EnsureProfile(ctx, uid)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.UpdateBalance(ctx, uid, 1000000, profile.Gold, profile.Bank); err != nil {
+				t.Fatal(err)
+			}
+			reel, err := srv.CreateItem(ctx, uid, "spin_5354", "backpack", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := snapshotFields(t, reel.FieldsJSON)
+			washer, _ := snapshotPart(t, srv, fields, 9)
+			setWireFloat(washer.Fields, washer.Class, fieldIdxByCS(washer.Class, csDragForce), 0)
+			raw := snapshotJSON(t, fields)
+			if err := db.UpdateItemFields(ctx, reel.GUID, raw, reel.Qty, reel.Durability, reel.Workmanship, reel.RigGUID); err != nil {
+				t.Fatal(err)
+			}
+			switch path {
+			case "repair":
+				if _, err := srv.RepairReelComponents(ctx); err != nil {
+					t.Fatal(err)
+				}
+			case "workshop":
+				c := &Ctx{Sess: newProbeSess(srv), Tree: snapshotWorkshopRequest(reel.GUID, "rgm_zmn_jet_jsg-r"), Log: logging.Discard()}
+				if _, ok := hWorkshopOrder(c); !ok {
+					t.Fatal("workshop failed")
+				}
+			}
+			row := mustItem(t, db, reel.GUID)
+			if path != "tree" {
+				stored := snapshotFields(t, row.FieldsJSON)
+				if got := snapshotFloat(stored, row.WireClass, csStrength); got != 0 {
+					t.Fatalf("stored zero-drag root=%g, want 0", got)
+				}
+			}
+			tree, err := srv.ItemToTree(ctx, row)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := snapshotFloat(tree.Fields, tree.Class, csStrength); got != 0 {
+				t.Fatalf("wire zero-drag root=%g, want 0", got)
+			}
+			child, _ := snapshotPart(t, srv, tree.Fields, 9)
+			value, present, _ := frictionWasherDrag(child)
+			if !present || value != 0 {
+				t.Fatal("washer zero lost")
+			}
+		})
+	}
+}
+
+func TestReelDragFieldPresenceAndFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   float64
+		present bool
+		want    float64
+	}{
+		{"positive", 2.25, true, 2.25}, {"zero", 0, true, 0}, {"missing", 0, false, 3.5},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, db := newRigTestServer(t)
+			defer db.Close()
+			ctx := t.Context()
+			row, err := srv.CreateItem(ctx, 1000001, "spin_5354", "backpack", 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fields := snapshotFields(t, row.FieldsJSON)
+			_, _, slot, found := srv.selectedReelPart(ctx, fields, 9)
+			if !found {
+				t.Fatal("washer missing")
+			}
+			washer, err := srv.buildPartInstance(ctx, row, "ef-fb-sp.orig-5805", "test-washer")
+			if err != nil || washer == nil {
+				t.Fatalf("washer: %v", err)
+			}
+			idx := fieldIdxByCS(washer.Class, csDragForce)
+			if idx < 0 || idx >= len(washer.Fields) {
+				t.Fatal("force field missing")
+			}
+			if tc.present {
+				setWireFloat(washer.Fields, washer.Class, idx, tc.value)
+			} else {
+				washer.Fields[idx].Num = nil
+			}
+			fields[slot].Val = washer
+			setWireFloat(fields, row.WireClass, fieldIdxByCS(row.WireClass, csStrength), 123)
+			row.FieldsJSON = snapshotJSON(t, fields)
+			got, present := srv.reelInstalledDragFieldFromRow(ctx, row)
+			if present != tc.present || (present && got != tc.value) {
+				t.Fatalf("stored source=%g,%v", got, present)
+			}
+			// The existing reader keeps its original behavior for other callers.
+			if value := srv.reelBaseDragFromRow(ctx, row); math.Abs(value-tc.want) > 1e-5 {
+				t.Fatalf("base reader=%g want %g", value, tc.want)
+			}
+			childBefore := snapshotJSON(t, washer.Fields)
+			srv.canonicalizeReelStrength(ctx, row, fields)
+			if value := snapshotFloat(fields, row.WireClass, csStrength); math.Abs(value-tc.want) > 1e-5 {
+				t.Fatalf("root=%g want %g", value, tc.want)
+			}
+			if snapshotJSON(t, washer.Fields) != childBefore {
+				t.Fatal("root normalization changed washer")
+			}
+			raw := snapshotJSON(t, fields)
+			if err := db.UpdateItemFields(ctx, row.GUID, raw, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+				t.Fatal(err)
+			}
+			fresh := mustItem(t, db, row.GUID)
+			stored := snapshotFields(t, fresh.FieldsJSON)
+			if value := snapshotFloat(stored, fresh.WireClass, csStrength); math.Abs(value-tc.want) > 1e-5 {
+				t.Fatal("stored root mismatch")
+			}
+			tree, err := srv.ItemToTree(ctx, fresh)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if value := snapshotFloat(tree.Fields, tree.Class, csStrength); math.Abs(value-tc.want) > 1e-5 {
+				t.Fatal("wire root mismatch")
+			}
+		})
+	}
+}
+
+func TestReelDegradePersistsRoot(t *testing.T) {
+	for _, path := range []string{"degrade", "slip"} {
+		for _, wearOut := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/worn_%t", path, wearOut), func(t *testing.T) {
+				srv, db := newRigTestServer(t)
+				defer db.Close()
+				ctx := t.Context()
+				const uid = int64(1000001)
+				reel, err := srv.CreateItem(ctx, uid, "spin_5354", "backpack", 1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				initial := snapshotFields(t, reel.FieldsJSON)
+				if snapshotFloat(initial, reel.WireClass, csStrength) <= 0 {
+					t.Fatal("new reel root must be positive")
+				}
+				washer, def := snapshotPart(t, srv, initial, 9)
+				step := itemDefF32(def, gearAttrDragMax) * reel.Workmanship * reelSlipWear
+				if step <= 0 {
+					t.Fatal("invalid wear fixture")
+				}
+				current := step * 3
+				if wearOut {
+					current = step / 2
+				}
+				setWireFloat(washer.Fields, washer.Class, fieldIdxByCS(washer.Class, csDragForce), current)
+				reel.FieldsJSON = snapshotJSON(t, initial)
+				srv.canonicalizeReelStrength(ctx, reel, initial)
+				reel.FieldsJSON = snapshotJSON(t, initial)
+				if err := db.UpdateItemFields(ctx, reel.GUID, reel.FieldsJSON, reel.Qty, reel.Durability, reel.Workmanship, reel.RigGUID); err != nil {
+					t.Fatal(err)
+				}
+				washerBefore := snapshotJSON(t, washer.Fields)
+				// Call the actual wear persistence path; do not run a repair or workshop operation.
+				if path == "degrade" {
+					worn, found, err := srv.degradeFrictionWasher(ctx, reel)
+					if err != nil || !found || worn != wearOut {
+						t.Fatalf("wear result %t/%t: %v", worn, found, err)
+					}
+				} else {
+					out, err := srv.damageReelSlip(ctx, uid, zeroGUID, reel.GUID)
+					if err != nil || out == nil || out.FrictionWorn != wearOut {
+						t.Fatalf("slip result: %+v %v", out, err)
+					}
+				}
+				fresh := mustItem(t, db, reel.GUID)
+				fields := snapshotFields(t, fresh.FieldsJSON)
+				afterWasher, _ := snapshotPart(t, srv, fields, 9)
+				unchanged := append([]proto.Field(nil), afterWasher.Fields...)
+				setWireFloat(unchanged, afterWasher.Class, fieldIdxByCS(afterWasher.Class, csDragForce), current)
+				if snapshotJSON(t, unchanged) != washerBefore {
+					t.Fatal("wear changed washer identity, condition or other fields")
+				}
+				force, present, _ := frictionWasherDrag(afterWasher)
+				if !present || math.IsNaN(force) || math.IsInf(force, 0) {
+					t.Fatal("stored washer force missing or invalid")
+				}
+				if wearOut && force != 0 {
+					t.Fatalf("washer did not wear out: %g", force)
+				}
+				if !wearOut && (force <= 0 || force >= current) {
+					t.Fatalf("intermediate wear missing: %g", force)
+				}
+				if root := snapshotFloat(fields, fresh.WireClass, csStrength); root != force {
+					t.Errorf("immediate stored root=%g washer=%g", root, force)
+				}
+				tree, err := srv.ItemToTree(ctx, fresh)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if root := snapshotFloat(tree.Fields, tree.Class, csStrength); root != force {
+					t.Errorf("wire root=%g washer=%g", root, force)
+				}
+				encoded, err := proto.EncodeValue(tree, srv.Table())
+				if err != nil {
+					t.Fatal(err)
+				}
+				decoded, end, err := proto.DecodeValue(encoded, 0, srv.Table())
+				if err != nil || end != len(encoded) {
+					t.Fatalf("worn reel codec: %v", err)
+				}
+				if snapshotFloat(decoded.Fields, decoded.Class, csStrength) != force {
+					t.Fatal("encoded worn root mismatch")
+				}
+				if fresh.Durability != reel.Durability {
+					t.Fatal("wear changed reel durability")
+				}
+				perf, err := srv.syncReelPerformance(ctx, fresh)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if math.Abs(perf.BaseDragKg-force) > 1e-5 {
+					t.Fatal("performance mismatch")
+				}
+				storedAgain := snapshotFields(t, mustItem(t, db, reel.GUID).FieldsJSON)
+				if root := snapshotFloat(storedAgain, fresh.WireClass, csStrength); root != force {
+					t.Errorf("after performance sync root=%g washer=%g", root, force)
+				}
+			})
+		}
 	}
 }

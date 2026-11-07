@@ -609,6 +609,9 @@ func (s *Server) canonicalizeReelStrength(ctx context.Context, it *store.Item, f
 	if it == nil || it.WireClass != "dgjinoebdop" {
 		return false
 	}
+	if strength, present := s.reelInstalledDragFieldFromRow(ctx, it); present {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
 	strength := s.reelBaseDragFromRow(ctx, it)
 	if strength > 0 {
 		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
