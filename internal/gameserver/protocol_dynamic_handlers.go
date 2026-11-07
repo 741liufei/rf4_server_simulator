@@ -87,7 +87,7 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 				gbLoc, gbX, gbZ, gbHas, gbSpot := st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot
 				st.mu.Unlock()
 				srv.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot,
-					baitItemID, 1, "catapult", fmt.Sprintf("catapult:%s:%d", shortGUID(handGUID), ctx.CallID))
+					baitItemID, 1, "catapult", fmt.Sprintf("catapult:%s:%d:%d", shortGUID(handGUID), ctx.Sess.ID, ctx.CallID))
 			}
 		}
 	}
