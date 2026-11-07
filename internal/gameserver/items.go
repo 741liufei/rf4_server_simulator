@@ -449,17 +449,8 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 	// 安装的摩擦片制动力，缺失时才回退到出厂摩擦片；传动比只在齿轮
 	// 子件自己的强度字段里出现，不能污染母轮上限。
 	if class == "dgjinoebdop" {
-		strength := s.reelBaseDragFromRow(ctx, it)
-		if strength > 0 {
-			idx := fieldIdxByCS(class, csStrength)
-			if setWireFloat(fields, class, idx, strength) {
-				changed = true
-			}
-		} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
-			idx := fieldIdxByCS(class, csStrength)
-			if setWireFloat(fields, class, idx, strength) {
-				changed = true
-			}
+		if s.canonicalizeReelStrength(ctx, it, fields) {
+			changed = true
 		}
 	} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
 		idx := fieldIdxByCS(class, csStrength)
@@ -610,6 +601,26 @@ func canonicalizeNestedItemContainers(class string, fields []proto.Field) bool {
 		}
 	}
 	return changed
+}
+
+// canonicalizeReelStrength updates only the reel root scale, leaving installed
+// parts untouched. FieldsJSON must describe the currently selected parts.
+func (s *Server) canonicalizeReelStrength(ctx context.Context, it *store.Item, fields []proto.Field) bool {
+	if it == nil || it.WireClass != "dgjinoebdop" {
+		return false
+	}
+	strength := s.reelBaseDragFromRow(ctx, it)
+	if strength > 0 {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	def, err := s.itemDefForRow(ctx, it)
+	if err != nil || def == nil {
+		return false
+	}
+	if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	return false
 }
 
 // setWireFloat 写入 wire 浮点字段；兼容 FLOAT/DOUBLE 与 U32 承载 IEEE754 的
