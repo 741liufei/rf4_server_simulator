@@ -276,6 +276,34 @@ func TestCraftBatchCapsAndSlotScaling(t *testing.T) {
 			if want := 200 - c.cap; countOf(uid, "hvz_pva_material") != want {
 				t.Fatalf("PVA 原料应剩 %d，实得 %d", want, countOf(uid, "hvz_pva_material"))
 			}
+			// PVA 棒也要按实例记下实际填充：10/20/50 克规格分别消耗 1/2/5 份干饵，
+			// 吸引判定不能只看水溶网，也不能把三种规格算成同一种饵料。
+			var pvaGUID, matsJSON string
+			if err := db.SQL.QueryRowContext(ctx,
+				`SELECT guid FROM item WHERE uid=? AND item_id=? ORDER BY created_ts DESC LIMIT 1`,
+				uid, c.output).Scan(&pvaGUID); err != nil {
+				t.Fatal(err)
+			}
+			if err := db.SQL.QueryRowContext(ctx,
+				`SELECT mats_json FROM groundbait_recipe WHERE instance_guid=?`, pvaGUID).Scan(&matsJSON); err != nil {
+				t.Fatalf("PVA 棒实例没有记下填充用料: %v", err)
+			}
+			mats := groundbaitDecodeMaterials(matsJSON)
+			dryCount, pvaCount := int64(0), int64(0)
+			for _, id := range mats {
+				switch id {
+				case "feed_dry":
+					dryCount++
+				case "hvz_pva_material":
+					pvaCount++
+				}
+			}
+			if want := c.dryEach * c.cap; dryCount != want {
+				t.Fatalf("PVA %s 应记下 %d 份干饵，实得 %d", c.output, want, dryCount)
+			}
+			if pvaCount != c.cap {
+				t.Fatalf("PVA %s 应记下 %d 份水溶网，实得 %d", c.output, c.cap, pvaCount)
+			}
 			// 再做一组：PVA 不与其他批次合并，应新增一格。
 			if !craft(box, c.recipe, slots, 1) {
 				t.Fatal("第二次 PVA 制作应成功")

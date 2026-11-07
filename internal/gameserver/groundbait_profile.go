@@ -60,6 +60,12 @@ const (
 // 就是一条空配方（recipe 表里没有原料行），离线探针也用同一组原料标定它。
 var groundbaitNeutralMaterials = []string{"mix_combi", "feedadds_breadcrumbs", "feedadds_pelets", "aroma_honey"}
 
+// groundbaitCarrierMaterial 是只负责把饵包住、本身不该参与食性计算的载体。
+// PVA 棒的关键在棒里装了什么，水溶网本身不是鱼饵，不能按“植物料”去吸引鱼。
+func groundbaitCarrierMaterial(id string) bool {
+	return id == "hvz_pva_material"
+}
+
 // groundbaitMaterial 是一种原料的食性与物理特性档案。
 type groundbaitMaterial struct {
 	ItemID   string             `json:"item_id"`
@@ -114,6 +120,12 @@ func groundbaitFallbackMaterial(id string) groundbaitMaterial {
 // profileOf 按实际用料合成一团窝料的档案。mats 为空时退回中性配方，
 // 与离线探针的口径一致（空配方就是商品干混合那档）。
 func (d *groundbaitDefs) profileOf(mats []string) (groundbaitProfile, bool) {
+	return d.profileOfSeen(mats, map[string]bool{})
+}
+
+// profileOfSeen 允许 PVA 棒把一袋成品窝料当填充料再合成一次。
+// 递归时带着 seen 防止商品配方互相引用形成环。
+func (d *groundbaitDefs) profileOfSeen(mats []string, seen map[string]bool) (groundbaitProfile, bool) {
 	if d.badErr != "" {
 		return groundbaitProfile{}, false
 	}
@@ -123,7 +135,35 @@ func (d *groundbaitDefs) profileOf(mats []string) (groundbaitProfile, bool) {
 	weighted := map[string]float64{}
 	var bulk, disp, particle, scent float64
 	hold := 1.0
+	foodEntries := 0
 	for _, id := range mats {
+		if groundbaitCarrierMaterial(id) {
+			continue
+		}
+		if d.materials[id].ItemID == "" && !strings.HasPrefix(id, "mix_") &&
+			!strings.HasPrefix(id, "feedadds_") && !strings.HasPrefix(id, "aroma_") {
+			if def, ok := d.itemDef(id); ok && !seen[id] {
+				seen[id] = true
+				child, ok := d.profileOfSeen(def.Materials, seen)
+				delete(seen, id)
+				if ok {
+					if len(child.Diet) == 0 {
+						continue
+					}
+					for fam, w := range child.Diet {
+						weighted[fam] += w
+					}
+					bulk += child.Potency
+					disp += child.Dispersion
+					particle += child.Particle * child.Potency
+					scent += child.Scent
+					hold = math.Max(hold, child.Hold)
+					foodEntries++
+					continue
+				}
+			}
+		}
+		foodEntries++
 		weight := groundbaitMaterialWeight(id)
 		spec, ok := d.materials[id]
 		if !ok {
@@ -143,7 +183,8 @@ func (d *groundbaitDefs) profileOf(mats []string) (groundbaitProfile, bool) {
 		total += weighted[fam]
 	}
 	if total <= 0 {
-		return groundbaitProfile{}, false
+		// 非空但只有 PVA 载体这类惰性材料：档案是已知的空饵，不该退回固定商品表。
+		return groundbaitProfile{Diet: map[string]float64{}, Hold: 1}, true
 	}
 	diet := map[string]float64{}
 	for _, fam := range groundbaitFamilies {
@@ -155,7 +196,7 @@ func (d *groundbaitDefs) profileOf(mats []string) (groundbaitProfile, bool) {
 	// particle 按 bulk 归一（碎屑多但体积大的料不算细粉）。这一段与探针同源。
 	n := 0
 	for _, id := range mats {
-		if !strings.HasPrefix(id, "aroma_") {
+		if !strings.HasPrefix(id, "aroma_") && !groundbaitCarrierMaterial(id) {
 			n++
 		}
 	}
@@ -167,7 +208,7 @@ func (d *groundbaitDefs) profileOf(mats []string) (groundbaitProfile, bool) {
 		Potency:    math.Round(bulk*100) / 100,
 		Dispersion: math.Round((disp/float64(n))*100) / 100,
 		Particle:   math.Round((particle/math.Max(bulk, 0.01))*100) / 100,
-		Scent:      math.Round((scent/float64(len(mats)))*100) / 100,
+		Scent:      math.Round((scent/float64(max(foodEntries, 1)))*100) / 100,
 		Hold:       math.Round(hold*100) / 100,
 	}, true
 }

@@ -385,8 +385,9 @@ type groundbaitSpotState struct {
 	// diet 是这个格子里所有还活着的批次按剩余份数合成出来的食性向量（百分比）。
 	// 一格里混投两种料时按份数加权合成，比逐批各算一遍再平均更贴近「这锅料
 	// 实际是什么」，而且同一锅料只算一次逐鱼种契合度。
-	diet    map[string]float64
-	dietSig string // diet 的稳定指纹，逐鱼种亲和缓存的键
+	diet      map[string]float64
+	dietKnown bool   // 已知食性表（包括只有 PVA 载体的空饵）
+	dietSig   string // diet 的稳定指纹，逐鱼种亲和缓存的键
 	// targetShare：商品包装写明目标鱼的份数占比，用来给契合度加作者先验。
 	// 两袋不同商品各投一半时，两个目标鱼各拿一半先验。
 	targetShare map[string]float64
@@ -503,6 +504,7 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 			holdSum += b.units
 			continue
 		}
+		st.dietKnown = true
 		holdSum += b.units * prof.Hold
 		for fam, w := range prof.Diet {
 			dietSum[fam] += b.units * w
@@ -691,6 +693,10 @@ func (s *Server) groundbaitSpecialMargin() float64 {
 func (s *Server) groundbaitAffinityForRoll(ctx context.Context, c fishRollContext,
 	st groundbaitSpotState, fishKey string) (float64, float64, bool) {
 	prior := s.tunableF("groundbait_prior", 0.35)
+	if st.dietKnown && st.dietSig == "" {
+		// 纯 PVA 水溶网这类没有饵料的载体不吸引鱼；不能退回固定商品表。
+		return 0, 0, false
+	}
 	if st.dietSig != "" {
 		row, status := s.cachedGroundbaitAffinity(ctx, c, st.dietSig, st.diet, fishKey)
 		switch status {
