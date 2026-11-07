@@ -276,6 +276,7 @@ const TUNABLE_DEFS=[
   ['xp_gain','经验倍率',1,'结算经验整体缩放，1.5=多 50% 经验'],
   ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
   ['fish_escape_taunt','跑鱼提示',1,'1=随机嘲讽文案；0=回退官方“鱼脱钩了”模板'],
+  ['fish_hooked_chat','上钩播报',0,'确认鱼已挂钩时仅向本人显示快捷栏竿号、鱼种和克级重量；默认关闭'],
   ['card_drop_normal','普通 / 达标鱼掉卡率',0.001,'0~1。默认 0.001 = 0.1%，每尾实际钓获抽一次'],
   ['card_drop_star','星鱼掉卡率',0.5,'0~1。默认 0.5 = 50%'],
   ['card_drop_blue','蓝冠鱼掉卡率',0.8,'0~1。默认 0.8 = 80%'],
@@ -286,6 +287,10 @@ async function loadTunables(){
  // 行式布局：左=标签+说明，右=数值+保存/恢复默认，双列排布
  const field=key=>{
   const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
+  if(key==='fish_hooked_chat'){
+   const on=parseFloat(String(t[key]??def))>0;
+   return `<div class="tunable-field"><div><label for="tun_fish_hooked_chat">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_hooked_chat" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_hooked_chat',${on?0:1})">${on?'上钩播报：开（点击关闭）':'上钩播报：关（点击开启）'}</button></div></div>`;
+  }
   if(key==='fish_escape_taunt'){
    const on=parseFloat(String(t[key]??'1'))>0;
    return `<div class="tunable-field"><div><label for="tun_fish_escape_taunt">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_escape_taunt" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_escape_taunt',${on?0:1})">${on?'嘲讽文案：开（点击关闭）':'官方“鱼脱钩了”（点击开启嘲讽）'}</button></div></div>`;
@@ -297,7 +302,7 @@ async function loadTunables(){
   group('玩法手感','咬钩快慢、饵料偏好、鱼的大小与挣扎力度',['bite_probability','bite_delay_fixed','bite_delay_scale','bite_delay_max','bite_delay_lure_max','bait_pref_scale','bait_pref_weight_shift','fish_weight_scale','fish_weight_cap','fight_power_scale'])
   +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio'])
   +group('钓获掉卡','本地自定概率；最多 30 秒生效，重连或重复结算不补抽',['card_drop_normal','card_drop_star','card_drop_blue','card_drop_rare_scale'])
-  +group('跑鱼提示','上鱼失败时的聊天播报样式',['fish_escape_taunt']);
+  +group('聊天通知','跑鱼提示与上钩播报分别设置；保存后最多 30 秒生效',['fish_escape_taunt','fish_hooked_chat']);
 }
 async function saveTunableVal(key,val){
   await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:String(val)})});
