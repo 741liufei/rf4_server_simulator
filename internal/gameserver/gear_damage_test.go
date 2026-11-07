@@ -97,7 +97,7 @@ func TestWeakestLeaderBreaksAndKeepsMainLine(t *testing.T) {
 	}
 	beforeLine, _ := db.GetItemByGUID(ctx, lineGUID)
 
-	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(lineGUID), proto.U32(2), proto.Null())
+	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(leader.GUID), proto.U32(2), proto.Null())
 	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
 	if !ok || len(body) == 0 {
@@ -191,8 +191,8 @@ func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 客户端故意报竿断，服务端仍应按同规格“主线优先于竿”判定为断主线。
-	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(rod.GUID), proto.U32(1), proto.Null())
+	// 客户端上报主线断，服务端按上报件断主线并固定扣 5 米。
+	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(line.GUID), proto.U32(1), proto.Null())
 	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
 	if !ok || len(body) == 0 {

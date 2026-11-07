@@ -93,7 +93,7 @@ type gearPhysicsSpec struct {
 	ConnectorStrengthKg float64 // 独立连接件（cat14）自身拉力
 	ReelPresent         bool
 	ReelDragKg          float64 // 当前耐久阶段下的锁轮承力
-	ReelCurrentDragKg   float64 // 当前摩擦档位下的制动力，第 30 档锁轮时等于锁轮承力
+	ReelCurrentDragKg   float64 // 当前摩擦档位下的制动力，线上 29（UI 30）锁轮时等于锁轮承力
 	LineStretch         float64
 	HookPresent         bool
 	HookStrengthKg      float64
@@ -258,37 +258,46 @@ func reelGearRatio(def *store.ItemDef) float64 {
 	return nestedF32(itemDefNested(def, gearAttrGear), gearAttrRatio)
 }
 
-// 渔轮摩擦档位：1~29 是制动力刻度，第 30 档是锁轮。
+// 渔轮摩擦档位：17/14 线上值从 0 开始，客户端 UI 显示值 = 线上值 + 1。
+// 线上 0~28（UI 1~29）是制动力刻度，线上 29（UI 30）是锁轮。
 const (
-	fullReelDragStop = 29
-	maxReelDragStop  = 30
+	fullReelDragStop = 29 // UI 1~29 的满刻度
+	maxReelDragStop  = 29 // 线上 29 = UI 30 = 锁轮
+	// 每根竿的默认摩擦档位：线上 15 = UI 16。客户端未上报过 17/14
+	// 时按这个值下发和计算，不能把“没有记录”当成锁轮。
+	defaultReelDragSetting = int64(15)
 )
 
 // reelDragAtSetting 按摩擦档位给出实际作用在线上的制动力。
-// 1~29 档超过该值时渔轮打滑放线，竿与线不会承受高于它的张力；
-// 第 30 档锁轮后不再打滑，张力上限换成锁轮承力。
+// 线上 0~28 超过该值时渔轮打滑放线，竿与线不会承受高于它的张力；
+// 线上 29 锁轮后不再打滑，张力上限换成锁轮承力。
 func reelDragAtSetting(perf *store.ReelPerformance, setting int64) float64 {
 	if setting >= maxReelDragStop {
 		return perf.LockedDragKg
 	}
-	if setting <= 0 {
+	if setting < 0 {
 		return 0
 	}
-	return perf.BaseDragKg * float64(setting) / float64(fullReelDragStop) * perf.BearingFactor
+	return perf.BaseDragKg * float64(setting+1) / float64(fullReelDragStop) * perf.BearingFactor
 }
 
-// rodReelDragSetting 读取客户端 17/14 保存的摩擦档位；没有记录时返回 false。
+// rodReelDragSetting 读取客户端 17/14 保存的摩擦档位；没有记录时使用默认
+// 线上 15（UI 16），不能回退到锁轮。
 func (s *Server) rodReelDragSetting(ctx context.Context, rodGUID string) (int64, bool) {
 	if s == nil || s.DB == nil || strings.TrimSpace(rodGUID) == "" {
-		return 0, false
+		return defaultReelDragSetting, true
 	}
 	raw, err := s.DB.GetRodSetting(ctx, rodGUID, reelDragSettingKey)
-	if err != nil {
-		return 0, false
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return defaultReelDragSetting, true
 	}
 	setting, cerr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
-	if cerr != nil || setting <= 0 {
-		return 0, false
+	if cerr != nil {
+		return defaultReelDragSetting, true
+	}
+	// 线上 0 是有效的最小泄力档（UI 1），不能按“没有设置”处理。
+	if setting < 0 {
+		setting = 0
 	}
 	if setting > maxReelDragStop {
 		setting = maxReelDragStop
@@ -527,12 +536,8 @@ func (s *Server) loadGearSpecForRig(ctx context.Context, ids rigGearIDs, rodGUID
 			if perf, perr := s.syncReelPerformance(ctx, row); perr == nil {
 				spec.ReelPresent = true
 				spec.ReelDragKg = perf.LockedDragKg
-				if setting, ok := s.rodReelDragSetting(ctx, rodGUID); ok {
-					spec.ReelCurrentDragKg = reelDragAtSetting(perf, setting)
-				} else {
-					// 客户端还没保存过摩擦档位时只有锁轮数据可用，按锁轮兜底。
-					spec.ReelCurrentDragKg = perf.LockedDragKg
-				}
+				setting, _ := s.rodReelDragSetting(ctx, rodGUID)
+				spec.ReelCurrentDragKg = reelDragAtSetting(perf, setting)
 			}
 		}
 	}

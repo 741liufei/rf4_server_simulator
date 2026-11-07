@@ -895,7 +895,7 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 		}
 	}
 	clipM, _ := s.savedReelClipM(ctx, it.GUID)
-	drag := int64(15)
+	drag := defaultReelDragSetting
 	if saved, ok := s.rodReelDragSetting(ctx, it.GUID); ok {
 		drag = saved
 	}

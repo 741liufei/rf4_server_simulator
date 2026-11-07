@@ -20,6 +20,7 @@ package gameserver
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"math"
 	"sort"
@@ -849,6 +850,35 @@ func (s *Server) setStackCount(ctx context.Context, row *store.Item, count int64
 		return
 	}
 	_ = s.DB.UpdateItemFields(ctx, row.GUID, fj, count, row.Durability, row.Workmanship, row.RigGUID)
+}
+
+// setStackCountTx 是 setStackCount 的事务内版本：断件/拆组时把子实例的
+// 数量并回来源堆，必须与删除子实例同事务提交。
+func (s *Server) setStackCountTx(ctx context.Context, tx *sql.Tx, row *store.Item, count int64) error {
+	if row == nil || row.GUID == "" {
+		return nil
+	}
+	if count < 0 {
+		count = 0
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return err
+	}
+	if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
+		fields[q].Num = ptrU64(uint64(count))
+	}
+	bumpCreatedTicks(fields, row.WireClass)
+	fj, jerr := FieldsToJSON(fields)
+	if jerr != nil {
+		return jerr
+	}
+	if err := s.DB.UpdateItemFieldsTx(ctx, tx, row.GUID, fj, count, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+		return err
+	}
+	row.FieldsJSON = fj
+	row.Qty = count
+	return nil
 }
 
 // setWireParent 写入实例的父 GUID。客户端据此判断挂载归属；
