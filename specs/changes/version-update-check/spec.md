@@ -92,7 +92,7 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
     一次），preview 只横幅。文案一律 `textContent`；链接先校验前缀
     （`https://github.com/` 或 `https://gh-proxy.com/https://github.com/`）
     再赋 `href`。横幅按钮组：**加速下载**（本通道 release 附件
-    gh-proxy 直链，主按钮）/ **官方下载**（GitHub releases）/ 
+    gh-proxy 直链，主按钮）/ **官方下载**（GitHub releases）/
     **最新预览版**（远端 preview 通道加速直链，仅 stable 用户显示）/
     更新说明 / 本版本不再提醒。
   - `internal/admin/web/index.html`：登录后从 `/api/me` /
@@ -104,6 +104,10 @@ raw.githubusercontent，均为同一仓库文件的只读镜像）拉取 version
     `download_mirror_url` 加速直链）合并进当前 `version.json`，以 bot
     身份提交回 `main`（commit message 带 `[skip ci]` 防回环），随后
     best-effort purge jsDelivr。
+  - 版本回写使用专用 write deploy key（Actions secret
+    `VERSION_WRITEBACK_DEPLOY_KEY`），SSH 走 `ssh.github.com:443`；`main`
+    的 required-check ruleset 仅允许该 deploy key 作为 bypass actor，
+    不让普通 Actions `GITHUB_TOKEN` 直接绕过保护。
   - 新增 `release.yml`（push tag `v*`）：新增
     `.github/scripts/build-release.sh`（与 preview 同款打包，版本号取
     tag、prerelease=false），发布 Release 后同样回写 `stable` 字段。

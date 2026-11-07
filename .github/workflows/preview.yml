@@ -51,7 +51,16 @@ jobs:
 
       # 回写 version.json（preview 通道）供客户端更新检测；[skip ci] 防回环。
       - name: Write back version.json (preview)
-        run: bash .github/scripts/update-version-json.sh preview "${{ steps.package.outputs.version }}" "${{ steps.package.outputs.build_ts }}" "${{ steps.package.outputs.asset_name }}"
+        env:
+          VERSION_WRITEBACK_DEPLOY_KEY: ${{ secrets.VERSION_WRITEBACK_DEPLOY_KEY }}
+          VERSION_WRITEBACK_REMOTE: git@ssh.github.com:glance522/rf4_server_simulator.git
+        run: |
+          key_file="$RUNNER_TEMP/rf4-version-writeback"
+          printf '%s\n' "$VERSION_WRITEBACK_DEPLOY_KEY" > "$key_file"
+          chmod 600 "$key_file"
+          ssh-keyscan -H -p 443 ssh.github.com > "$RUNNER_TEMP/rf4-known-hosts"
+          export GIT_SSH_COMMAND="ssh -p 443 -i $key_file -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/rf4-known-hosts -o StrictHostKeyChecking=yes"
+          bash .github/scripts/update-version-json.sh preview "${{ steps.package.outputs.version }}" "${{ steps.package.outputs.build_ts }}" "${{ steps.package.outputs.asset_name }}"
 
       # jsDelivr 对 @main 引用有最长约 12h 缓存；best-effort 清缓存，失败不阻塞。
       - name: Purge jsDelivr cache

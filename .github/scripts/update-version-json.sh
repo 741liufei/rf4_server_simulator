@@ -12,9 +12,11 @@ RELEASED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 git config user.name "rf4-bot"
 git config user.email "rf4-bot@users.noreply.github.com"
-# 回写基于 origin/main 最新：tag/workflow checkout 可能是 detached 或落后于 main。
-git fetch origin main
-git checkout -B write-back origin/main
+# 回写基于远端 main 最新：tag/workflow checkout 可能是 detached 或落后于 main。
+# 本地/普通发布可用 origin；版本回写 workflow 会传入专用 SSH deploy key 的 URL。
+WRITE_REMOTE="${VERSION_WRITEBACK_REMOTE:-origin}"
+git fetch "${WRITE_REMOTE}" main
+git checkout -B write-back FETCH_HEAD
 
 python3 - "${CHANNEL}" "${VERSION}" "${BUILD_TS}" "${RELEASED_AT}" "${ASSET_NAME}" <<'PY'
 import json, sys
@@ -52,6 +54,6 @@ if git diff --cached --quiet; then
   echo "version.json 无变化，跳过提交"
 else
   git commit -m "chore(release): ${CHANNEL} ${VERSION} [skip ci]"
-  git push origin HEAD:main
+  git push "${WRITE_REMOTE}" HEAD:main
 fi
 echo "version.json 已回写: ${CHANNEL}=${VERSION} build_ts=${BUILD_TS} asset=${ASSET_NAME}"
