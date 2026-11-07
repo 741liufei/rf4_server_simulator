@@ -159,6 +159,79 @@ func (s *Server) fishHuntBaitMatch(ctx context.Context, key string, c fishRollCo
 	}
 }
 
+// hookScore 把实际钩号与钩体长度合成为一个连续值；0=小钩，0.5=中钩，1=大钩。
+// 不把钩号直接当阈值，避免同一尺寸族里出现突然断层。
+func hookScore(spec gearPhysicsSpec) float64 {
+	if !spec.HookPresent {
+		return .5
+	}
+	size := groundbaitClamp(float64(spec.HookSize)/33.0, 0, 1)
+	length := groundbaitClamp((spec.HookLengthMM-1.8)/(76.0-1.8), 0, 1)
+	return groundbaitClamp(.65*size+.35*length, 0, 1)
+}
+
+// hookGapeG 是钩型的参考入口容量。这里只用于软匹配，不再作为派鱼硬上限。
+func hookGapeG(spec gearPhysicsSpec) float64 {
+	if !spec.HookPresent {
+		return 0
+	}
+	return hookWeightCapG(spec.HookLengthMM, spec.HookSize) * gearOverloadFactor
+}
+
+// hookBiteDelayFactor 让大钩上口慢一点、小钩入口快一点。
+func hookBiteDelayFactor(spec gearPhysicsSpec) float64 {
+	if !spec.HookPresent {
+		return 1
+	}
+	return .90 + .30*hookScore(spec)
+}
+
+func (s *Server) hookBiteDelayFactorForRig(ctx context.Context, uid int64, rod string) float64 {
+	if s == nil || s.DB == nil || uid == 0 || rod == "" {
+		return 1
+	}
+	ids := s.rigGearIDs(ctx, uid, rod)
+	return hookBiteDelayFactor(s.loadGearSpecForRig(ctx, ids, rod))
+}
+
+// hookSolidHold 返回普通鱼的稳定入口概率与中钩后保持率。
+// 蓝冠不走这里，蓝冠由 luckProtected 直接保送。
+func hookSolidHold(weightG int64, spec gearPhysicsSpec) (solid, hold float64) {
+	if weightG <= 0 || !spec.HookPresent {
+		return .98, .98
+	}
+	gape := hookGapeG(spec)
+	if gape <= 0 {
+		return .98, .98
+	}
+	r := float64(weightG) / gape
+	solid = .96 - .45*math.Max(0, r-.8)
+	if r < .25 {
+		solid *= .55 + 1.8*r
+	}
+	solid = groundbaitClamp(solid, .15, .96)
+	hold = groundbaitClamp(.98-.30*math.Max(0, r-1), .50, .98)
+	return
+}
+
+func applyHookBiteQuality(f *RolledFish, spec gearPhysicsSpec) {
+	if f == nil {
+		return
+	}
+	f.BiteQuality = "solid"
+	f.HookHoldP = 1
+	if f.Grade >= 4 {
+		// 蓝冠是低概率天命鱼：钩型、嘬饵、保持率全部免检。
+		f.LuckProtected = true
+		return
+	}
+	solid, hold := hookSolidHold(f.WeightG, spec)
+	f.HookHoldP = hold
+	if rand.Float64() > solid {
+		f.BiteQuality = "nibble"
+	}
+}
+
 func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
 	out := fishHuntReadiness{Stage: fishHuntDaily}
 	if h == nil || s.DB == nil || !s.groundbaitEnabled() {
@@ -201,7 +274,8 @@ func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollCo
 	return out
 }
 
-func fishHuntWeights(stage int, h *fishHuntState, trophyLuck float64, comp bool) (w1, w2, w3, w4 float64, forceTrophy bool) {
+func fishHuntWeights(stage int, h *fishHuntState, trophyLuck, hookMatch float64,
+	comp bool) (w1, w2, w3, w4 float64, forceTrophy bool) {
 	switch stage {
 	case fishHuntGather:
 		w1, w2, w3, w4 = 54.5, 43, 2, .5
@@ -211,6 +285,18 @@ func fishHuntWeights(stage int, h *fishHuntState, trophyLuck float64, comp bool)
 		w1, w2, w3, w4 = 10, 64, 20, 6
 	default:
 		w1, w2, w3, w4 = 74.7, 24, 1, .3
+	}
+	// 蓝冠 w4 不参与钩型偏置：蓝冠是纯运气鱼，任何钩型概率相同。
+	// 小钩只压低普通入口里的奖杯权重，大钩只提高奖杯权重。
+	hookMatch = groundbaitClamp(hookMatch, 0, 1)
+	if hookMatch < .5 {
+		t := (.5 - hookMatch) / .5
+		w1 *= 1 + .15*t
+		w3 *= 1 - .35*t
+	} else if hookMatch > .5 {
+		t := (hookMatch - .5) / .5
+		w1 *= 1 - .20*t
+		w3 *= 1 + .30*t
 	}
 	if stage > fishHuntDaily && h != nil {
 		switch {
@@ -322,7 +408,8 @@ func (s *Server) sampleHuntBand(ctx context.Context, key string, grade int64, sc
 func (s *Server) sampleHuntWeight(ctx context.Context, key string, modeMult, scale, capG float64, c fishRollContext,
 	h *fishHuntState) (int64, int64, fishHuntReadiness) {
 	readiness := s.fishHuntReadiness(ctx, key, c, h)
-	w1, w2, w3, w4, force := fishHuntWeights(readiness.Stage, h, c.skill.TrophyLuck, readiness.Comp)
+	w1, w2, w3, w4, force := fishHuntWeights(readiness.Stage, h, c.skill.TrophyLuck,
+		hookScore(c.hook), readiness.Comp)
 	if capG > 0 {
 		lines := s.cachedSettleStatics(ctx, c, key)
 		if capG/math.Max(scale, .0001) < float64(lines[2]) {

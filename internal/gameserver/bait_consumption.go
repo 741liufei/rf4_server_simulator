@@ -559,6 +559,21 @@ func (s *Server) consumeHookedBait(sess *Session, f *RolledFish, rod string) err
 	return nil
 }
 
+// consumeNibbleBait 处理“鱼碰到/嘬到饵但没中钩”的轻量消耗。
+// 事件键加 :nibble，与同一条鱼的中钩扣饵分开，避免重放重复扣。
+func (s *Server) consumeNibbleBait(sess *Session, f *RolledFish, rod string) error {
+	if sess == nil || f == nil || !f.BaitsKnown {
+		return nil
+	}
+	change, err := s.consumeBaitEvent(sess.pushCtx(), sess.Userid, rod,
+		f.FishGUID+":nibble", strings.Fields(f.BaitGUIDs), false)
+	if err != nil {
+		return err
+	}
+	sess.pushBaitChange(change)
+	return nil
+}
+
 func (s *Server) consumeCastBait(sess *Session, st *FishState) error {
 	st.mu.Lock()
 	rod, cast := st.GearGuid, st.CastTs

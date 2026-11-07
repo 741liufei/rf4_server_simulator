@@ -33,6 +33,7 @@ type fishRollContext struct {
 	skill      fishingSkillBonus
 	spotEnv    fishSpotEnvironment
 	runtime    *fishRollRuntime
+	hook       gearPhysicsSpec
 }
 
 type fishRollRuntime struct {

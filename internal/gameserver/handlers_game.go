@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand"
 	"strings"
 	"time"
 
@@ -1262,12 +1263,20 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	wasHooked := st.Hooked
-	st.Hooked = true
 	pending := st.Pending
 	gear := st.GearGuid
 	rigType := st.RigType
 	castActive := st.CastActive
 	resolved := st.Resolved
+	// 钩型保持率在中钩确认时再抽样一次；蓝冠天命鱼不走这里。
+	if pending != nil && !pending.LuckProtected && pending.BiteQuality == "solid" &&
+		pending.HookHoldP > 0 && rand.Float64() > pending.HookHoldP {
+		pending.BiteQuality = "nibble"
+	}
+	nibble := pending != nil && pending.BiteQuality == "nibble"
+	if !nibble {
+		st.Hooked = true
+	}
 	hookedFish, announce := st.takeHookedChatFishLocked()
 	st.mu.Unlock()
 	fishGUID, species := "", ""
@@ -1275,6 +1284,28 @@ func hFishingHooked(ctx *Ctx) ([]byte, bool) {
 		fishGUID, species = pending.FishGUID, pending.Species
 	}
 	ctx.Log.Info("14/11 中鱼", "rod", shortGUID(gear), "fish", shortGUID(fishGUID), "species", species, "was_hooked", wasHooked)
+	if nibble {
+		if pending != nil {
+			if err := srv.consumeNibbleBait(ctx.Sess, pending, gear); err != nil {
+				ctx.Log.Warn("嘬饵扣饵失败", "fish", pending.FishGUID, "err", err)
+			}
+		}
+		st.mu.Lock()
+		if st.Pending == pending {
+			st.Pending = nil
+			st.PushSent = false
+			st.Hooked = false
+			st.Resolved = false
+			st.PendingRepush = 0
+			st.LuckRepush = 0
+		}
+		st.mu.Unlock()
+		if castActive && !resolved {
+			srv.scheduleBiteState(ctx.Sess, st, false, false)
+		}
+		ctx.Log.Info("14/11 嘬饵未中钩，重新排鱼", "fish", shortGUID(fishGUID), "species", species)
+		return nil, true
+	}
 	if pending != nil {
 		if err := srv.consumeHookedBait(ctx.Sess, pending, gear); err != nil {
 			ctx.Log.Warn("中鱼后鱼饵扣减失败", "fish", pending.FishGUID, "err", err)
@@ -1366,6 +1397,18 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 			st.PendingRepush = 0
 			st.Resolved = true
 		}
+		st.mu.Unlock()
+		return nil, true
+	}
+	if (f0 == 1 || f0 == 2 || f0 == 7 || f0 == 8) && st.Hooked &&
+		st.Pending != nil && st.Pending.LuckProtected && st.LuckRepush < 2 {
+		st.LuckRepush++
+		st.Hooked = false
+		st.PushSent = false
+		st.PendingRepush = 0
+		srv.armPendingTimerLocked(ctx.Sess.Userid, st, 2*time.Second)
+		ctx.Log.Info("蓝冠天命保护：忽略钩型脱钩并重推", "f0", f0,
+			"fish", shortGUID(st.Pending.FishGUID), "retry", st.LuckRepush)
 		st.mu.Unlock()
 		return nil, true
 	}

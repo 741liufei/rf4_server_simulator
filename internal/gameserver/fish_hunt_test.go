@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"rf4server/internal/proto"
 )
 
 func TestFishHuntStageWeights(t *testing.T) {
@@ -17,7 +19,7 @@ func TestFishHuntStageWeights(t *testing.T) {
 		{fishHuntGiant, 10, 64, 20, 6},
 	}
 	for _, tc := range tests {
-		w1, w2, w3, w4, force := fishHuntWeights(tc.stage, &fishHuntState{}, 0, false)
+		w1, w2, w3, w4, force := fishHuntWeights(tc.stage, &fishHuntState{}, 0, .5, false)
 		if force || math.Abs(w1-tc.w1) > 1e-9 || math.Abs(w2-tc.w2) > 1e-9 ||
 			math.Abs(w3-tc.w3) > 1e-9 || math.Abs(w4-tc.w4) > 1e-9 {
 			t.Fatalf("stage=%d weights=(%.1f,%.1f,%.1f,%.1f) force=%v", tc.stage, w1, w2, w3, w4, force)
@@ -26,13 +28,103 @@ func TestFishHuntStageWeights(t *testing.T) {
 }
 
 func TestFishHuntPityForcesTrophy(t *testing.T) {
-	_, _, _, _, force := fishHuntWeights(fishHuntActive, &fishHuntState{Pity: 60}, 0, false)
+	_, _, _, _, force := fishHuntWeights(fishHuntActive, &fishHuntState{Pity: 60}, 0, .5, false)
 	if !force {
 		t.Fatal("60 尾未出奖杯时必须触发奖杯硬保底")
 	}
-	_, _, w3, _, force := fishHuntWeights(fishHuntActive, &fishHuntState{Pity: 30}, 0, false)
+	_, _, w3, _, force := fishHuntWeights(fishHuntActive, &fishHuntState{Pity: 30}, 0, .5, false)
 	if force || w3 <= 6.8 {
 		t.Fatalf("30 尾软保底应提高奖杯权重，w3=%.2f force=%v", w3, force)
+	}
+}
+
+func TestFishHuntBlueProbabilityIsHookIndependent(t *testing.T) {
+	_, _, _, smallBlue, _ := fishHuntWeights(fishHuntActive, &fishHuntState{}, 0, .1, false)
+	_, _, _, largeBlue, _ := fishHuntWeights(fishHuntActive, &fishHuntState{}, 0, .9, false)
+	if math.Abs(smallBlue-largeBlue) > 1e-9 {
+		t.Fatalf("蓝冠概率不能受钩型影响: small=%.3f large=%.3f", smallBlue, largeBlue)
+	}
+}
+
+func TestLuckProtectedBlueBypassesHookQuality(t *testing.T) {
+	tiny := gearPhysicsSpec{HookPresent: true, HookSize: 0, HookLengthMM: 1.8}
+	f := &RolledFish{Grade: 4, WeightG: 500_000}
+	applyHookBiteQuality(f, tiny)
+	if !f.LuckProtected || f.BiteQuality != "solid" || f.HookHoldP != 1 {
+		t.Fatalf("蓝冠天命鱼必须绕过钩型判定: %+v", f)
+	}
+}
+
+func TestHookBiteStatePersistsWithPendingFish(t *testing.T) {
+	want := &RolledFish{
+		FishGUID: "fish-nibble", BiteQuality: "nibble", HookHoldP: .42, LuckProtected: false,
+	}
+	got := rolledFishFromStore(rolledFishToStore(want))
+	if got == nil || got.BiteQuality != want.BiteQuality || got.HookHoldP != want.HookHoldP ||
+		got.LuckProtected != want.LuckProtected {
+		t.Fatalf("钩型咬口状态未持久化: %+v", got)
+	}
+}
+
+func TestLuckProtectedBlueRejectsEscapeFrame(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	sess, _ := newTunnelProbe(t, s)
+	st := s.stateFor(sess.Userid)
+	fish := &RolledFish{Species: "crucian", Grade: 4, WeightG: 3200,
+		BiteQuality: "solid", HookHoldP: 1, LuckProtected: true}
+	st.mu.Lock()
+	st.CastActive, st.InWater, st.Hooked, st.Pending = true, true, true, fish
+	st.mu.Unlock()
+
+	tree := proto.Args524(proto.Obj("lhicjpmglbo", 0,
+		proto.Field{Op: "U32", Num: ptrU64(2)}))
+	if _, ok := hFishingLeft(miscCtx(sess, 14, 12, tree)); !ok {
+		t.Fatal("14/12 未处理")
+	}
+	st.mu.Lock()
+	kept := st.Pending == fish && st.LuckRepush == 1 && st.pendingTimer != nil && !st.Hooked
+	st.cancelPendingTimerLocked()
+	st.mu.Unlock()
+	if !kept {
+		t.Fatalf("天命蓝冠不应被钩型脱钩清掉: pending=%v retry=%d timer=%v hooked=%v",
+			st.Pending != nil, st.LuckRepush, st.pendingTimer != nil, st.Hooked)
+	}
+}
+
+func TestNibbleDoesNotEnterHookedState(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	sess, _ := newTunnelProbe(t, s)
+	st := s.stateFor(sess.Userid)
+	fish := &RolledFish{Species: "crucian", Grade: 1, WeightG: 120,
+		BiteQuality: "nibble", HookHoldP: .4}
+	st.mu.Lock()
+	st.CastActive, st.InWater, st.Resolved, st.Pending = true, true, false, fish
+	st.mu.Unlock()
+
+	if _, ok := hFishingHooked(miscCtx(sess, 14, 11, nil)); !ok {
+		t.Fatal("14/11 嘬饵处理失败")
+	}
+	st.mu.Lock()
+	cleared := st.Pending == nil && !st.Hooked && st.biteTimer != nil
+	st.cancelBiteTimerLocked()
+	st.mu.Unlock()
+	if !cleared {
+		t.Fatalf("嘬饵不应进入 Hooked 状态: pending=%v hooked=%v timer=%v",
+			st.Pending != nil, st.Hooked, st.biteTimer != nil)
+	}
+}
+
+func TestHookQualityPrefersDifferentFishSizes(t *testing.T) {
+	tiny := gearPhysicsSpec{HookPresent: true, HookSize: 4, HookLengthMM: 2.5}
+	large := gearPhysicsSpec{HookPresent: true, HookSize: 28, HookLengthMM: 24}
+	if hookScore(tiny) >= hookScore(large) {
+		t.Fatalf("大钩评分应高于小钩: tiny=%.2f large=%.2f", hookScore(tiny), hookScore(large))
+	}
+	if solid, _ := hookSolidHold(100, large); solid >= .9 {
+		t.Fatalf("大钩遇 100g 小鱼不应有稳定入口，solid=%.2f", solid)
+	}
+	if solid, _ := hookSolidHold(20_000, tiny); solid >= .9 {
+		t.Fatalf("小钩遇 20kg 大鱼不应有稳定入口，solid=%.2f", solid)
 	}
 }
 

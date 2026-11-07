@@ -17,6 +17,9 @@ type FishingFish struct {
 	HappyHourKnown bool    `json:"happy_hour_known,omitempty"`
 	BaitGUIDs      string  `json:"bait_guids,omitempty"`
 	BaitsKnown     bool    `json:"baits_known,omitempty"`
+	BiteQuality    string  `json:"bite_quality,omitempty"`
+	HookHoldP      float64 `json:"hook_hold_p,omitempty"`
+	LuckProtected  bool    `json:"luck_protected,omitempty"`
 	FishGUID       string  `json:"fish_guid"`
 	Species        string  `json:"species"`
 	Grade          int64   `json:"grade"`
