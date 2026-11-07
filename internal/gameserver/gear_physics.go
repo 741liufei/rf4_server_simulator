@@ -305,6 +305,23 @@ func (s *Server) rodReelDragSetting(ctx context.Context, rodGUID string) (int64,
 	return setting, true
 }
 
+// rodReelSpeedSetting 读取客户端 17/15 保存的收线速度；没有记录时返回 false。
+// 收线速度不是摩擦档位，不能按 maxReelDragStop 截断（抓包实测值 41）。
+func (s *Server) rodReelSpeedSetting(ctx context.Context, rodGUID string) (int64, bool) {
+	if s == nil || s.DB == nil || strings.TrimSpace(rodGUID) == "" {
+		return 0, false
+	}
+	raw, err := s.DB.GetRodSetting(ctx, rodGUID, reelSpeedSettingKey)
+	if err != nil {
+		return 0, false
+	}
+	setting, cerr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if cerr != nil || setting < 0 {
+		return 0, false
+	}
+	return setting, true
+}
+
 func rodTestG(def *store.ItemDef) (float64, float64) {
 	return itemDefF32(def, gearAttrTestMin), itemDefF32(def, gearAttrTestMax)
 }

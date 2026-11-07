@@ -126,6 +126,26 @@ func frictionWasherDrag(child *proto.Value) (value float64, present bool, idx in
 	}
 }
 
+// reelInstalledDragFieldFromRow reads only the stored force field of the
+// installed washer. present means that washer resolves to category 9 and its
+// force scalar can be read, including zero; it does not validate the physical
+// range and never denotes a value obtained from a definition fallback.
+func (s *Server) reelInstalledDragFieldFromRow(ctx context.Context, row *store.Item) (value float64, present bool) {
+	if row == nil {
+		return 0, false
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return 0, false
+	}
+	child, _, _, found := s.selectedReelPart(ctx, fields, 9)
+	if !found {
+		return 0, false
+	}
+	value, present, _ = frictionWasherDrag(child)
+	return value, present
+}
+
 // reelBaseDragFromRow 从当前已安装的摩擦片实例读取基础制动力。
 // 老数据的子实例若缺物理字段，会回退到所选零件定义，而不是母轮出厂定义。
 // 零件字段记录的是零件自身成色；母轮顶层受力值还要乘母轮成色。
@@ -201,6 +221,15 @@ func (s *Server) degradeFrictionWasher(ctx context.Context, reel *store.Item) (w
 	fj, err := FieldsToJSON(fields)
 	if err != nil {
 		return false, true, err
+	}
+	// Persist the root scale and worn washer together using the updated parts.
+	snapshot := *reel
+	snapshot.FieldsJSON = fj
+	if s.canonicalizeReelStrength(ctx, &snapshot, fields) {
+		fj, err = FieldsToJSON(fields)
+		if err != nil {
+			return false, true, err
+		}
 	}
 	if err := s.DB.UpdateItemFields(ctx, reel.GUID, fj, reel.Qty, reel.Durability, reel.Workmanship, reel.RigGUID); err != nil {
 		return false, true, err

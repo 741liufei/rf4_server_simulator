@@ -26,7 +26,7 @@ type FishState struct {
 	Loc         string
 	Spot        uint64
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
-	ReelSetting int64 // 17/14 最近一次摩擦/转速值；路亚族同时作为收线速度档
+	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
 	CastActive  bool
 	InWater     bool
 	NeedBite    bool
@@ -496,10 +496,10 @@ const (
 	verifiedStaminaPerGram      = 2.3880400747623083
 	verifiedInitialStaminaRatio = 0.5628187656402588
 	verifiedForcePerGram        = 0.009806650025503976
-	// 实机反馈鱼体力见底过快：默认把体力池放大 4 倍，并让鱼以 85% 体力开局。
-	// 两项都可通过 tunables 的 fish_stamina_scale / fish_initial_stamina_ratio 调整。
-	defaultFishStaminaScale        = 4.0
-	defaultFishInitialStaminaRatio = 0.85
+	// 默认使用真实样本校准值；需要调整手感时只通过 tunables 显式覆盖，
+	// 不再把主观补偿值作为全体鱼的基准。
+	defaultFishStaminaScale        = 1.0
+	defaultFishInitialStaminaRatio = verifiedInitialStaminaRatio
 )
 
 // lengthSeed 保存体长公式 k*w^p 的参数。
