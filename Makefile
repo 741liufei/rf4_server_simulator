@@ -3,7 +3,8 @@
 GO ?= go
 BIN := bin
 VERSION ?= $(shell date +%Y%m%d%H%M%S)
-LDFLAGS := -s -w -X 'rf4server/internal/buildinfo.Version=$(VERSION)'
+BUILDTS ?= $(shell date -u +%Y%m%d%H%M%S)
+LDFLAGS := -s -w -X 'rf4server/internal/buildinfo.Version=$(VERSION)' -X 'rf4server/internal/buildinfo.BuildTs=$(BUILDTS)'
 
 CMDS := gateway gameserver seed
 ifeq ($(OFFLINE_TOOLS),1)
