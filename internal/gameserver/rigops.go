@@ -1040,6 +1040,10 @@ func (s *Server) splitMountableChild(ctx context.Context, uid int64, parentGUID,
 		s.log.Warn("计件挂载拆分失败", "item", shortGUID(itemGUID), "err", err)
 		return itemGUID, ""
 	}
+	if err := s.cloneGroundbaitRecipe(ctx, itemGUID, childGUID); err != nil {
+		_ = s.DB.DeleteItems(ctx, []string{childGUID})
+		return itemGUID, ""
+	}
 	if fullTake {
 		_ = s.DB.DeleteItems(ctx, []string{itemGUID})
 		s.log.Info("计件物品整堆上钩", "item", shortGUID(itemGUID), "count", count,
@@ -1114,6 +1118,10 @@ func (s *Server) materializeHanditemChild(ctx context.Context, uid int64, parent
 	}
 	if err := s.DB.InsertItem(ctx, child); err != nil {
 		s.log.Warn("手持物装填失败", "item", shortGUID(itemGUID), "err", err)
+		return itemGUID, ""
+	}
+	if err := s.cloneGroundbaitRecipe(ctx, itemGUID, childGUID); err != nil {
+		_ = s.DB.DeleteItems(ctx, []string{childGUID})
 		return itemGUID, ""
 	}
 	if load >= count {

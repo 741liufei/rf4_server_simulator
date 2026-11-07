@@ -21,6 +21,13 @@ type localBaitEvidenceKey struct {
 	bait string
 }
 
+// cachedGroundbaitAff 缓存「这一锅窝料 x 这条鱼」的食性契合度结论。
+// 契合度与天气无关，只跟成分和鱼种食性有关，一次判鱼里重复率极高。
+type cachedGroundbaitAff struct {
+	row    groundbaitAffinityRow
+	status int
+}
+
 // fishingRollCache 只在一次判鱼会话或测试批量采样内复用静态资料。
 // 运行时鱼口覆盖等可变数据不进入缓存。
 type fishingRollCache struct {
@@ -41,6 +48,8 @@ type fishingRollCache struct {
 	localEvidence        map[localBaitEvidenceKey]map[string]bool
 	fishEcology          map[string]fishEcologyProfile
 	fishEcologyLoaded    map[string]bool
+	gbAff                map[groundbaitAffKey]cachedGroundbaitAff
+	gbFishDiet           map[string]map[string]float64
 }
 
 func newFishingRollCache() *fishingRollCache {
@@ -56,6 +65,8 @@ func newFishingRollCache() *fishingRollCache {
 		localEvidence:     map[localBaitEvidenceKey]map[string]bool{},
 		fishEcology:       map[string]fishEcologyProfile{},
 		fishEcologyLoaded: map[string]bool{},
+		gbAff:             map[groundbaitAffKey]cachedGroundbaitAff{},
+		gbFishDiet:        map[string]map[string]float64{},
 	}
 }
 
