@@ -685,10 +685,9 @@ func (s *Server) rebuildRod(ctx context.Context, it *store.Item, obj *proto.Valu
 	// 都按 f5 的 gcfcdnfmnbh 逐行渲染，缺了它们零件行就是空的。
 	s.appendFactoryPartsToRig(ctx, obj)
 
-	// f16 Ticks now / f18 状态位 = 定义 | 2048
-	if idx := fieldIdxByCS("cnolibojkao", csCreated); idx >= 0 {
-		obj.Fields[idx].Num = ptrU64(uint64(netTicksNow()))
-	}
+	// 版本戳由实际装配/耐久修改推进。读取时变更版本会使客户端把未改动的
+	// 水中鱼竿也当作新快照重建，切竿或同步背包不应改变搏鱼实体。
+	// f18 状态位 = 定义 | 2048
 	if idx := fieldIdxByCS("cnolibojkao", "hgaijieklek"); idx >= 0 {
 		st := u64Of(obj.Fields[idx].Num)
 		if defBits, ok := defAttrU64(def, "hgaijieklek"); ok {

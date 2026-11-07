@@ -257,7 +257,7 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		want = guids[0]
 	}
 	cctx := ctx.Sess.pushCtx()
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 
@@ -363,7 +363,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 	}
 	uid := ctx.Sess.Userid
 	guids := deepGUIDs(ctx.Tree)
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	st.mu.Lock()

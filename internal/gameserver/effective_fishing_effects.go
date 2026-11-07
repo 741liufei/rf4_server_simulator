@@ -41,7 +41,7 @@ func (s *Server) currentSkillGear(ctx context.Context, uid int64, gears ...strin
 		return gears[0]
 	}
 	s.fishMu.Lock()
-	st := s.fishStates[uid]
+	st := s.fishStates[uid][s.heldFishingRods[uid]]
 	s.fishMu.Unlock()
 	if st != nil {
 		st.mu.Lock()

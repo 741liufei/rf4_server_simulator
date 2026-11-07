@@ -112,11 +112,10 @@ func hPositionReport(ctx *Ctx) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
-	st.mu.Lock()
-	st.PosX = x
-	st.PosZ = z
-	st.HasPos = true
-	st.mu.Unlock()
+	for _, st := range ctx.Sess.Srv.fishingStatesFor(ctx.Sess.Userid) {
+		st.mu.Lock()
+		st.PosX, st.PosZ, st.HasPos = x, z, true
+		st.mu.Unlock()
+	}
 	return nil, false
 }

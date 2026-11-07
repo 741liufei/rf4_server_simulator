@@ -480,8 +480,8 @@ func (s *Session) Push4_22Full() {
 }
 
 // Push4_22Hook 刺中后单钩同步：args("61")[131钩]。
-func (s *Session) Push4_22Hook() {
-	items, err := s.Srv.buildFightItems(s.pushCtx(), s.Userid, false)
+func (s *Session) Push4_22Hook(gears ...string) {
+	items, err := s.Srv.buildFightItems(s.pushCtx(), s.Userid, false, gears...)
 	if err != nil || len(items) == 0 {
 		return
 	}
