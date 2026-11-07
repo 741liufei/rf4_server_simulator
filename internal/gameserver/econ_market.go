@@ -1612,12 +1612,20 @@ func hRodSetDepth(ctx *Ctx) ([]byte, bool) {
 	if rodGUID == "" || depthCM <= 0 {
 		return nil, true
 	}
+	var row *store.Item
+	if srv.DB != nil {
+		row = srv.ownedRodRow(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID)
+		if row == nil {
+			ctx.Log.Warn("17/12 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
+	}
 	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.DepthCM = depthCM
 	st.mu.Unlock()
 	ctx.Log.Info("17/12 设置钓深", "竿", shortGUID(rodGUID), "深度cm", depthCM)
-	if srv.DB != nil && !srv.rodRigSetDepth(ctx.Sess.pushCtx(), rodGUID, depthCM) {
+	if row != nil && !srv.rodRigSetDepthRow(ctx.Sess.pushCtx(), row, depthCM) {
 		ctx.Log.Info("17/12 竿实例无钓组字段，仅记会话深度", "竿", shortGUID(rodGUID))
 	}
 	return nil, true
@@ -1659,18 +1667,27 @@ func hRodSetSpeed(ctx *Ctx) ([]byte, bool) {
 			return nil, true
 		}
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.ReelSetting = value
 	st.mu.Unlock()
 	return nil, true
 }
 
+// ownedRodRow 返回属于 uid 的竿实例行；竿不存在或归属不符时返回 nil。
+func (s *Server) ownedRodRow(ctx context.Context, uid int64, rodGUID string) *store.Item {
+	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
+	if err != nil || row == nil || row.UID != uid {
+		return nil
+	}
+	return row
+}
+
 // setOwnedRodSetting 校验竿实例属于 uid 后，持久化竿设置并尽力回写 f5 的第 fieldIdx 个字段。
 // 返回 false 表示竿不存在或不属于该玩家，此时不产生任何写入。
 func (s *Server) setOwnedRodSetting(ctx context.Context, uid int64, rodGUID, key string, value int64, fieldIdx int) bool {
-	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil || row.UID != uid {
+	row := s.ownedRodRow(ctx, uid, rodGUID)
+	if row == nil {
 		return false
 	}
 	_ = s.DB.UpsertRodSetting(ctx, rodGUID, key, strconv.FormatInt(value, 10))
@@ -1714,20 +1731,21 @@ func hRodSetClip(ctx *Ctx) ([]byte, bool) {
 	clipM = clampReelClipM(clipM)
 	ctx.Log.Info("17/13 设置轮管卡", "竿", shortGUID(rodGUID), "卡米", clipM)
 	if srv.DB != nil {
+		row := srv.ownedRodRow(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID)
+		if row == nil {
+			ctx.Log.Warn("17/13 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
 		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelClipSettingKey, strconv.FormatInt(clipM, 10))
-		if !srv.rodRigSetClip(ctx.Sess.pushCtx(), rodGUID, clipM) {
+		if !srv.rodRigSetClipRow(ctx.Sess.pushCtx(), row, clipM) {
 			ctx.Log.Info("17/13 竿实例无钓组字段，仅记竿设置", "竿", shortGUID(rodGUID))
 		}
 	}
 	return nil, true
 }
 
-// rodRigSetClip 更新竿实例 153.f5 的轮管卡米数，保留其他钓组状态。
-func (s *Server) rodRigSetClip(ctx context.Context, rodGUID string, clipM int64) bool {
-	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
-		return false
-	}
+// rodRigSetClipRow 更新已校验归属的竿实例 153.f5 轮管卡米数，保留其他钓组状态。
+func (s *Server) rodRigSetClipRow(ctx context.Context, row *store.Item, clipM int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false
@@ -1785,13 +1803,9 @@ func parseSetDepth(tree *proto.Value) (rodGUID string, depthCM int64) {
 	return parseRodGuidInt(tree)
 }
 
-// rodRigSetDepth 设置竿实例 f5 的钓棚深度（厘米）并落库。
+// rodRigSetDepthRow 设置已校验归属的竿实例 f5 钓棚深度（厘米）并落库。
 // 组件表和钓组类型保持不变；f5 缺失时先按竿型派生默认钓组。
-func (s *Server) rodRigSetDepth(ctx context.Context, rodGUID string, depthCM int64) bool {
-	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
-		return false
-	}
+func (s *Server) rodRigSetDepthRow(ctx context.Context, row *store.Item, depthCM int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false
