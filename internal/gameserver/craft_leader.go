@@ -35,6 +35,13 @@ type craftedLeaderMaterials struct {
 	connector craftedMaterial
 }
 
+// 引线的 f3 接受普通主线，f1 接受前导线，按实际材料类型选择。
+const craftedMainLineKey = "baadhdmaonp"
+
+func isCraftedShockLeader(itemID string) bool {
+	return strings.HasPrefix(itemID, "leader_crafted_shock_")
+}
+
 var leaderWireMatchAttrs = []string{
 	"kngaaefkpka", // 最大拉力
 	"ciichedlnjh", // 线径
@@ -337,14 +344,17 @@ func (s *Server) materializeCraftedLeaderTx(
 	if row == nil || materials.line.row == nil || materials.line.def == nil {
 		return errors.New("引线缺少线材")
 	}
-	wireDef, err := s.leaderWireDefForLine(ctx, materials.line.def)
-	if err != nil {
-		return err
+	lineKey := gearAttrLeaderIn
+	switch materials.line.def.Category {
+	case gearCatLine:
+		lineKey = craftedMainLineKey
+	case gearCatLeaderWire:
+		if isCraftedShockLeader(row.ItemID) {
+			return errors.New("减震引线需要普通主线")
+		}
+	default:
+		return errors.New("引线材料不是主线或前导线")
 	}
-	// 模型与协议身份取前导线定义，强度仍按真实线材计算。
-	realLineDef := materials.line.def
-	materials.line.def = wireDef
-	materials.line.physical = realLineDef
 	def, err := itemDefByItemIDTx(ctx, tx, row.ItemID)
 	if err != nil || def == nil {
 		return fmt.Errorf("引线成品定义不存在: %s", row.ItemID)
@@ -361,7 +371,7 @@ func (s *Server) materializeCraftedLeaderTx(
 			fields[idx].Val = sub
 		}
 	}
-	lineObj, err := s.craftedMaterialObject(row, materials.line, gearAttrLeaderIn, leaderLengthCM)
+	lineObj, err := s.craftedMaterialObject(row, materials.line, lineKey, leaderLengthCM)
 	if err != nil {
 		return err
 	}
@@ -372,7 +382,7 @@ func (s *Server) materializeCraftedLeaderTx(
 			return err
 		}
 	}
-	setSub(gearAttrLeaderIn, lineObj)
+	setSub(lineKey, lineObj)
 	setSub("lbadjgllglo", connectorObj)
 
 	lineStrength := applyCraftedMaterialState(lineObj, materials.line, leaderLengthCM)
@@ -471,6 +481,12 @@ func (s *Server) repairCraftedLeaderWire(
 ) (changed bool, invalid bool, err error) {
 	if it == nil || it.WireClass != "oldfpclaabo" || !strings.HasPrefix(it.ItemID, "leader_crafted_") {
 		return false, false, nil
+	}
+	if idx := fieldIdxByCS(it.WireClass, craftedMainLineKey); idx >= 0 && idx < len(fields) {
+		line := fields[idx].Val
+		if line != nil && line.Kind == proto.KindObj && line.Class == categoryWireClass[gearCatLine].Class {
+			return false, false, nil
+		}
 	}
 	lineIdx := fieldIdxByCS(it.WireClass, gearAttrLeaderIn)
 	if lineIdx < 0 || lineIdx >= len(fields) {
