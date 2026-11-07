@@ -271,12 +271,11 @@ func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reporte
 	if report.terminalCategory != 0 {
 		return s.breakComponentTx(ctx, uid, rodGUID, reportedGUID, report.terminalCategory)
 	}
-	if reportedGUID == "" || reportedGUID == zeroGUID || reportedGUID == rodGUID || report.category == gearCatRod {
-		brokenGUID := reportedGUID
-		if brokenGUID == "" || brokenGUID == zeroGUID {
-			brokenGUID = rodGUID
-		}
-		return s.breakRodTx(ctx, uid, rodGUID, brokenGUID)
+	// 只有客户端明确上报竿 GUID（或上报件本身是竿类）时才直接断竿。
+	// 空/zero GUID 表示“未识别断件”，继续走下面的最弱环回退，
+	// 物理数据也缺失时 resolveGearBreak 才兜底判竿。
+	if reportedGUID == rodGUID || report.category == gearCatRod {
+		return s.breakRodTx(ctx, uid, rodGUID, rodGUID)
 	}
 	if report.category != 0 {
 		if s.log != nil {
