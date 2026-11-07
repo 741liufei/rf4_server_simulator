@@ -9,6 +9,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -126,8 +127,38 @@ func writeFileAtomic(path string, data []byte, mode fs.FileMode) (err error) {
 	if err != nil {
 		return err
 	}
-	err = windows.MoveFileEx(from, to, windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+	return replaceFileWithRetry(from, to)
+}
+
+// replaceFileWithRetry 用 MoveFileEx 替换目标文件，遇到共享冲突时短暂重试。
+//
+// hosts 位于 System32\drivers\etc，常被杀软、Search 索引或 DNS Client 短暂持有。
+// 单次替换失败会让面板随机报「hosts 写入失败」，而那时通常是毫秒级占用，
+// 因此对「文件被占用」这类可恢复错误做有限重试；权限不足等错误不重试。
+func replaceFileWithRetry(from, to *uint16) error {
+	const attempts = 5
+	var err error
+	for i := 0; i < attempts; i++ {
+		err = windows.MoveFileEx(from, to,
+			windows.MOVEFILE_REPLACE_EXISTING|windows.MOVEFILE_WRITE_THROUGH)
+		if err == nil {
+			return nil
+		}
+		if !isTransientReplaceError(err) {
+			return err
+		}
+		if i < attempts-1 {
+			time.Sleep(time.Duration(20*(i+1)) * time.Millisecond) // 20/40/60/80ms
+		}
+	}
 	return err
+}
+
+// isTransientReplaceError 判断错误是否属于「等一下就好」的类型。
+func isTransientReplaceError(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) ||
+		errors.Is(err, windows.ERROR_LOCK_VIOLATION) ||
+		errors.Is(err, windows.ERROR_ACCESS_DENIED)
 }
 
 // hostsSetLocal 将本项目管理的行切换为启用状态（标准 hosts 格式，指向

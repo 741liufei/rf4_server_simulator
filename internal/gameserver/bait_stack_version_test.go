@@ -25,6 +25,8 @@ func baitStackVersion(t *testing.T, row *store.Item) uint64 {
 func TestBaitReloadPersistsSourceStackVersion(t *testing.T) {
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, child := baitTestMount(t, s, rod, "worm_01", 5, 350)
 	before, err := db.GetItemByGUID(t.Context(), source)
 	if err != nil {

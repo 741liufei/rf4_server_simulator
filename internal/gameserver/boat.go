@@ -163,14 +163,12 @@ func (s *Server) markPlayerBoarded(ctx *Ctx, tree *proto.Value) {
 	if unix <= time.Now().Unix() {
 		return // 票已过期，不能当成在船上
 	}
-	st := ctx.Sess.Srv.stateFor(ctx.Sess.Userid)
-	if st == nil {
-		return
+	for _, st := range ctx.Sess.Srv.fishingStatesFor(ctx.Sess.Userid) {
+		st.mu.Lock()
+		st.markBoardLocked(unix)
+		st.markBoatClientEventLocked(time.Now().Unix(), true)
+		st.mu.Unlock()
 	}
-	st.mu.Lock()
-	st.markBoardLocked(unix)
-	st.markBoatClientEventLocked(time.Now().Unix(), true)
-	st.mu.Unlock()
 }
 
 // pickStationTicket 按站点在背包里挑一张未租用的船票（不写租用状态）。

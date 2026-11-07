@@ -249,63 +249,26 @@ func (s *Server) clearFishingStateRefs(ctx context.Context, uid int64, removed [
 	if len(removed) == 0 {
 		return
 	}
-	// 内存态：在线回收（到期/切图）时立即撤抛竿。
-	s.fishMu.Lock()
-	st := s.fishStates[uid]
-	s.fishMu.Unlock()
-	if st != nil {
+	for _, st := range s.fishingStatesFor(uid) {
 		st.mu.Lock()
 		gearGone, baitGone := false, false
 		for _, g := range removed {
-			if g != "" && g == st.GearGuid {
-				gearGone = true
-			}
-			if g != "" && g == st.Bait {
-				baitGone = true
-			}
+			gearGone = gearGone || g != "" && g == st.GearGuid
+			baitGone = baitGone || g != "" && g == st.Bait
 		}
 		if gearGone || baitGone {
 			st.cancelBiteTimerLocked()
 			st.cancelPendingTimerLocked()
-			st.GearGuid = ""
-			st.Bait = ""
-			st.CastActive = false
-			st.InWater = false
-			st.NeedBite = false
-			st.Hooked = false
-			st.PushSent = false
-			st.Pending = nil
+			st.castGeneration++
+			st.GearGuid, st.Bait = "", ""
+			st.CastActive, st.InWater, st.NeedBite = false, false, false
+			st.Hooked, st.PushSent, st.Resolved = false, false, true
+			st.Pending, st.Armed, st.pushing = nil, nil, nil
+			st.persist.recoverPending, st.persist.recoverCompleted = false, false
 			st.BiteAt = time.Time{}
 		}
 		st.mu.Unlock()
 	}
-	// DB 态：下次登录的钓位恢复不再引用已删除物品。
-	saved, err := s.DB.LoadFishingState(ctx, uid)
-	if err != nil || saved == nil {
-		return
-	}
-	gearGone, baitGone := false, false
-	for _, g := range removed {
-		if g != "" && g == saved.GearGUID {
-			gearGone = true
-		}
-		if g != "" && g == saved.Bait {
-			baitGone = true
-		}
-	}
-	if !gearGone && !baitGone {
-		return
-	}
-	if _, err := s.DB.SQL.ExecContext(ctx, `UPDATE fishing_state SET
-		gear_guid=CASE WHEN ? THEN '' ELSE gear_guid END,
-		bait=CASE WHEN ? THEN '' ELSE bait END,
-		cast_active=0, hooked=0, resolved=0, pending_json=NULL, armed_json=NULL,
-		cast_ts_ns=0, fall_ts_ns=0, fall_seen=0, bite_at_ns=0, updated_ts=0
-		WHERE uid=?`, gearGone, baitGone, uid); err != nil {
-		s.log.Warn("钓鱼游回收清理钓位引用失败", "uid", uid, "err", err)
-		return
-	}
-	s.log.Info("钓鱼游回收清理钓位悬空引用", "uid", uid, "gear_gone", gearGone, "bait_gone", baitGone)
 }
 
 // activeTripRemainingSec 当前地点有效钓鱼游的剩余秒数（<=0 或无票返回 false）。

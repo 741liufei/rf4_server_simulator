@@ -9,6 +9,7 @@ fi
 
 SHORT_SHA="${COMMIT_SHA:0:7}"
 BUILD_TS="$(date -u +%Y%m%dT%H%M%SZ)"
+BUILD_NUM_TS="$(date -u +%Y%m%d%H%M%S)"
 VERSION="preview-${BUILD_TS}-${SHORT_SHA}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "${ROOT}"
@@ -48,7 +49,7 @@ rm -rf "${DIST}"
 mkdir -p "${STAGE}/bin" "${STAGE}/certs"
 
 echo "Building ${VERSION} from ${COMMIT_SHA}"
-LDFLAGS="-s -w -X 'rf4server/internal/buildinfo.Version=${VERSION}'"
+LDFLAGS="-s -w -X 'rf4server/internal/buildinfo.Version=${VERSION}' -X 'rf4server/internal/buildinfo.BuildTs=${BUILD_NUM_TS}'"
 for command in gateway gameserver seed; do
   GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "${LDFLAGS}" \
     -o "${STAGE}/bin/${command}.exe" "./cmd/${command}"
@@ -156,6 +157,7 @@ ASSET_SHA256="$(sha256sum "${ASSET_PATH}" | awk '{print $1}')"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   {
     echo "version=${VERSION}"
+    echo "build_ts=${BUILD_NUM_TS}"
     echo "asset_path=${ASSET_PATH}"
     echo "asset_name=${ASSET_NAME}"
     echo "asset_sha256=${ASSET_SHA256}"

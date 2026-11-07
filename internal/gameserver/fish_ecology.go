@@ -532,8 +532,17 @@ func lureLayerFromMotion(mask uint32, previous float64) float64 {
 	switch {
 	case mask&0x1000 != 0:
 		return .08
+	// 犬步（WalkDog）是水面系的收线动作：没有这个分支时会落到 default，
+	// 水面拟饵被当成中层（previous≈.5）判鱼，只能抽到中层鱼，客户端
+	// 表现为"鱼来了但不咬"。激溅（0x20）同理，只是可能同时带收线位。
+	case mask&0x100 != 0:
+		return .06
 	case mask&0x80000 != 0:
 		return normalizeWaterLayer(previous + .08)
+	case mask&0x20 != 0:
+		// 激溅是主动作，可能同时带收线位 0x400 或其它水层位；必须优先于
+		// 收线/静止分支，保持与 classifyLureMotion 一致。
+		return .08
 	case mask&0x200000 != 0:
 		return normalizeWaterLayer(previous - .08)
 	case mask&0x2000 != 0, mask&0x400000 != 0:

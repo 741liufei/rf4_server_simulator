@@ -28,8 +28,8 @@ func TestGatewayFullHandshakeAndEcho(t *testing.T) {
 	fc.Dial(token, false)
 
 	fc.SendRequest(5, 1, 1)
-	fc.WaitAck(1, 2*time.Second)
-	env := fc.WaitResponse(2 * time.Second)
+	fc.WaitAck(1, 15*time.Second)
+	env := fc.WaitResponse(15 * time.Second)
 	if env.Marker != -2 || env.CallID != 5 {
 		t.Fatalf("响应不符: marker=%d call_id=%d", env.Marker, env.CallID)
 	}

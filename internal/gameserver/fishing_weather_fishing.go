@@ -93,7 +93,9 @@ func (s *Server) emptyWeatherBiteLocked(sess *Session, st *FishState, now time.T
 	st.PushSent = false
 	st.Pending = nil
 	st.Resolved = true
-	if s.tunableF("fish_weather_enabled", 0) != 1 || rigTypeLureFamily[st.RigType] || st.Hooked || !st.CastActive || s.weatherRigBroken(s.dbCtx(), sess.Userid, st.GearGuid) {
+	// An empty roll consumes one bite opportunity, not the cast. A lure that
+	// remains in the water must keep checking independently of the held rod.
+	if st.Hooked || !st.CastActive || !st.InWater || !s.canFishWithBait(s.dbCtx(), sess.Userid, st.GearGuid) || s.weatherRigBroken(s.dbCtx(), sess.Userid, st.GearGuid) {
 		return
 	}
 	st.Resolved = false
