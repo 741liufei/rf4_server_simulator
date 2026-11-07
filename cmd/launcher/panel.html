@@ -9,6 +9,23 @@
 *{box-sizing:border-box}html,body{height:100%}body{margin:0;overflow:hidden;background:radial-gradient(circle at 80% 0,#17314b 0,transparent 30%),radial-gradient(circle at 0 100%,#122b2a 0,transparent 28%),var(--bg);color:var(--text);font:14px/1.55 "Segoe UI","Microsoft YaHei",system-ui,sans-serif}
 button{font:inherit;color:var(--text);cursor:pointer}.topbar{height:66px;display:flex;align-items:center;gap:24px;padding:0 24px;background:#08111ce8;border-bottom:1px solid var(--line);backdrop-filter:blur(16px);position:relative;z-index:2}.brand{display:flex;align-items:center;gap:12px;min-width:220px}.logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(145deg,#35d7b0,#2f8cff);display:grid;place-items:center;font-weight:900;color:#06121d;box-shadow:0 8px 22px #35d7b044}.brand b{display:block;font-size:16px;letter-spacing:.03em}.brand span{display:block;color:var(--muted);font-size:10px;letter-spacing:.14em;text-transform:uppercase}.tabs{display:flex;align-items:center;gap:6px;align-self:stretch}.tabs button{border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);padding:0 18px;font-weight:650}.tabs button:hover{color:var(--text);background:#122238}.tabs button.on{color:#fff;border-color:var(--accent);background:linear-gradient(180deg,transparent,#12223888)}.health{margin-left:auto;display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.dot{width:9px;height:9px;border-radius:50%;background:var(--danger);box-shadow:0 0 10px currentColor}.main{height:calc(100vh - 66px);min-height:0}.view{display:none;height:100%}.view.on{display:block}.control{overflow:auto;padding:24px 28px 48px}.hero{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:18px}.hero h1{font-size:24px;margin:0 0 4px}.hero p{margin:0;color:var(--muted);font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:1px solid var(--line);border-radius:9px;background:#132237;padding:8px 14px;font-weight:650;transition:.16s}.btn:hover{border-color:var(--accent);transform:translateY(-1px)}.btn.pri{background:linear-gradient(135deg,#2aaaf1,#4b7bff);border:0;box-shadow:0 6px 18px #2aaaf12a}.btn.bad{background:#3b1821;border-color:#6c2b3a;color:#ff9aac}.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}.notice{margin:0 0 16px;padding:11px 14px;border:1px solid #70434b;border-radius:10px;background:#361a22;color:#ffc1cc}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:18px}.card{background:linear-gradient(160deg,var(--panel),var(--bg2));border:1px solid var(--line);border-radius:14px;padding:16px;box-shadow:var(--shadow)}.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px}.card b{font-size:15px}.state{font-size:11px;padding:3px 9px;border-radius:999px;background:#26354a;color:#b8c8da}.state.running{background:#123a2e;color:var(--ok)}.state.starting,.state.backoff{background:#453515;color:var(--warn)}.state.stopped,.state.failed{background:#451c26;color:var(--danger)}.meta{color:var(--muted);font-size:11px;margin:8px 0 13px}.btns{display:flex;gap:6px}.btns button{flex:1;border:1px solid var(--line);background:#0a1421;border-radius:8px;padding:6px 8px;font-size:11px}.btns button:hover{border-color:var(--accent)}.logs-title{display:flex;justify-content:space-between;align-items:center;margin:20px 0 10px}.logs-title h2{font-size:16px;margin:0}.logs-title span{color:var(--muted);font-size:11px}.logs{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.log{min-width:0;background:#07101a;border:1px solid var(--line);border-radius:12px;overflow:hidden}.log h3{font-size:11px;color:var(--muted);padding:7px 10px;border-bottom:1px solid var(--line);font-family:Consolas,monospace}.log pre{height:220px;overflow:auto;padding:9px 10px;margin:0;font:11px/1.55 Consolas,monospace;white-space:pre-wrap;word-break:break-all;color:#b9c8d8}.game-launch{display:grid;grid-template-columns:minmax(180px,235px) minmax(0,1fr) auto;gap:12px 18px;align-items:center;margin-bottom:18px;padding:16px 18px}.game-copy h2{font-size:16px;margin:0 0 3px}.game-copy p{font-size:11px;color:var(--muted);margin:0}.game-editor{min-width:0;display:flex;flex-direction:column;gap:6px}.game-editor input{width:100%;background:#07101a;border:1px solid var(--line);border-radius:9px;color:var(--text);padding:9px 12px;font:12px Consolas,"Microsoft YaHei",monospace;outline:none}.game-editor input:focus{border-color:var(--accent);box-shadow:0 0 0 3px #42b8ff1e}.game-region{font-size:11px;color:var(--muted)}.game-region code{color:#9ed8ff;background:#0a1a29;border:1px solid #1d3b55;border-radius:5px;padding:1px 6px}.game-notice{grid-column:1/-1;padding:8px 11px;border-radius:8px;font-size:12px}.game-notice.ok{background:#123a2e;color:#6ff0b7;border:1px solid #1d5543}.game-notice.bad{background:#441d28;color:#ff91a1;border:1px solid #6b2a39}.admin-view{overflow:hidden;position:relative}.frame{display:none;width:100%;height:100%;border:0;background:#09111d}.frame.on{display:block}.admin-gate{position:absolute;inset:0;display:grid;place-items:center;padding:28px;background:radial-gradient(circle at 50% 15%,#17314b 0,transparent 34%),var(--bg)}.admin-gate.hidden{display:none}.gate-card{width:min(520px,100%);padding:30px;border:1px solid var(--line);border-radius:18px;background:linear-gradient(160deg,var(--panel),var(--bg2));box-shadow:var(--shadow);text-align:center}.gate-icon{width:58px;height:58px;margin:0 auto 16px;border-radius:18px;display:grid;place-items:center;background:#13283c;color:var(--accent);font-size:26px}.gate-card h2{margin:0 0 7px;font-size:20px}.gate-card p{margin:0 0 18px;color:var(--muted);font-size:13px}.muted{color:var(--muted)}.btns button.on{border-color:var(--accent2);color:var(--accent2);background:#0d2018;box-shadow:0 0 0 1px #37e2b055,0 0 14px #37e2b033}.state.hosts-local{background:#123a2e;color:var(--ok)}.state.hosts-official{background:#453515;color:var(--warn)}.state.hosts-unknown{background:#26354a;color:#b8c8da}.update-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 16px;padding:11px 14px;border:1px solid var(--accent);border-radius:10px;background:#0e2438;color:#bfe3ff;font-size:13px}.update-banner[hidden]{display:none}.update-banner.muted{border-color:var(--line);background:#101c2b;color:var(--muted)}.update-banner.warn{border-color:var(--warn);background:#3a2b14;color:#ffd9a0}.update-banner .update-actions{display:flex;gap:8px;margin-left:auto;align-items:center}.update-banner a{text-decoration:none;display:inline-block}#updateToast{position:fixed;right:20px;bottom:20px;z-index:50;max-width:380px;padding:14px 18px;border-radius:12px;background:#12283f;border:1px solid var(--accent);box-shadow:var(--shadow);color:#cfe9ff;font-size:13px;opacity:0;transform:translateY(8px);transition:.25s;pointer-events:none}#updateToast.on{opacity:1;transform:none}#updateToast.warn{border-color:var(--warn);background:#33270f;color:#ffd9a0}@media(max-width:980px){.brand{min-width:0}.brand span{display:none}.grid,.logs{grid-template-columns:1fr}.game-launch{grid-template-columns:1fr}.game-launch .actions{justify-content:flex-start}.control{padding:18px}.health span{display:none}.tabs button{padding:0 12px}.update-banner .update-actions{margin-left:0}}
 </style>
+<style>
+.version-card{margin-top:18px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:22px;align-items:center}
+.version-card .card-head{gap:14px}
+.version-connection{display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:650;color:var(--muted)}
+.version-connection i{width:9px;height:9px;border-radius:50%;background:#65778d;box-shadow:0 0 0 3px #65778d1f;transition:.18s}
+.version-connection.connected{color:var(--ok)}.version-connection.connected i{background:var(--ok);box-shadow:0 0 0 3px #54d98c22,0 0 10px #54d98c99}
+.version-connection.checking{color:var(--warn)}.version-connection.checking i{background:var(--warn);box-shadow:0 0 0 3px #ffbb5522,0 0 10px #ffbb5599}
+.version-connection.error{color:var(--danger)}.version-connection.error i{background:var(--danger);box-shadow:0 0 0 3px #ff617822,0 0 12px #ff6178cc}
+.version-values{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:13px}
+.version-value{min-width:0;padding:10px 12px;border:1px solid #1d3349;border-radius:10px;background:#091522}
+.version-value span{display:block;color:var(--muted);font-size:10px;letter-spacing:.04em}
+.version-value strong{display:block;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:600 12px/1.5 Consolas,"Microsoft YaHei",monospace;color:#cfe9ff}
+.version-note{margin-top:10px;color:var(--muted);font-size:11px;line-height:1.55}
+.version-note.error{color:#ff9aac}.version-note.ok{color:#82dfb4}.version-note.checking{color:#e0be7c}
+.version-links{display:flex;flex-direction:column;gap:8px;min-width:146px}.version-links a{text-align:center;text-decoration:none;white-space:nowrap}
+@media(max-width:980px){.version-card{grid-template-columns:1fr}.version-links{flex-direction:row;flex-wrap:wrap}.version-links a{flex:1}.version-values{grid-template-columns:1fr}}
+</style>
 </head>
 <body>
 <header class="topbar">
@@ -66,6 +83,23 @@ button{font:inherit;color:var(--text);cursor:pointer}.topbar{height:66px;display
     <div class="grid" id="cards"></div>
     <div class="logs-title"><h2>实时日志</h2><span>每 2 秒自动刷新</span></div>
     <div class="logs" id="logs"></div>
+    <div class="card version-card" id="versionCard">
+      <div>
+        <div class="card-head">
+          <b>版本与发布</b>
+          <span class="version-connection" id="versionConnection"><i></i><span id="versionConnectionText">等待检测</span></span>
+        </div>
+        <div class="version-values">
+          <div class="version-value"><span>当前运行版本</span><strong id="currentVersion">读取中…</strong></div>
+          <div class="version-value"><span>最新版本</span><strong id="latestVersion">读取中…</strong></div>
+        </div>
+        <div class="version-note" id="versionNote">正在读取版本信息…</div>
+      </div>
+      <div class="version-links">
+        <a class="btn pri" href="https://gh-proxy.com/https://github.com/glance522/rf4_server_simulator/releases" target="_blank" rel="noreferrer">gh-proxy 发布页</a>
+        <a class="btn" href="https://github.com/glance522/rf4_server_simulator/releases" target="_blank" rel="noreferrer">官方 Releases</a>
+      </div>
+    </div>
   </section>
 
   <section id="view-admin" class="view admin-view" role="tabpanel">
@@ -120,6 +154,7 @@ async function refresh(){
 }
 
 function renderStatus(st){
+  renderVersionCard(st);
   renderUpdate(st.update);
   renderGameConfig(st);
   renderHosts(st);
@@ -149,6 +184,79 @@ function hostsCard(){
   return `<div class="card"><div class="card-head"><b>hosts 指向</b><span class="state hosts-unknown" id="hostsState">读取中…</span></div>
     <div class="meta">切换 api.rf4game.ru/com 的解析，游戏重新登录后生效。</div>
     <div class="btns"><button id="hostsLocalBtn" onclick="setHosts('local')">本地服务器</button><button id="hostsOfficialBtn" onclick="setHosts('official')">官方服务器</button></div></div>`;
+}
+
+// ---- 版本与发布卡片（只读信息，不参与本地服务操作）----
+function formatVersionTime(value){
+  if(!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString("zh-CN", {hour12:false});
+}
+
+function renderVersionCard(st){
+  const currentEl = document.getElementById("currentVersion");
+  const latestEl = document.getElementById("latestVersion");
+  const connection = document.getElementById("versionConnection");
+  const connectionText = document.getElementById("versionConnectionText");
+  const note = document.getElementById("versionNote");
+  if(!currentEl || !latestEl || !connection || !connectionText || !note) return;
+
+  const offline = !st;
+  const u = st && st.update;
+  const health = st && st.update_status;
+  const current = (st && st.current_version) || "未知";
+  const latest = (u && u.latest_version) || "";
+  note.removeAttribute("title");
+  currentEl.textContent = current;
+  currentEl.title = current;
+  latestEl.textContent = latest || "读取中…";
+  latestEl.title = latest;
+
+  let mode = "waiting";
+  let label = "等待检测";
+  let noteText = "启动后会在后台检测最新版本，不影响本地服务操作。";
+  let noteClass = "";
+
+  if(offline){
+    mode = "error";
+    label = "控制面板连接中断";
+    noteText = "无法读取版本信息；这不影响本地服务继续运行。";
+  }else if(health && health.checking){
+    mode = "checking";
+    label = "正在检测";
+    noteText = "正在连接更新服务器，服务启停、日志和其他功能不受影响。";
+  }else if(health && health.connected){
+    mode = "connected";
+    label = "已连接";
+    if(u && u.available){
+      const channel = u.channel === "preview" ? "预览版" : u.channel === "stable" ? "正式版" : "版本";
+      noteText = `发现${channel}新版本，可继续使用当前版本，或前往发布页下载。`;
+    }else{
+      noteText = u ? "当前已是最新版本。" : "更新服务已连接。";
+    }
+    if(health.checked_at) noteText += ` 检测时间：${formatVersionTime(health.checked_at)}`;
+    noteClass = "ok";
+  }else if(health && health.error){
+    mode = "error";
+    label = "连接失败";
+    noteText = latest
+      ? "连接失败，显示上次成功检测到的最新版本；不影响启动、停止、日志等本地功能，后台会自动重试。"
+      : "无法连接更新服务器，暂时获取不到最新版本；不影响启动、停止、日志等本地功能，后台会自动重试。";
+    note.title = health.error;
+    noteClass = "error";
+  }else if(u){
+    // 兼容旧版 /api/status：只有 update 结果、没有检测健康状态时按已连接处理。
+    mode = "connected";
+    label = "已连接";
+    noteText = u.available ? "发现新版本，可前往发布页下载。" : "当前已是最新版本。";
+    noteClass = "ok";
+  }
+
+  if(!latest) latestEl.textContent = mode === "connected" ? "暂无发布信息" : mode === "error" ? "无法获取" : "读取中…";
+  connection.className = "version-connection " + mode;
+  connectionText.textContent = label;
+  note.className = "version-note " + noteClass;
+  note.textContent = noteText;
 }
 
 // ---- 版本更新提示（数据来自 /api/status.update，由 launcher 后台检测）----
@@ -243,6 +351,7 @@ async function setHosts(mode){
 function renderOffline(){
   document.getElementById("healthText").textContent = "控制面板连接中断";
   document.getElementById("dot").style.background = "var(--danger)";
+  renderVersionCard(null);
 }
 
 function setHealth(running, total){

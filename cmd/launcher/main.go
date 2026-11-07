@@ -28,6 +28,7 @@ import (
 	"github.com/getlantern/systray"
 
 	"rf4server/internal/admin"
+	"rf4server/internal/buildinfo"
 	"rf4server/internal/config"
 	"rf4server/internal/seed"
 	"rf4server/internal/store"
@@ -60,6 +61,9 @@ type app struct {
 
 	// 版本更新检测（周期后台任务，结论供 /api/status 与管理后台横幅）
 	updates *updatecheck.Checker
+	// 检测健康状态只供面板展示；网络失败不会进入启停/日志等操作链路。
+	updateHealthMu    sync.RWMutex
+	updateHealthState updateHealth
 
 	// 托盘状态：systray 在 Run 之前内部句柄为 nil，提前调用 SetIcon/
 	// SetTooltip 会 panic。这里先记录期望状态，托盘就绪后再应用。
@@ -354,15 +358,17 @@ func (a *app) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		update = a.updates.Result()
 	}
 	writeJSON(w, map[string]any{
-		"procs":       procs,
-		"last_error":  lastErr,
-		"admin":       "/admin/",
-		"admin_ready": adminReady,
-		"admin_error": adminErr,
-		"game_path":   gamePath,
-		"game_region": gameRegion,
-		"hosts":       hostsMode(hostsFilePath()),
-		"update":      update,
+		"procs":           procs,
+		"last_error":      lastErr,
+		"admin":           "/admin/",
+		"admin_ready":     adminReady,
+		"admin_error":     adminErr,
+		"game_path":       gamePath,
+		"game_region":     gameRegion,
+		"hosts":           hostsMode(hostsFilePath()),
+		"current_version": buildinfo.Version,
+		"update":          update,
+		"update_status":   a.updateHealthSnapshot(),
 	})
 }
 

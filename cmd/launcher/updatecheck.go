@@ -1,10 +1,11 @@
 // 版本更新检测：launcher 后台周期拉取 version.json 并把结论喂给
-// 控制中心 /api/status 与管理后台横幅。任何失败只记日志，绝不影响
-// 启动、seed 与游戏服务。
+// 控制中心 /api/status 与管理后台横幅。任何失败只降级版本卡片并记日志，
+// 绝不影响启动、seed 与游戏服务。
 package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -22,10 +23,49 @@ const updateStateFile = "update_state.json"
 // 对镜像与用户带宽都毫无压力。
 const updateCheckInterval = 2 * time.Hour
 
+// updateHealth 是控制中心版本卡片读取的检测连接状态。
+// Checking/Connected 分开表达“正在检测”和“最近一次检测是否成功”；
+// 失败只影响这张信息卡片，不参与任何启停、seed 或游戏操作判断。
+type updateHealth struct {
+	Checking  bool   `json:"checking"`
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+	CheckedAt string `json:"checked_at,omitempty"`
+}
+
+func (a *app) beginUpdateCheck() {
+	a.updateHealthMu.Lock()
+	a.updateHealthState.Checking = true
+	a.updateHealthState.Error = ""
+	a.updateHealthMu.Unlock()
+}
+
+func (a *app) finishUpdateCheck(err error) {
+	a.updateHealthMu.Lock()
+	defer a.updateHealthMu.Unlock()
+	a.updateHealthState.Checking = false
+	a.updateHealthState.CheckedAt = time.Now().UTC().Format(time.RFC3339)
+	if err != nil {
+		a.updateHealthState.Connected = false
+		a.updateHealthState.Error = err.Error()
+		return
+	}
+	a.updateHealthState.Connected = true
+	a.updateHealthState.Error = ""
+}
+
+func (a *app) updateHealthSnapshot() updateHealth {
+	a.updateHealthMu.RLock()
+	defer a.updateHealthMu.RUnlock()
+	return a.updateHealthState
+}
+
 // runUpdateChecks 后台检测循环：延迟 5s 首查（避开启动高峰），之后每
 // 2h 复查，直到 launcher 退出。dev 构建（无 BuildTs 注入）不检测。
 func (a *app) runUpdateChecks() {
 	if buildinfo.BuildTs == "0" {
+		a.finishUpdateCheck(updatecheck.ErrUnknownLocalBuildTs)
+		a.log.Warn("跳过更新检测: " + updatecheck.ErrUnknownLocalBuildTs.Error())
 		return
 	}
 	select {
@@ -47,14 +87,21 @@ func (a *app) runUpdateChecks() {
 }
 
 func (a *app) checkUpdates() {
+	if a.updates == nil {
+		a.finishUpdateCheck(errors.New("更新检测未初始化"))
+		return
+	}
+	a.beginUpdateCheck()
 	res, err := a.updates.Check(a.ctx, buildinfo.Version, buildinfo.BuildTs)
 	if err != nil {
-		// 静默降级：保留上一次结论（如有），日志留痕便于排查。
+		// 保留上一次成功结论供卡片展示，同时记录本次连接失败。
+		a.finishUpdateCheck(err)
 		a.log.Warn("检查更新失败（将按周期重试）: " + err.Error())
 		return
 	}
+	a.finishUpdateCheck(nil)
 	if res.Available {
-		a.log.Info("发现新版本 " + res.LatestVersion + "（当前 " + res.CurrentVersion + "），详见控制中心横幅")
+		a.log.Info("发现新版本 " + res.LatestVersion + "（当前 " + res.CurrentVersion + "），详见控制中心版本卡片")
 	}
 	a.pushUpdateInfo(res)
 }
