@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"rf4server/internal/buildinfo"
 	"rf4server/internal/config"
 	"rf4server/internal/updatecheck"
 )
@@ -34,7 +35,9 @@ func TestHandleStatusIncludesUpdate(t *testing.T) {
 		t.Fatalf("code=%d body=%q", rr.Code, rr.Body.String())
 	}
 	var st struct {
-		Update *updatecheck.Result `json:"update"`
+		CurrentVersion string              `json:"current_version"`
+		Update         *updatecheck.Result `json:"update"`
+		UpdateStatus   updateHealth        `json:"update_status"`
 	}
 	if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
 		t.Fatalf("解析 /api/status: %v", err)
@@ -44,6 +47,67 @@ func TestHandleStatusIncludesUpdate(t *testing.T) {
 	}
 	if st.Update.DownloadMirrorURL == "" || st.Update.PreviewVersion != "preview-20261107T110000Z-abc1234" || st.Update.PreviewDownloadMirror == "" {
 		t.Fatalf("加速直链/preview 摘要未透传: %+v", st.Update)
+	}
+	if st.CurrentVersion == "" {
+		t.Fatal("status 应始终携带当前运行版本")
+	}
+}
+
+func TestCheckUpdatesTracksConnectionFailureWithoutBlockingStatus(t *testing.T) {
+	oldBuildTs := buildinfo.BuildTs
+	buildinfo.BuildTs = "20261101120000"
+	t.Cleanup(func() { buildinfo.BuildTs = oldBuildTs })
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer src.Close()
+	a := &app{
+		cfg:     &config.Config{},
+		ctx:     context.Background(),
+		log:     testLauncherLogger{},
+		updates: updatecheck.New([]string{src.URL}, filepath.Join(t.TempDir(), "update_state.json")),
+	}
+	a.checkUpdates()
+	health := a.updateHealthSnapshot()
+	if health.Checking || health.Connected || !strings.Contains(health.Error, "HTTP 503") || health.CheckedAt == "" {
+		t.Fatalf("检测失败状态不符: %+v", health)
+	}
+
+	rr := httptest.NewRecorder()
+	a.handleStatus(rr, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("更新服务器失败不能影响 status: code=%d body=%q", rr.Code, rr.Body.String())
+	}
+	var st struct {
+		Procs        []any        `json:"procs"`
+		UpdateStatus updateHealth `json:"update_status"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &st); err != nil {
+		t.Fatalf("解析 /api/status: %v", err)
+	}
+	if st.UpdateStatus.Connected || st.UpdateStatus.Error == "" {
+		t.Fatalf("status 应透传连接失败状态: %+v", st.UpdateStatus)
+	}
+}
+
+func TestCheckUpdatesMarksConnected(t *testing.T) {
+	oldBuildTs := buildinfo.BuildTs
+	buildinfo.BuildTs = "20261101120000"
+	t.Cleanup(func() { buildinfo.BuildTs = oldBuildTs })
+	manifest := `{"schema":1,"stable":{"version":"v1.2.0","build_ts":"20261107120000"},"preview":null}`
+	src := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(manifest))
+	}))
+	defer src.Close()
+	a := &app{
+		ctx:     context.Background(),
+		log:     testLauncherLogger{},
+		updates: updatecheck.New([]string{src.URL}, filepath.Join(t.TempDir(), "update_state.json")),
+	}
+	a.checkUpdates()
+	health := a.updateHealthSnapshot()
+	if health.Checking || !health.Connected || health.Error != "" || health.CheckedAt == "" {
+		t.Fatalf("检测成功状态不符: %+v", health)
 	}
 }
 
@@ -100,3 +164,9 @@ func TestAdminUpdateInfoMapping(t *testing.T) {
 		t.Fatalf("映射字段不符: %+v", m)
 	}
 }
+
+type testLauncherLogger struct{}
+
+func (testLauncherLogger) Info(string)  {}
+func (testLauncherLogger) Warn(string)  {}
+func (testLauncherLogger) Error(string) {}
