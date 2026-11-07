@@ -142,7 +142,7 @@ cat > "${RELEASE_NOTES}" <<EOF
 
 ## 最近提交
 
-$(git log --invert-grep --grep='^chore(release):' -20 --format='- @%h %s')
+$(git log --invert-grep --grep='^chore(release):' --format='- @%h %s')
 EOF
 cp "${RELEASE_NOTES}" "${STAGE}/发布说明.md"
 
