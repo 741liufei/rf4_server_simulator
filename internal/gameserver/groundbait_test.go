@@ -273,3 +273,25 @@ func TestGroundbaitCastDepositMapsChannels(t *testing.T) {
 		t.Fatalf("通道映射错了: %+v", got)
 	}
 }
+
+// keepalive 应持续推进在线窝料钟，避免长时间没有判鱼时整段在线时间被丢弃。
+func TestGroundbaitKeepaliveAdvancesOnlineClock(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const uid = int64(1000001)
+	oldTS := float64(time.Now().Add(-20 * time.Second).Unix())
+	if _, err := s.DB.SQL.ExecContext(ctx, `INSERT INTO groundbait_clock(uid,real_ts,game_hours,updated_ts)
+		VALUES(?,?,?,?)`, uid, oldTS, 1.0, oldTS); err != nil {
+		t.Fatal(err)
+	}
+	sess := newSession(s, 1, "groundbait-clock-test", uid, nil)
+	sess.advanceGroundbaitClock()
+	var acc float64
+	if err := s.DB.SQL.QueryRowContext(ctx, `SELECT game_hours FROM groundbait_clock WHERE uid=?`, uid).Scan(&acc); err != nil {
+		t.Fatal(err)
+	}
+	if acc < 1.10 || acc > 1.16 {
+		t.Fatalf("在线 20 秒应推进约 0.133 游戏小时，实得 %.3f", acc)
+	}
+}

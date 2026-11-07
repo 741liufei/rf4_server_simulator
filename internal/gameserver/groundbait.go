@@ -1,6 +1,6 @@
 package gameserver
 
-// 窝料吸引系统 v1.1（设计稿 docs/groundbait-design.md）。
+// 窝料吸引系统 v1.1（specs/changes/groundbait-core/spec.md）。
 //
 // 一句话：往一个 5 米格里投窝料，这份料按「1 份 = 0.6 游戏小时」活着，
 // 期间按鱼种食性把对口鱼的候选权重抬起来（最多 x2.60），并且能稍微顶掉
@@ -39,7 +39,7 @@ const (
 	// 游戏钟，正常间隔只有几秒；跨度超过这里说明是登录或掉线后的第一次结算，
 	// 这段离线时间不该扣窝时。
 	groundbaitMaxTickRealSec = 30.0
-	// groundbaitSatExponent 契合饱和曲线的指数（设计稿第 4 节）。
+	// groundbaitSatExponent 契合饱和曲线的指数。
 	groundbaitSatExponent = 1.35
 )
 
@@ -76,6 +76,8 @@ type groundbaitDefs struct {
 var (
 	groundbaitDefsOnce   sync.Once
 	groundbaitDefsShared *groundbaitDefs
+	// groundbaitClockMu 串行推进窝料在线钟，避免 keepalive 与业务请求并发读改写丢时间。
+	groundbaitClockMu sync.Mutex
 )
 
 // groundbaitDefsLoad 解析包内资产。解析失败时返回空表（判定退化成「没有窝」），
@@ -179,11 +181,14 @@ func groundbaitCellFor(x, z float64, hasPos bool, spot uint64) (int64, int64, in
 }
 
 // groundbaitGameHours 返回该玩家的在线游戏钟读数（游戏小时），并顺手推进它。
-// 只有服务端被请求碰到才推进，单次跨度封顶 30 秒，所以离线不扣窝时。
+// 在线期间由会话 keepalive 持续调用，业务请求也会补算；单次跨度封顶
+// 30 秒，因此长期离线后的第一次调用最多只补算 30 秒。
 func (s *Server) groundbaitGameHours(ctx context.Context, uid int64) float64 {
 	if s.DB == nil || uid == 0 {
 		return 0
 	}
+	groundbaitClockMu.Lock()
+	defer groundbaitClockMu.Unlock()
 	now := float64(time.Now().Unix())
 	var realTS, acc float64
 	err := s.DB.SQL.QueryRowContext(ctx, `SELECT real_ts, game_hours FROM groundbait_clock WHERE uid=?`, uid).Scan(&realTS, &acc)
@@ -213,6 +218,17 @@ func (s *Server) groundbaitGameHours(ctx context.Context, uid int64) float64 {
 	return acc
 }
 
+// advanceGroundbaitClock 由会话 keepalive 调用，让窝料时效随在线游戏时间连续推进。
+func (sess *Session) advanceGroundbaitClock() {
+	if sess == nil || sess.Srv == nil || sess.Userid == 0 || sess.Srv.DB == nil {
+		return
+	}
+	if !sess.Srv.groundbaitEnabled() {
+		return
+	}
+	_ = sess.Srv.groundbaitGameHours(sess.pushCtx(), sess.Userid)
+}
+
 // groundbaitDeposit 是四种投放方式的唯一入口：手抛/打窝竿/食笼 PVA/弹弓都调它，
 // 通道只作为标签留账，方便以后分别调参。txnGuid 唯一约束提供幂等保护。
 func (s *Server) groundbaitDeposit(ctx context.Context, uid int64, loc string, x, z float64, hasPos bool,
@@ -235,7 +251,7 @@ func (s *Server) groundbaitDeposit(ctx context.Context, uid int64, loc string, x
 		return
 	}
 	hours := portions * per
-	// 单批窝时封顶：1 份 0.6 游戏小时，但一批最多 6 小时（少爷指示：
+	// 单批窝时封顶：1 份 0.6 游戏小时，但一批最多 6 小时（产品口径：
 	// 「打 10 份饵 = 游戏里 6 小时有效」）。再多份数只抬强度 S，不再拖长时效。
 	capHours := s.tunableF("groundbait_hours_cap", 6.0)
 	if capHours > 0 && hours > capHours {
