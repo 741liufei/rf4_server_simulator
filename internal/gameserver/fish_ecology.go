@@ -539,6 +539,10 @@ func lureLayerFromMotion(mask uint32, previous float64) float64 {
 		return .06
 	case mask&0x80000 != 0:
 		return normalizeWaterLayer(previous + .08)
+	case mask&0x20 != 0:
+		// 激溅是主动作，可能同时带收线位 0x400 或其它水层位；必须优先于
+		// 收线/静止分支，保持与 classifyLureMotion 一致。
+		return .08
 	case mask&0x200000 != 0:
 		return normalizeWaterLayer(previous - .08)
 	case mask&0x2000 != 0, mask&0x400000 != 0:
@@ -549,8 +553,6 @@ func lureLayerFromMotion(mask uint32, previous float64) float64 {
 		return .55
 	case mask&0x400 != 0:
 		return normalizeWaterLayer(previous + .03)
-	case mask&0x20 != 0:
-		return .08
 	default:
 		return normalizeWaterLayer(previous)
 	}
