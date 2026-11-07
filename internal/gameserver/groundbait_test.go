@@ -13,7 +13,7 @@ import (
 // gbDeposit 测试用的投放封装：坐标固定在 (100,100) 附近同一个 5 米格。
 func gbDeposit(t *testing.T, s *Server, uid int64, itemID string, portions float64, channel, txn string) {
 	t.Helper()
-	s.groundbaitDeposit(t.Context(), uid, "gb-test-loc", 100, 100, true, 7, itemID, portions, channel, txn)
+	s.groundbaitDeposit(t.Context(), uid, "gb-test-loc", 100, 100, true, 7, itemID, portions, channel, txn, "")
 }
 
 func gbSpotState(t *testing.T, s *Server, uid int64) groundbaitSpotState {
@@ -83,7 +83,9 @@ func TestGroundbaitLedgerPortionTimeAndOverdose(t *testing.T) {
 	// 死窝：再堆 12 份，N=22 → 开口率归零。
 	gbDeposit(t, s, uid, "feed_karp", 12, "spod", "gb:t2")
 	st2 := gbSpotState(t, s, uid)
-	if st2.units < 21.99 || st2.units > 22.01 {
+	// 上限卡死 22（重复上报不能多算）；下限留一点余量：读窝的每一次都会推进
+	// 玩家游戏钟，窝按比例稀释，整包并发跑时几次数据库往返就是秒级误差。
+	if st2.units < 21.9 || st2.units > 22.01 {
 		t.Fatalf("堆完应为 N=22，实得 %.3f", st2.units)
 	}
 	if gate := s.groundbaitBiteGate(ctx, uid, "gb-test-loc", 100, 100, true, 7, 1); gate > 0.001 {
@@ -393,9 +395,9 @@ func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
 	const uidKnown = int64(1000002)
 
 	// 落点未知：hasPos=false，落点退化成「整个钓点一格」(spot,-1)。
-	s.groundbaitDeposit(ctx, uidUnknown, "gb-test-loc", 0, 0, false, 7, "feed_karp", 8, "catapult", "gb:n1")
+	s.groundbaitDeposit(ctx, uidUnknown, "gb-test-loc", 0, 0, false, 7, "feed_karp", 8, "catapult", "gb:n1", "")
 	// 同份数、落点已知，并且正好压在浮标所在的 (300,300) 格。
-	s.groundbaitDeposit(ctx, uidKnown, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:n2")
+	s.groundbaitDeposit(ctx, uidKnown, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:n2", "")
 
 	roll := func(uid int64) float64 {
 		c := fishRollContext{
@@ -462,9 +464,9 @@ func TestGroundbaitNeighborCellCountsWeaker(t *testing.T) {
 		uidSame = int64(1000003)
 	)
 	// 浮标在 (300,300)，即格子 (60,60)。
-	s.groundbaitDeposit(ctx, uidNear, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:nb1")
-	s.groundbaitDeposit(ctx, uidFar, "gb-test-loc", 320, 300, true, 7, "feed_karp", 8, "catapult", "gb:nb2")
-	s.groundbaitDeposit(ctx, uidSame, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:nb3")
+	s.groundbaitDeposit(ctx, uidNear, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:nb1", "")
+	s.groundbaitDeposit(ctx, uidFar, "gb-test-loc", 320, 300, true, 7, "feed_karp", 8, "catapult", "gb:nb2", "")
+	s.groundbaitDeposit(ctx, uidSame, "gb-test-loc", 300, 300, true, 7, "feed_karp", 8, "feeder", "gb:nb3", "")
 
 	roll := func(uid int64) float64 {
 		c := fishRollContext{
@@ -513,8 +515,8 @@ func TestGroundbaitNeighborCellCountsWeaker(t *testing.T) {
 
 	// 咬口扣份优先本格：本格只剩 1 份，先吃掉它，邻格那 8 份此刻不动。
 	const uidMix = int64(1000004)
-	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 300, 300, true, 7, "feed_karp", 1, "feeder", "gb:mix1")
-	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:mix2")
+	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 300, 300, true, 7, "feed_karp", 1, "feeder", "gb:mix1", "")
+	s.groundbaitDeposit(ctx, uidMix, "gb-test-loc", 305, 302, true, 7, "feed_karp", 8, "catapult", "gb:mix2", "")
 	s.groundbaitConsumeBite(ctx, uidMix, "gb-test-loc", 300, 300, true, 7, 1)
 	var sameLeft, nearLeft float64
 	if err := s.DB.SQL.QueryRow(`SELECT units_left FROM groundbait_deposit WHERE txn_guid='gb:mix1'`).Scan(&sameLeft); err != nil {

@@ -118,7 +118,7 @@ func hDynamicHanditemThrow(ctx *Ctx) ([]byte, bool) {
 				ctx.Log.Info("手持工具窝料落点", "src", gbSrc, "x", gbX, "z", gbZ,
 					"has_pos", gbHas, "dist", dist)
 				srv.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot,
-					baitItemID, 1, "catapult", handitemThrowTxn(handGUID, ctx.Sess.ID, ctx.CallID))
+					baitItemID, 1, "catapult", handitemThrowTxn(handGUID, ctx.Sess.ID, ctx.CallID), handGUID)
 			}
 		}
 	}
@@ -929,14 +929,14 @@ func hHandThrowGroundbait(ctx *Ctx) ([]byte, bool) {
 	} else {
 		ctx.Sess.Push4_21([]string{guid})
 	}
-	srv.depositHandThrownGroundbait(ctx, row.ItemID, handThrowDistance(ctx.Tree))
+	srv.depositHandThrownGroundbait(ctx, row.ItemID, row.GUID, handThrowDistance(ctx.Tree))
 	return nil, false
 }
 
 // depositHandThrownGroundbait 把手抛出去的这一团记进窝账：通道 hand，份数缺省 1
 // （groundbait_hand_portions 可调），落点沿用弹弓那套三档选择。
 // 幂等键带 call_id：同一次请求重发只入一次账。
-func (s *Server) depositHandThrownGroundbait(ctx *Ctx, itemID string, dist float64) {
+func (s *Server) depositHandThrownGroundbait(ctx *Ctx, itemID, guid string, dist float64) {
 	uid := ctx.Sess.Userid
 	st := s.stateFor(uid)
 	if st == nil {
@@ -961,5 +961,5 @@ func (s *Server) depositHandThrownGroundbait(ctx *Ctx, itemID string, dist float
 	}
 	ctx.Log.Info("手抛窝料落点", "src", gbSrc, "x", gbX, "z", gbZ, "has_pos", gbHas, "dist", dist)
 	s.groundbaitDeposit(ctx.Sess.pushCtx(), uid, gbLoc, gbX, gbZ, gbHas, gbSpot, itemID, portions, "hand",
-		fmt.Sprintf("hand:%s:%d:%d", itemID, ctx.Sess.ID, ctx.CallID))
+		fmt.Sprintf("hand:%s:%d:%d", itemID, ctx.Sess.ID, ctx.CallID), guid)
 }
