@@ -37,10 +37,11 @@ func hProfile(ctx *Ctx) ([]byte, bool) {
 	return body, true
 }
 
-// 容器枚举（Go 只建模 0 背包 / 5 鱼护）。
+// 客户端库存枚举。
 const (
-	containerBackpack = 0
-	containerKeepnet  = 5
+	containerBackpack     = 0
+	containerKeepnet      = 5
+	containerTradingCards = 18
 )
 
 // ---- 4/1 items/count ----

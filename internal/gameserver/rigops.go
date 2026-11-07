@@ -884,7 +884,7 @@ func clearRigFieldsForBackpack(fields []proto.Field, wireClass string) {
 		fields[source].Hex = ""
 	}
 	if sidx := fieldIdxByCS(wireClass, csSlotEnum); sidx >= 0 && fieldOpAt(wireClass, sidx) == "BYTE" {
-		fields[sidx].Num = ptrU64(0) // 背包
+		fields[sidx].Num = ptrU64(rootItemStorageKind(wireClass))
 	}
 }
 

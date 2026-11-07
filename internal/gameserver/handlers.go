@@ -27,6 +27,7 @@ func registerHandlers(d *Dispatch) {
 	registerTimelineHandlers(d)
 	registerRigHandlers(d) // 15/16/17 竿组装配命令
 	registerWorldHandlers(d)
+	registerTradingCardHandlers(d)
 	// 动态协议、档案、社交和竞赛处理器覆盖静态兜底，需在基础处理器之后注册。
 	registerDynamicProtocolHandlers(d)
 	registerAchievementHandlers(d)
