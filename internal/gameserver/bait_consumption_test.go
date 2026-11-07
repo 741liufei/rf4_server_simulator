@@ -46,6 +46,8 @@ func baitTestRod(t *testing.T, s *Server) string {
 func TestBaitConsumptionReserveReplayEmptyAndRestart(t *testing.T) {
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, child := baitTestMount(t, s, rod, "worm_01", 5, 350)
 	use := func(server *Server, event string) {
 		t.Helper()
@@ -233,6 +235,8 @@ func TestBaitConsumptionCastSuppliesAndForeignRig(t *testing.T) {
 func TestBaitConsumptionLastReservedUnitReturnsAndZeroIsEmpty(t *testing.T) {
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, child := baitTestMount(t, s, rod, "worm_01", 2, 350)
 	if _, err := s.consumeBaitEvent(t.Context(), 1000001, rod, "one", []string{child}, false); err != nil {
 		t.Fatal(err)
@@ -266,6 +270,8 @@ func TestBaitConsumptionLastReservedUnitReturnsAndZeroIsEmpty(t *testing.T) {
 func TestBaitConsumptionThroughBiteAndReplay(t *testing.T) {
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, _ := baitTestMount(t, s, rod, "worm_01", 5, 350)
 	addFishingRecoverySession(s, 1000001, 939)
 	st := s.stateFor(1000001)
@@ -345,6 +351,9 @@ func TestMarineBaitConsumptionReloadsAllSlotsInOrder(t *testing.T) {
 		t.Fatal("marine rig rejected")
 	}
 	ids := []string{"worm_01", "muckworm", "fly"}
+	for i := range ids {
+		mountHookForBaitTest(t, s, rod.GUID, int64(i))
+	}
 	for i, id := range ids {
 		baitTestMount(t, s, rod.GUID, id, 5, int64(350+i))
 	}
@@ -432,6 +441,8 @@ func TestBaitReloadRefreshesSourceStackForClient(t *testing.T) {
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
+	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, child := baitTestMount(t, s, rod, "worm_01", 5, 350)
 	if _, err := s.consumeBaitEvent(ctx, 1000001, rod, "refresh-bite", []string{child}, false); err != nil {
 		t.Fatal(err)
@@ -488,6 +499,119 @@ func TestBaitReloadSkipsWhenSelectedHookIsGone(t *testing.T) {
 	}
 }
 
+// 旧格式 rebait 记录（直接存 item_id，没有 hook 字段）在钩离组后同样不能补饵。
+func TestBaitReloadSkipsLegacyRebaitWhenHookIsGone(t *testing.T) {
+	s, db := newRigTestServer(t)
+	ctx := t.Context()
+	rod := baitTestRod(t, s)
+	hook := mountHookForBaitTest(t, s, rod, 0)
+	source, err := s.CreateItem(ctx, 1000001, "worm_01", "backpack", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.setStackCount(ctx, source, 5)
+	if err := db.UpsertRodSetting(ctx, rod, "rebait:0", "worm_01"); err != nil {
+		t.Fatal(err)
+	}
+	if res := s.rigRemoveItemComponent(ctx, 1000001, rod, hook); res == nil {
+		t.Fatal("拆钩失败")
+	}
+
+	if _, err := s.reloadBaitForCast(ctx, 1000001, rod); err != nil {
+		t.Fatal(err)
+	}
+	if baits := s.currentBaits(ctx, rod); len(baits) != 0 {
+		t.Fatalf("旧格式补饵记录在无钩钓组上仍补挂了 %v", baits)
+	}
+	if row, err := db.GetItemByGUID(ctx, source.GUID); err != nil || row == nil || baitQuantity(row) != 5 {
+		t.Fatalf("来源饵堆不应被拆走: %+v err=%v", row, err)
+	}
+	if got := rodSettingCountForBait(t, db, rod, "rebait:%"); got != 0 {
+		t.Fatalf("无钩钓组的旧格式补饵请求应清除，仍剩 %d 条", got)
+	}
+}
+
+// 单钩钓组的旧格式记录可以推断出唯一钩，补饵后要补写 bait_hook 映射。
+func TestBaitReloadInfersLegacyRebaitHookOnSingleHookRig(t *testing.T) {
+	s, db := newRigTestServer(t)
+	ctx := t.Context()
+	rod := baitTestRod(t, s)
+	hook := mountHookForBaitTest(t, s, rod, 0)
+	source, err := s.CreateItem(ctx, 1000001, "worm_01", "backpack", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.setStackCount(ctx, source, 5)
+	if err := db.UpsertRodSetting(ctx, rod, "rebait:0", "worm_01"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.reloadBaitForCast(ctx, 1000001, rod); err != nil {
+		t.Fatal(err)
+	}
+	groups := s.baitedHookSets(ctx, rod)
+	if len(groups) != 1 || groups[0].hookGUID != hook || len(groups[0].baits) != 1 {
+		t.Fatalf("单钩钓组旧格式补饵应挂到唯一钩上: %+v", groups)
+	}
+	if row, err := db.GetItemByGUID(ctx, source.GUID); err != nil || row == nil || baitQuantity(row) != 4 {
+		t.Fatalf("来源饵堆应只被拆走一份: %+v err=%v", row, err)
+	}
+	var mapped string
+	if err := db.SQL.QueryRow(`SELECT value FROM rod_setting WHERE guid=? AND key=?`,
+		rod, "bait_hook:"+groups[0].baitGUIDs[0]).Scan(&mapped); err != nil || mapped != hook {
+		t.Fatalf("旧格式补饵应补写钩饵映射: mapped=%q err=%v", mapped, err)
+	}
+	if got := rodSettingCountForBait(t, db, rod, "rebait:%"); got != 0 {
+		t.Fatalf("补饵完成后应清除 rebait 记录，仍剩 %d 条", got)
+	}
+}
+
+// 多钩钓组的旧格式记录无法确定挂哪只钩，按无法安全补饵处理。
+func TestBaitReloadSkipsLegacyRebaitOnMultiHookRig(t *testing.T) {
+	s, db := newRigTestServer(t)
+	ctx := t.Context()
+	rod, err := s.CreateItem(ctx, 1000001, "boatr_10222_SBH80_100", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.rigSetType(ctx, 1000001, rod.GUID, 59) {
+		t.Fatal("设置多钩钓组类型失败")
+	}
+	for i := int64(0); i < 3; i++ {
+		mountHookForBaitTest(t, s, rod.GUID, i)
+	}
+	source, err := s.CreateItem(ctx, 1000001, "worm_01", "backpack", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.setStackCount(ctx, source, 5)
+	if err := db.UpsertRodSetting(ctx, rod.GUID, "rebait:0", "worm_01"); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := s.reloadBaitForCast(ctx, 1000001, rod.GUID); err != nil {
+		t.Fatal(err)
+	}
+	if baits := s.currentBaits(ctx, rod.GUID); len(baits) != 0 {
+		t.Fatalf("多钩钓组旧格式记录不应补饵，实际补挂 %v", baits)
+	}
+	if row, err := db.GetItemByGUID(ctx, source.GUID); err != nil || row == nil || baitQuantity(row) != 5 {
+		t.Fatalf("来源饵堆不应被拆走: %+v err=%v", row, err)
+	}
+	if got := rodSettingCountForBait(t, db, rod.GUID, "rebait:%"); got != 0 {
+		t.Fatalf("多钩钓组的旧格式补饵请求应清除，仍剩 %d 条", got)
+	}
+}
+
+func rodSettingCountForBait(t *testing.T, db *store.DB, rod, pattern string) int64 {
+	t.Helper()
+	var n int64
+	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM rod_setting WHERE guid=? AND key LIKE ?`, rod, pattern).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 // TestBaitRefillsWhenFishIsLanded 锁定：14/11 吃掉钩上的最后一份饵后，14/4 收竿应当
 // 立即补挂同种库存。若把补饵拖到下一次 14/1/14/2，客户端会停在空钩状态，玩家
 // 必须先手动换饵才能抛竿（手杆上鱼一条后鱼饵消失）。
@@ -495,6 +619,8 @@ func TestBaitRefillsWhenFishIsLanded(t *testing.T) {
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
+	// 补饵的前提是钓组上仍有钩；无钩钓组的补饵请求按无效处理（见 P1 回归）。
+	mountHookForBaitTest(t, s, rod, 0)
 	source, child := baitTestMount(t, s, rod, "worm_01", 5, 350)
 	addFishingRecoverySession(s, 1000001, 939)
 	st := s.stateFor(1000001)
