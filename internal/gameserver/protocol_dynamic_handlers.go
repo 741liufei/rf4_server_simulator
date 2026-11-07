@@ -106,7 +106,7 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 	if brokenGUID == zeroGUID {
 		brokenGUID = ""
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	if rodGUID == "" || rodGUID == zeroGUID {
 		st.mu.Lock()
 		rodGUID = normalizeDynamicGUID(st.GearGuid)
@@ -114,6 +114,31 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 	}
 	if rodGUID == "" {
 		rodGUID = zeroGUID
+	}
+
+	// 已结算、等待 14/5 入护 / 14/6 放生的渔获：断件上报迟于落网（同一
+	// realtime 连接 TCP 有序，14/4 之后到达的只能是迟到/重复帧）。此刻
+	// 不再动装备，也不清鱼，否则 XP 已入账而渔获无处安放（幽灵鱼）；
+	// 回零断件结果保持 11028 形状，搏鱼中（CastActive=true）不受影响。
+	st.mu.Lock()
+	settledPending := completedCatchPending(st)
+	st.mu.Unlock()
+	if settledPending {
+		ctx.Log.Info("17/9 已结算渔获等待处理，忽略断件上报",
+			"rod", shortGUID(rodGUID), "part", shortGUID(brokenGUID))
+		echo := brokenGUID
+		if echo == "" {
+			echo = rodGUID
+		}
+		obj, berr := buildGearBreakResult(&gearBreakOutcome{BrokenGUID: echo})
+		if berr != nil {
+			return nil, false
+		}
+		body, berr := proto.EncodeValue(obj, ctx.Sess.Table())
+		if berr != nil {
+			return nil, false
+		}
+		return body, true
 	}
 
 	if srv.DB != nil && rodGUID != zeroGUID && ctx.DecodeOK {
@@ -161,6 +186,9 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 			// 轮子只掉耐久、不进移除清单：不把 BrokenGUID 一并推过去的话，
 			// 客户端缓存停在旧耐久，玩家看不到"损坏"。
 			syncGUIDs := append([]string(nil), outcome.RemovedGUIDs...)
+			// 拆分子饵并回来源堆时，来源堆数量变了但客户端没有收到 4/22，
+			// 需要和移除件一起刷新，否则背包仍显示旧数量。
+			syncGUIDs = append(syncGUIDs, outcome.StackRefreshGUIDs...)
 			if g := strings.TrimSpace(outcome.BrokenGUID); g != "" {
 				syncGUIDs = append(syncGUIDs, g)
 			}
@@ -254,7 +282,7 @@ func hRodCutLine(ctx *Ctx) ([]byte, bool) {
 	if cutM < 0 {
 		cutM = 0
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	st := srv.fishingStateForRequest(ctx)
 	if rodGUID == "" || rodGUID == zeroGUID {
 		st.mu.Lock()
 		rodGUID = normalizeDynamicGUID(st.GearGuid)
@@ -401,7 +429,9 @@ type handitemThrowConsume struct {
 }
 
 // consumeHanditemLoadedForThrow 消耗一份手持工具中的已装填物：
-// 只扣 1 份，未用尽更新子实例；用尽删除子实例并清手持物装填引用，不退回来源堆。
+// 只扣 1 份，未用尽更新子实例；用尽删除子实例并清手持物装填引用。
+// 弹弓只装 1 颗模式下（handitem_load_one=1），用尽后自动从背包补 1 颗同种饵，
+// 保持弹药格始终 1 颗 ready，可连抛；背包无来源堆时不补（弹药格空）。
 func (s *Server) consumeHanditemLoadedForThrow(ctx context.Context, parentGUID string) handitemThrowConsume {
 	var out handitemThrowConsume
 	loaded := s.handitemLoadedGuid(ctx, parentGUID)
@@ -418,6 +448,7 @@ func (s *Server) consumeHanditemLoadedForThrow(ctx context.Context, parentGUID s
 		}
 		return out
 	}
+	itemID, uid := row.ItemID, row.UID // 扣料前记下，供用尽后按同种饵补填
 	if s.consumeItemQty(ctx, row, 1) < 1 {
 		return out
 	}
@@ -428,15 +459,71 @@ func (s *Server) consumeHanditemLoadedForThrow(ctx context.Context, parentGUID s
 		}
 		return out
 	}
-	// 用完：清引用，更新后的手持物进 f3，被消耗的子实例 guid 进 f5。
+	// 用完：清引用，被消耗的子实例 guid 进 f5。
 	s.setHanditemLoadedRef(ctx, parentGUID, "")
+	out.removed = append(out.removed, loaded)
+	// 自动补 1 颗：新子实例进 f3（客户端据此重建皮兜里的 ready 球），
+	// res.UpdatedTrees 已含装好新引用的手持物与减 1 后的背包来源堆。
+	if res := s.reloadHanditemAfterThrow(ctx, uid, parentGUID, itemID); res != nil {
+		out.upserts = append(out.upserts, res.AddedTrees...)
+		out.upserts = append(out.upserts, res.UpdatedTrees...)
+		out.removed = append(out.removed, res.RemovedGUIDs...)
+		return out
+	}
+	// 无来源堆可补：弹药格空，回更新后的手持物（引用已清）。
 	if parent, perr := s.DB.GetItemByGUID(ctx, parentGUID); perr == nil && parent != nil {
 		if tree, terr := s.itemTree(ctx, parent); terr == nil {
 			out.upserts = append(out.upserts, tree)
 		}
 	}
-	out.removed = append(out.removed, loaded)
 	return out
+}
+
+// reloadHanditemAfterThrow 抛完一颗后从背包补 1 颗同种饵到手持工具，保持弹药格
+// 始终 1 颗 ready。仅在 handitem_load_one 开启且弹药格已空时生效；按 item_id 找
+// 背包里最早的同种来源堆，复用 rigSetComponent 整套装填 wiring（写装填引用、
+// 派生索引、快照素材）。找不到可补的来源堆时返回 nil。
+func (s *Server) reloadHanditemAfterThrow(ctx context.Context, uid int64, parentGUID, itemID string) *rigSetResult {
+	if s.DB == nil || uid == 0 || parentGUID == "" || parentGUID == zeroGUID || itemID == "" {
+		return nil
+	}
+	if s.tunableF("handitem_load_one", 1) == 0 {
+		return nil // 整堆模式不自动补填
+	}
+	if loaded := s.handitemLoadedGuid(ctx, parentGUID); loaded != "" && loaded != zeroGUID {
+		if row, _ := s.DB.GetItemByGUID(ctx, loaded); row != nil {
+			return nil // 弹药格还有料，不补
+		}
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx,
+		`SELECT guid FROM item WHERE uid=? AND item_id=? AND container='backpack' AND qty>0 ORDER BY created_ts,guid`,
+		uid, itemID)
+	if err != nil {
+		return nil
+	}
+	var candidates []string
+	for rows.Next() {
+		var g string
+		if serr := rows.Scan(&g); serr == nil {
+			candidates = append(candidates, g)
+		}
+	}
+	rows.Close()
+	for _, g := range candidates {
+		row, rerr := s.DB.GetItemByGUID(ctx, g)
+		if rerr != nil || row == nil || s.stackCountOf(ctx, row) < 1 {
+			continue
+		}
+		res := s.rigSetComponent(ctx, uid, parentGUID, 0, g, 0,
+			rigSetOpts{ParentType: familyHanditem, EnforceCategory: true, HanditemFullStack: true})
+		if res.Rejected || res.MountedGUID == "" {
+			continue
+		}
+		s.log.Info("弹弓抛后自动补填", "parent", shortGUID(parentGUID), "item", itemID,
+			"src", shortGUID(g), "child", shortGUID(res.MountedGUID))
+		return res
+	}
+	return nil
 }
 
 // throwDistance 从 olieodeoaof.f0 读取投掷距离。

@@ -47,7 +47,7 @@ func TestHookStrengthBreaksHookNotRod(t *testing.T) {
 		t.Fatalf("最弱环=%q，期望 hook", got)
 	}
 
-	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, rod.GUID)
+	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, hook.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestHookStrengthBreaksHookNotRod(t *testing.T) {
 		t.Fatalf("超载应判断钩: %+v", decision)
 	}
 
-	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, rod.GUID)
+	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, hook.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}

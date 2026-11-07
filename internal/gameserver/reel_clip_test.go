@@ -62,7 +62,7 @@ func TestReelClipRestoresMissingRigState(t *testing.T) {
 	if got := rigClipOf(srv.defaultRig153(ctx, row)); got != 33 {
 		t.Fatalf("缺失 f5 时轮管卡未恢复，实得 %d", got)
 	}
-	if !srv.rodRigSetClip(ctx, testShopRodGUID, 18) {
+	if !srv.rodRigSetClipRow(ctx, row, 18) {
 		t.Fatal("写入竿实例轮管卡失败")
 	}
 	row, err = db.GetItemByGUID(ctx, testShopRodGUID)

@@ -6,10 +6,11 @@ import (
 	"testing"
 )
 
-// TestReelDragSettingGatesRodBreak 复刻海图实测：轻纺车竿竿身 3.91kg、
-// 渔轮最大摩擦 3.2kg、主线 6.8kg。摩擦 1~29 档超过制动力只会打滑放线，
-// 竿身承受不到更高的张力；只有第 30 档锁轮才可能把竿压成最弱环。
-func TestReelDragSettingGatesRodBreak(t *testing.T) {
+// TestReportedReelBreakDamagesReel 复刻海图实测：轻纺车竿竿身 3.91kg、
+// 渔轮最大摩擦 3.2kg、主线 6.8kg。客户端 UI 显示 1~30，17/14 上报 0~29
+// （UI = 线上值 + 1）。17/9 上报渔轮断件时，服务端按上报件损坏渔轮本体，
+// 不再改判成“无损坏的泄力打滑”，也不改断最弱的主线/竿。
+func TestReportedReelBreakDamagesReel(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -30,51 +31,156 @@ func TestReelDragSettingGatesRodBreak(t *testing.T) {
 	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
 	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
 
-	// 摩擦 29 档：制动力低于竿身承力，超载只会爆轮。
-	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "29"); err != nil {
+	// 线上 28（UI 29）：制动力低于竿身承力，但客户端上报断件后仍要断。
+	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "28"); err != nil {
 		t.Fatal(err)
 	}
 	spec := srv.loadGearSpecForRig(ctx, srv.rigGearIDs(ctx, uid, rod.GUID), rod.GUID)
 	if !(spec.ReelCurrentDragKg > 0 && spec.ReelCurrentDragKg < spec.RodPowerKg) {
-		t.Fatalf("29 档制动力应低于竿身承力: drag=%f rod=%f", spec.ReelCurrentDragKg, spec.RodPowerKg)
+		t.Fatalf("UI 29 档制动力应低于竿身承力: drag=%f rod=%f", spec.ReelCurrentDragKg, spec.RodPowerKg)
 	}
 	if !(spec.RodPowerKg < spec.ReelDragKg && spec.LineStrengthKg > spec.RodPowerKg) {
 		t.Fatalf("测试钓组应满足 线>锁轮>竿: line=%f lock=%f rod=%f",
 			spec.LineStrengthKg, spec.ReelDragKg, spec.RodPowerKg)
 	}
-	if decision, derr := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID); derr != nil || decision.Part != "reel" {
-		t.Fatalf("29 档超载应判渔轮: %+v err=%v", decision, derr)
-	}
 	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !outcome.ReelDamaged || outcome.BreakPart != "reel" || len(outcome.RemovedGUIDs) != 0 {
-		t.Fatalf("29 档爆轮只应掉耐久: %+v", outcome)
+	if !outcome.ReelDamaged || !outcome.ReelBroken || outcome.FrictionWorn || outcome.LineBroken {
+		t.Fatalf("上报渔轮断件应直接把渔轮判坏: %+v", outcome)
 	}
-	for _, guid := range []string{rod.GUID, reel.GUID, line.GUID} {
-		row, gerr := db.GetItemByGUID(ctx, guid)
-		if gerr != nil || row == nil {
-			t.Fatalf("爆轮后 %s 不应消失: %v", guid, gerr)
-		}
+	if fresh, _ := db.GetItemByGUID(ctx, reel.GUID); fresh == nil || fresh.Durability != 0 {
+		t.Fatalf("上报渔轮断件后耐久应直接归 0: %+v", fresh)
 	}
-	if fresh, _ := db.GetItemByGUID(ctx, rod.GUID); fresh.Durability != 1 {
-		t.Fatalf("爆轮不应伤到竿体: %f", fresh.Durability)
+	if fresh, _ := db.GetItemByGUID(ctx, rod.GUID); fresh == nil || fresh.Durability != 1 {
+		t.Fatalf("上报渔轮断件不应伤到竿体: %+v", fresh)
 	}
+	if row, _ := db.GetItemByGUID(ctx, line.GUID); row == nil || row.Container != "backpack" || row.RigGUID != "" {
+		t.Fatalf("渔轮损坏后主线应退回背包: %+v", row)
+	}
+	if got := rigSlotGUIDs(t, srv, rod.GUID); got[catLine] != "" || got[catReel] != reel.GUID {
+		t.Fatalf("渔轮损坏后钓组只应保留渔轮: %+v", got)
+	}
+	if !containsGUID(outcome.RemovedGUIDs, line.GUID) {
+		t.Fatalf("主线应进入移除列表: %+v", outcome.RemovedGUIDs)
+	}
+}
 
-	// 第 30 档锁轮：制动力压过竿身，这时才轮到断竿。
-	if err := db.SetItemDurability(ctx, reel.GUID, 1); err != nil {
+// TestReelDragWireZeroIsValidSetting 锁定 0 基映射：客户端 UI 1 上报线上 0，
+// 这是有效的最小泄力档，不能当成“没有设置”而回退到锁轮。
+func TestReelDragWireZeroIsValidSetting(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "30"); err != nil {
+	reel, err := srv.CreateItem(ctx, uid, "spin_5820", "backpack", 1)
+	if err != nil {
 		t.Fatal(err)
 	}
-	locked := srv.loadGearSpecForRig(ctx, srv.rigGearIDs(ctx, uid, rod.GUID), rod.GUID)
-	if !(locked.ReelCurrentDragKg > locked.RodPowerKg) {
-		t.Fatalf("锁轮制动力应高于竿身承力: drag=%f rod=%f", locked.ReelCurrentDragKg, locked.RodPowerKg)
+	line, err := srv.CreateItem(ctx, uid, "mono_15249", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if decision, derr := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID); derr != nil || decision.Part != "rod" {
-		t.Fatalf("锁轮应判断竿: %+v err=%v", decision, derr)
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+
+	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "0"); err != nil {
+		t.Fatal(err)
+	}
+	setting, ok := srv.rodReelDragSetting(ctx, rod.GUID)
+	if !ok || setting != 0 {
+		t.Fatalf("线上 0 应是最小泄力档而不是缺省: setting=%d ok=%v", setting, ok)
+	}
+	spec := srv.loadGearSpecForRig(ctx, srv.rigGearIDs(ctx, uid, rod.GUID), rod.GUID)
+	if !(spec.ReelCurrentDragKg > 0 && spec.ReelCurrentDragKg < spec.RodPowerKg) {
+		t.Fatalf("UI 1 档制动力应低于竿身承力: drag=%f rod=%f", spec.ReelCurrentDragKg, spec.RodPowerKg)
+	}
+}
+
+// TestReelSettingsDefaultWhenMissing 锁定：没有 17/14/17/15 记录时按线上 15
+// （UI 16）兜底，不能当成锁轮；默认档位不把渔轮加进最弱环候选。
+func TestReelSettingsDefaultWhenMissing(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "spin_5820", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := srv.CreateItem(ctx, uid, "mono_15249", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+
+	if got, ok := srv.rodReelDragSetting(ctx, rod.GUID); !ok || got != defaultReelDragSetting {
+		t.Fatalf("缺省摩擦档位=%d ok=%v，期望 %d", got, ok, defaultReelDragSetting)
+	}
+	spec := srv.loadGearSpecForRig(ctx, srv.rigGearIDs(ctx, uid, rod.GUID), rod.GUID)
+	if !(spec.ReelCurrentDragKg > 0 && spec.ReelCurrentDragKg < spec.RodPowerKg) {
+		t.Fatalf("缺省档位应按泄力算: drag=%f rod=%f", spec.ReelCurrentDragKg, spec.RodPowerKg)
+	}
+	if decision, derr := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID); derr != nil ||
+		decision.Part == "reel" || decision.ReelSlip {
+		t.Fatalf("缺省档位不能当锁轮: %+v err=%v", decision, derr)
+	}
+}
+
+// TestLineBreakReportHonoredBelowLockDrag 锁定：客户端明确上报断线时，
+// 摩擦 23/24/28 档不能被否决成“泄力打滑”；服务端只按最弱环决定断哪一件。
+func TestLineBreakReportHonoredBelowLockDrag(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "spin_5820", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line, err := srv.CreateItem(ctx, uid, "mono_15065", "backpack", 1) // 3.1kg，比竿弱
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
+	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
+
+	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "24"); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, line.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Part != "line" || decision.ReelSlip {
+		t.Fatalf("客户端上报断线时不能被泄力档位否决: %+v", decision)
+	}
+	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, line.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.LineBroken || outcome.BreakPart != "line" {
+		t.Fatalf("断线报告应落成 line break: %+v", outcome)
+	}
+	if fresh, _ := db.GetItemByGUID(ctx, rod.GUID); fresh == nil || fresh.Durability <= 0 {
+		t.Fatal("断线不应把竿判成损坏")
 	}
 }
 

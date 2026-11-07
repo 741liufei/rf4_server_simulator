@@ -20,19 +20,20 @@ import (
 
 // settleXpResult 保存一次钓获结算的经验分解和结算状态。
 type settleXpResult struct {
-	bonuses      []catchXPBonus
-	premiumXP    int64
-	replayed     bool
-	baseXP       int64   // 技能倍率后的裸经验（分解中的"基础经验"）
-	totalXP      int64   // 310.f0 = 本条鱼总经验
-	silver       int64   // 展示用银价（catch_silver_cents 口径，不入账）
-	prevBest     int64   // 该鱼种已有纪录重量（813.f6）
-	newLevel     int64   // grant 后等级
-	totalXp      int64   // grant 后累计经验
-	levelsGained int64   // 本次升级数（310.f1）
-	isRecord     bool    // 是否破个人纪录
-	skillID      int64   // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
-	skillGain    float64 // 310.f3 本次实际熟练度增量
+	bonuses         []catchXPBonus
+	droppedCardGUID string
+	premiumXP       int64
+	replayed        bool
+	baseXP          int64   // 技能倍率后的裸经验（分解中的"基础经验"）
+	totalXP         int64   // 310.f0 = 本条鱼总经验
+	silver          int64   // 展示用银价（catch_silver_cents 口径，不入账）
+	prevBest        int64   // 该鱼种已有纪录重量（813.f6）
+	newLevel        int64   // grant 后等级
+	totalXp         int64   // grant 后累计经验
+	levelsGained    int64   // 本次升级数（310.f1）
+	isRecord        bool    // 是否破个人纪录
+	skillID         int64   // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
+	skillGain       float64 // 310.f3 本次实际熟练度增量
 }
 
 // grantXpMonotonic 增加累计经验并重算等级，保证等级不下降。
@@ -71,7 +72,7 @@ func (s *Server) settleCatchXP(ctx context.Context, uid int64, f *RolledFish, ri
 		s.log.Warn("钓获结算未保存", "err", err)
 		return nil
 	}
-	st := s.stateFor(uid)
+	st := s.fishingStateForFish(uid, f)
 	st.mu.Lock()
 	f.XP, f.Silver = r.totalXP, r.silver
 	st.mu.Unlock()
@@ -301,7 +302,7 @@ func (s *Server) buildSettle813(ctx context.Context, uid int64, f *RolledFish, r
 		5: proto.U32(uint32(max64(0, r.levelsGained))),
 		6: bonuses,
 	})
-	keep25 := s.buildPending25(f, s.stateFor(uid), s.currentLevel(uid))
+	keep25 := s.buildPending25(f, s.fishingStateForFish(uid, f), s.currentLevel(uid))
 	// ndiejnnioni.f0..f6 必须按 U32 克重编码；写成 F32 位型会导致客户端显示错误。
 	return wiregen.MustMakeObj("ndiejnnioni", map[int]*proto.Value{
 		0: proto.U32(uint32(statics[0])),
@@ -323,7 +324,7 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	uid := ctx.Sess.Userid
-	st := s.stateFor(uid)
+	st := s.fishingStateForRequest(ctx)
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
 	st.mu.Lock()
@@ -382,6 +383,24 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	if hasFish && profileTree != nil {
 		f7 = profileTree
 	}
+	// 801 继承的 f8 是本次获得的物品。仅发送 4/22 不会把卡片
+	// 加入钓获结果的奖励列表；重放已入册的卡片也不能把它移回散卡库存。
+	grants := proto.Args(proto.S("61"))
+	if hasFish && res.droppedCardGUID != "" {
+		card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID)
+		if err != nil {
+			ctx.ReplyFailure("System.IO.IOException", "钓获卡片未能读取，请重试")
+			return nil, true
+		}
+		if card.UID == uid && card.Container == tradingCardContainer {
+			tree, err := s.ItemToTree(cctx, card)
+			if err != nil {
+				ctx.ReplyFailure("System.IO.IOException", "钓获卡片未能显示，请重试")
+				return nil, true
+			}
+			grants.Items = append(grants.Items, tree)
+		}
+	}
 	obj801, err := wiregen.MakeObj("caagocpofin", map[int]*proto.Value{
 		0:  f0,
 		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
@@ -391,7 +410,7 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		5:  proto.Null(),
 		6:  f6,
 		7:  f7,
-		8:  proto.Null(),
+		8:  grants,
 		9:  proto.Args(proto.S("61")),
 		10: proto.Null(),
 	})
@@ -411,6 +430,11 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	}
 	if hasFish && !res.replayed {
 		ctx.Sess.Push2_1()
+	}
+	if hasFish && res.droppedCardGUID != "" {
+		if card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID); err == nil && card.UID == uid && card.Container == tradingCardContainer {
+			ctx.AfterResponse(func() { s.pushItemUpdate(uid, card) })
+		}
 	}
 	// 收竿时补挂同种库存，供客户端校验下一次抛竿；搏鱼中不补挂。
 	// 补挂后的钓组和背包数量在 801 响应发送后同步，避免结算覆盖数量更新。

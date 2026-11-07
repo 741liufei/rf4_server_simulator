@@ -12,8 +12,12 @@ func nativeInventoryContainers(kind uint64) []string {
 	switch kind {
 	case containerBackpack:
 		return []string{"backpack", "rig"}
-	case 17, 18:
+	case 17:
 		return []string{fmt.Sprintf("native:%d", kind)}
+	case containerTradingCards:
+		// Album cards remain in the collection inventory; their parent GUID
+		// determines which album slot the client displays them in.
+		return []string{tradingCardContainer, "card_deck"}
 	}
 	return nil
 }

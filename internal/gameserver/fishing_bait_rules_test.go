@@ -154,7 +154,8 @@ func TestFishBaitNoCandidateTimerAndHotReload(t *testing.T) {
 	s.onBiteTimer(sess.Userid)
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if !st.Resolved || st.Pending != nil || st.PushSent {
+	defer st.cancelBiteTimerLocked()
+	if st.Resolved || st.Pending != nil || st.PushSent || st.biteTimer == nil {
 		t.Fatalf("no-candidate state: resolved=%v pending=%v pushed=%v", st.Resolved, st.Pending, st.PushSent)
 	}
 }
