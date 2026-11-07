@@ -341,7 +341,7 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 	return obj, nil
 }
 
-// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f2、拟饵 f0 出厂钩。
+// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f3、拟饵 f0 出厂钩。
 // 只填充空槽，已有子对象的槽保持不变。
 func (s *Server) materializeInto(ctx context.Context, class string, def *store.ItemDef, obj *proto.Value, guid string, workmanship, durability float64) {
 	attrs := defAttrs(def)
@@ -364,7 +364,7 @@ func (s *Server) materializeInto(ctx context.Context, class string, def *store.I
 	switch class {
 	case "dgjinoebdop": // 渔轮 f2..f14
 		fill(reelPartKeys, false)
-	case "oldfpclaabo": // 前导 f1/f2（f3 线槽 def 无配置恒 null）
+	case "oldfpclaabo": // 前导 f1 前导线、f2 连接件、f3 普通主线
 		fill(leaderPartKeys, false)
 		if idx := fieldIdxByCS(class, gearAttrLeaderIn); idx >= 0 && idx < len(obj.Fields) {
 			if normalized, changed := normalizeLeaderInnerWire(obj.Fields[idx].Val); changed {

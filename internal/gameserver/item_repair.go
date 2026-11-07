@@ -101,7 +101,7 @@ func (s *Server) migrateLegacyZeroDragForce(ctx context.Context) (int, error) {
 //   - 回填零值状态位和容器枚举；
 //   - 修正渔轮刹车片成色，只补齐缺失的曳力字段（已有磨损值不再覆盖）；
 //   - 将竿的 f5 类型限制在竿型允许范围内；
-//   - 把自制引线的普通主线子对象换成对应的前导线定义。
+//   - 修复旧自制引线的内嵌线材槽位，并把旧减震引线迁到 f3。
 //
 // 兼容性只用于装配推荐，不覆盖玩家显式选择。修复写回 fields_json，
 // 并通过 ensureRig 同步 rig/rig_component。成功后写版本和统计标记；

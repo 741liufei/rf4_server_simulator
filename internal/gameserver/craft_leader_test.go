@@ -83,17 +83,17 @@ func TestCraftedLeaderUsesSelectedMaterials(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	lineObj := fields[fieldIdxByCS(crafted.WireClass, gearAttrLeaderIn)].Val
+	lineObj := fields[fieldIdxByCS(crafted.WireClass, craftedMainLineKey)].Val
 	if lineObj == nil || lineObj.Kind != proto.KindObj {
-		t.Fatalf("成品 f1 线材对象未物化: %+v", lineObj)
+		t.Fatalf("成品 f3 线材对象未物化: %+v", lineObj)
 	}
-	wireClass := categoryWireClass[gearCatLeaderWire]
+	wireClass := categoryWireClass[gearCatLine]
 	if lineObj.Class != wireClass.Class || lineObj.TypeID != uint32(wireClass.TypeID) {
-		t.Fatalf("成品 f1 协议类型=%s/%d，期望 %s/%d",
+		t.Fatalf("成品 f3 协议类型=%s/%d，期望 %s/%d",
 			lineObj.Class, lineObj.TypeID, wireClass.Class, wireClass.TypeID)
 	}
-	if got := u64Of(lineObj.Fields[fieldIdxByCS(lineObj.Class, csNumericID)].Num); got != 16064 {
-		t.Fatalf("线材模型 numeric_id=%d，期望前导线 16064", got)
+	if got := u64Of(lineObj.Fields[fieldIdxByCS(lineObj.Class, csNumericID)].Num); got != 9279 {
+		t.Fatalf("线材模型 numeric_id=%d，期望主线 9279", got)
 	}
 	if got := wireFloatForTest(t, lineObj, csStrength); math.Abs(got-3.4) > 0.001 {
 		t.Fatalf("线材强度=%f，期望 3.4kg", got)
@@ -125,9 +125,9 @@ func TestCraftedLeaderUsesSelectedMaterials(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reloadedLine := tree.Fields[fieldIdxByCS(tree.Class, gearAttrLeaderIn)].Val
+	reloadedLine := tree.Fields[fieldIdxByCS(tree.Class, craftedMainLineKey)].Val
 	if reloadedLine == nil ||
-		u64Of(reloadedLine.Fields[fieldIdxByCS(reloadedLine.Class, csNumericID)].Num) != 16064 {
+		u64Of(reloadedLine.Fields[fieldIdxByCS(reloadedLine.Class, csNumericID)].Num) != 9279 {
 		t.Fatalf("重载后的成品没有保留真实线材模型: %+v", reloadedLine)
 	}
 	if got := wireFloatForTest(t, tree, csStrength); math.Abs(got-3.4) > 0.001 {
