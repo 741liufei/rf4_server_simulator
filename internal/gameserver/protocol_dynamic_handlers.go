@@ -161,6 +161,9 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 			// 轮子只掉耐久、不进移除清单：不把 BrokenGUID 一并推过去的话，
 			// 客户端缓存停在旧耐久，玩家看不到"损坏"。
 			syncGUIDs := append([]string(nil), outcome.RemovedGUIDs...)
+			// 拆分子饵并回来源堆时，来源堆数量变了但客户端没有收到 4/22，
+			// 需要和移除件一起刷新，否则背包仍显示旧数量。
+			syncGUIDs = append(syncGUIDs, outcome.StackRefreshGUIDs...)
 			if g := strings.TrimSpace(outcome.BrokenGUID); g != "" {
 				syncGUIDs = append(syncGUIDs, g)
 			}

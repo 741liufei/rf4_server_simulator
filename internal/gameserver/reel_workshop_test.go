@@ -259,57 +259,27 @@ func TestReelOverloadUsesDurabilityStages(t *testing.T) {
 	mountGearForTest(t, srv, sess, rod.GUID, reel.GUID)
 	mountGearForTest(t, srv, sess, rod.GUID, line.GUID)
 
-	// —— 锁轮超载（默认 30 档）：锁轮装置拉力参与损坏计算 ——
-	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, line.GUID)
+	// —— 客户端已上报锁轮（线上 29 / UI 30）：锁轮承力参与最弱环比较 ——
+	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "29"); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := srv.resolveGearBreak(ctx, uid, rod.GUID, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if decision.Part != "reel" || decision.ReelSlip {
-		t.Fatalf("锁轮承力最弱时应判锁轮超载(ReelSlip=false): %+v", decision)
+		t.Fatalf("锁轮承力最弱时应判渔轮损坏(ReelSlip=false): %+v", decision)
 	}
-	lockOutcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, line.GUID)
+	lockOutcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !lockOutcome.ReelDamaged || lockOutcome.FrictionWorn || lockOutcome.LineBroken {
-		t.Fatalf("锁轮超载结果错误: %+v", lockOutcome)
+	if !lockOutcome.ReelDamaged || !lockOutcome.ReelBroken || lockOutcome.FrictionWorn || lockOutcome.LineBroken {
+		t.Fatalf("上报渔轮损坏结果错误: %+v", lockOutcome)
 	}
 	lockFresh, _ := db.GetItemByGUID(ctx, reel.GUID)
-	if math.Abs(lockFresh.Durability-0.8) > 1e-9 {
-		t.Fatalf("锁轮超载应掉一个耐久档，耐久=%f 期望 0.8", lockFresh.Durability)
-	}
-
-	// —— 低档位泄力打滑（1 档）：磨摩擦片，本体耐久不动 ——
-	if err := db.UpsertRodSetting(ctx, rod.GUID, reelDragSettingKey, "1"); err != nil {
-		t.Fatal(err)
-	}
-	reelBefore, _ := db.GetItemByGUID(ctx, reel.GUID)
-	perfBefore, _ := srv.syncReelPerformance(ctx, reelBefore)
-	decision, err = srv.resolveGearBreak(ctx, uid, rod.GUID, line.GUID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decision.Part != "reel" || !decision.ReelSlip {
-		t.Fatalf("低档位泄力打滑应判 ReelSlip=true: %+v", decision)
-	}
-	outcome, err := srv.breakLineOrRod(ctx, uid, rod.GUID, line.GUID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !outcome.ReelDamaged || outcome.ReelBroken || outcome.LineBroken {
-		t.Fatalf("泄力打滑结果错误: %+v", outcome)
-	}
-	fresh, _ := db.GetItemByGUID(ctx, reel.GUID)
-	// 打滑磨的是摩擦片制动力，本体耐久不掉（仍为锁轮超载后的 0.8）。
-	if math.Abs(fresh.Durability-0.8) > 1e-9 {
-		t.Fatalf("泄力打滑不应再伤本体，耐久=%f 期望 0.8", fresh.Durability)
-	}
-	perfAfter, _ := srv.syncReelPerformance(ctx, fresh)
-	if !(perfAfter.BaseDragKg < perfBefore.BaseDragKg*(1-1e-9)) {
-		t.Fatalf("打滑应磨摩擦片制动力：before=%v after=%v", perfBefore.BaseDragKg, perfAfter.BaseDragKg)
-	}
-	if got, _ := db.GetItemByGUID(ctx, reel.GUID); got == nil {
-		t.Fatal("泄力打滑只磨摩擦片，不应从钓组删除轮子")
+	if lockFresh.Durability != 0 {
+		t.Fatalf("渔轮损坏后耐久应直接归 0，实得 %f", lockFresh.Durability)
 	}
 }
 
