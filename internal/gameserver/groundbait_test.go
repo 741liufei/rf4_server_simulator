@@ -32,6 +32,17 @@ func gbAge(t *testing.T, s *Server, uid int64, gameHours float64) {
 	}
 }
 
+// gbDepositCount 数某一发（call_id 结尾）在窝账里记了几批。
+func gbDepositCount(t *testing.T, s *Server, uid int64, callSuffix string) int {
+	t.Helper()
+	var n int
+	if err := s.DB.SQL.QueryRow(`SELECT COUNT(*) FROM groundbait_deposit WHERE uid=? AND txn_guid LIKE ?`,
+		uid, "%:"+callSuffix).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
 func gbCount(t *testing.T, s *Server, uid int64) int {
 	t.Helper()
 	var n int
@@ -256,6 +267,13 @@ func TestGroundbaitCastDepositMapsChannels(t *testing.T) {
 		{ItemID: "feedcompleted", Units: 1, Category: 46},
 		{ItemID: "pva_stick_m", Units: 1, Category: 30},
 	}}, "rod-x:123")
+	// 打窝器入水倒空，通道名单独记一条，日志里好和食笼区分。
+	st.mu.Lock()
+	st.RigType = rigTypeSpod
+	st.mu.Unlock()
+	s.depositCastGroundbait(sess, st, baitChange{Groundbait: []groundbaitUse{
+		{ItemID: "feed_dry", Units: 1, Category: 46},
+	}}, "rod-y:456")
 
 	rows, err := s.DB.SQL.Query(`SELECT channel, item_id FROM groundbait_deposit ORDER BY channel`)
 	if err != nil {
@@ -270,8 +288,96 @@ func TestGroundbaitCastDepositMapsChannels(t *testing.T) {
 		got[ch] = it
 	}
 	_ = rows.Close()
-	if got["feeder"] != "feedcompleted" || got["pva"] != "pva_stick_m" {
+	if got["feeder"] != "feedcompleted" || got["pva"] != "pva_stick_m" || got["spod"] != "feed_dry" {
 		t.Fatalf("通道映射错了: %+v", got)
+	}
+}
+
+// 打窝竿实测抛过一次（19:38:34 落点 264.12/422.55），但服务端既没扣槽上的窝料、
+// 也没记窝：打窝器不发 14/7，入水时唯一到服务端的信号是 14/3。
+// 这里验 14/3 会扣一份、落到本杆真实落点格，且重复上报不再扣。
+func TestGroundbaitSpodDeductsOnSplashDown(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	const uid = int64(1000001)
+
+	rod, err := s.CreateItem(ctx, uid, "spod_10132_3_5LB", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建打窝竿失败: %v", err)
+	}
+	if err := s.DB.UpsertRig(ctx, rod.GUID, uid, rigTypeSpod, "", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	pot, err := s.CreateItem(ctx, uid, "feed_dry", "backpack", 1)
+	if err != nil {
+		t.Fatalf("创建窝料失败: %v", err)
+	}
+	s.setStackCount(ctx, pot, 2)
+	// 客户端把槽 46 的窝料挂在打窝器上（实测 slot=46、extra=225）。
+	if _, err := s.DB.SQL.ExecContext(ctx,
+		`UPDATE item SET container='rig', slot=46, rig_guid=? WHERE guid=?`, rod.GUID, pot.GUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.UpsertRigComponent(ctx, rod.GUID, 46, pot.GUID, 225); err != nil {
+		t.Fatal(err)
+	}
+
+	sess, _ := newTunnelProbe(t, s)
+	st := s.stateFor(uid)
+	st.mu.Lock()
+	st.GearGuid, st.RigType = rod.GUID, rigTypeSpod
+	st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot = "gb-test-loc", 100, 100, true, 7
+	st.CastTs = time.Now()
+	st.mu.Unlock()
+
+	fall143 := func() {
+		t.Helper()
+		hFishingFall(&Ctx{Sess: sess, Main: 14, Sub: 3, CallID: 9301,
+			Tree: rigRequestTree(t, proto.Guid(rod.GUID)), DecodeOK: true,
+			ExpectResponse: false, Log: logging.Discard()})
+	}
+	qty := func() int64 {
+		t.Helper()
+		row, rerr := s.DB.GetItemByGUID(ctx, pot.GUID)
+		if rerr != nil || row == nil {
+			return -1
+		}
+		return s.stackCountOf(ctx, row)
+	}
+
+	fall143()
+	if got := qty(); got != 1 {
+		t.Fatalf("打窝器入水应扣掉 1 份（2→1），实得 %d", got)
+	}
+	var (
+		ch, itemID     string
+		portions       float64
+		hasPos, bx, bz int64
+	)
+	if err := s.DB.SQL.QueryRowContext(ctx,
+		`SELECT channel,item_id,portions,has_pos,bx,bz FROM groundbait_deposit WHERE uid=?`, uid).
+		Scan(&ch, &itemID, &portions, &hasPos, &bx, &bz); err != nil {
+		t.Fatalf("打窝器这一发没记进窝账: %v", err)
+	}
+	wantBX, wantBZ := groundbaitCell(100, 100)
+	if ch != "spod" || itemID != "feed_dry" || portions != 1 {
+		t.Fatalf("窝账应是 spod 通道 1 份 feed_dry，实得 %s / %s / %.2f", ch, itemID, portions)
+	}
+	if hasPos != 1 || bx != wantBX || bz != wantBZ {
+		t.Fatalf("窝应记在落点格 (%d,%d)，实得 has_pos=%d (%d,%d)", wantBX, wantBZ, hasPos, bx, bz)
+	}
+	if got := s.groundbaitSpot(ctx, uid, "gb-test-loc", wantBX, wantBZ).units; got < 0.99 || got > 1.01 {
+		t.Fatalf("打窝器那份窝应全额生效，实得 %.3f", got)
+	}
+
+	// 客户端重复上报同一次落水不能再扣（幂等键沿用本次抛竿）。
+	fall143()
+	if got := qty(); got != 1 {
+		t.Fatalf("重复上报不该再扣，实得 %d", got)
+	}
+	if n := gbCount(t, s, uid); n != 1 {
+		t.Fatalf("重复上报不该多记窝，实得 %d 批", n)
 	}
 }
 

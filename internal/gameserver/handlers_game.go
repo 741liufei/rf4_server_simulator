@@ -1166,11 +1166,20 @@ func hFishingStep(ctx *Ctx) ([]byte, bool) {
 }
 
 func hFishingFall(ctx *Ctx) ([]byte, bool) {
-	st := ctx.Sess.Srv.fishingStateForRequest(ctx)
+	srv := ctx.Sess.Srv
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.FallSeen = true
 	st.FallTs = time.Now()
+	rigType, gear := st.RigType, st.GearGuid
 	st.mu.Unlock()
+	// 打窝器入水就把料倒进落点：它不发 14/7，14/3 就是它的入水信号。
+	// 幂等键沿用本次抛竿，客户端重复上报不会重复扣份。
+	if spodRigTypes[rigType] {
+		if err := srv.consumeCastBait(ctx.Sess, st); err != nil {
+			ctx.Log.Warn("打窝器入窝料扣减失败", "rod", shortGUID(gear), "err", err)
+		}
+	}
 	return nil, true
 }
 

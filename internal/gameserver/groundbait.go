@@ -653,15 +653,23 @@ func (s *Server) depositCastGroundbait(sess *Session, st *FishState, change bait
 		return
 	}
 	st.mu.Lock()
-	loc, x, z, has, spot := st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot
+	loc, x, z, has, spot, rigType := st.Loc, st.CastPosX, st.CastPosZ, st.HasCastPos, st.Spot, st.RigType
 	st.mu.Unlock()
 	ctx := sess.pushCtx()
 	for i, use := range change.Groundbait {
-		channel := "feeder"
-		if use.Category == catPVAStick {
-			channel = "pva"
-		}
 		s.groundbaitDeposit(ctx, sess.Userid, loc, x, z, has, spot, use.ItemID, use.Units,
-			channel, fmt.Sprintf("%s#%d", eventKey, i))
+			groundbaitChannelFor(use.Category, rigType), fmt.Sprintf("%s#%d", eventKey, i))
 	}
+}
+
+// groundbaitChannelFor 记下这份窝是从哪条通道投的，只作溯源与排查用，
+// 不参与吸引计算（吸引只看格子、份数与时间）。
+func groundbaitChannelFor(category, rigType int64) string {
+	if category == catPVAStick {
+		return "pva"
+	}
+	if spodRigTypes[rigType] {
+		return "spod"
+	}
+	return "feeder"
 }
