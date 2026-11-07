@@ -768,12 +768,15 @@ func hCastPrepare(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	st = srv.selectFishingRod(ctx.Sess.Userid, gear)
-	reelSetting, hasReelSetting := srv.rodReelDragSetting(ctx.Sess.pushCtx(), gear)
+	// 未保存过 17/15 时按新竿 f5.f7 的默认值处理，避免客户端显示 15、
+	// 服务端判鱼却按 0（无 trolling 加成）导致状态不一致。
+	reelSpeed := defaultReelSpeed
+	if saved, ok := srv.rodReelSpeedSetting(ctx.Sess.pushCtx(), gear); ok {
+		reelSpeed = saved
+	}
 	st.mu.Lock()
 	st.GearGuid = gear
-	if hasReelSetting {
-		st.ReelSetting = reelSetting
-	}
+	st.ReelSetting = reelSpeed
 	if rigTypeLureFamily[st.RigType] {
 		st.LureMotionMask = 0
 		st.LureAction = ""

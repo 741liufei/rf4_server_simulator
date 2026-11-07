@@ -39,6 +39,7 @@ func registerEconMarket(d *Dispatch) {
 	d.Register(17, 12, hRodSetDepth)
 	d.Register(17, 13, hRodSetClip)
 	d.Register(17, 14, hRodSetDrag)
+	d.Register(17, 15, hRodSetSpeed)
 }
 
 // ---------------------------------------------------------------------------
@@ -1622,7 +1623,7 @@ func hRodSetDepth(ctx *Ctx) ([]byte, bool) {
 	return nil, true
 }
 
-// hRodSetDrag 17/14（fire-and-forget）：渔轮摩擦/转速设定值上报。
+// hRodSetDrag 17/14（fire-and-forget）：渔轮摩擦档位上报。
 //
 // 报文形状与 17/13（轮管卡）相同：args(52) + 竿 guid + u32。客户端每次启动都回到默认值，
 // 是因为服务端没有把设定值记下来回填；这里按竿保存并写回钓组桩的第 6 个字段。
@@ -1632,11 +1633,7 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 	if rodGUID == "" {
 		return nil, true
 	}
-	ctx.Log.Info("17/14 设置摩擦/转速", "竿", shortGUID(rodGUID), "值", value)
-	st := srv.fishingStateForRequest(ctx)
-	st.mu.Lock()
-	st.ReelSetting = value
-	st.mu.Unlock()
+	ctx.Log.Info("17/14 设置摩擦", "竿", shortGUID(rodGUID), "值", value)
 	if srv.DB != nil {
 		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelDragSettingKey,
 			strconv.FormatInt(value, 10))
@@ -1645,8 +1642,40 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 	return nil, true
 }
 
-// rodRigSetDrag 把摩擦/转速值写回竿实例钓组桩的第 6 个字段，保留其他钓组状态。
+// hRodSetSpeed 17/15（fire-and-forget）：路亚族收线速度档上报。
+//
+// 2026-11-07 抓包确认：调“收线速度”发 17/15（f5.f7），调“摩擦”发 17/14（f5.f6）。
+// 服务端此前没有 17/15 handler，速度值被直接丢弃，重新登录后回到默认。
+func hRodSetSpeed(ctx *Ctx) ([]byte, bool) {
+	srv := ctx.Sess.Srv
+	rodGUID, value := parseRodGuidInt(ctx.Tree)
+	if rodGUID == "" {
+		return nil, true
+	}
+	ctx.Log.Info("17/15 设置收线速度", "竿", shortGUID(rodGUID), "值", value)
+	st := srv.stateFor(ctx.Sess.Userid)
+	st.mu.Lock()
+	st.ReelSetting = value
+	st.mu.Unlock()
+	if srv.DB != nil {
+		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelSpeedSettingKey,
+			strconv.FormatInt(value, 10))
+		srv.rodRigSetSpeed(ctx.Sess.pushCtx(), rodGUID, value)
+	}
+	return nil, true
+}
+
+// rodRigSetDrag 把摩擦档位写回竿实例钓组桩的第 6 个字段，保留其他钓组状态。
 func (s *Server) rodRigSetDrag(ctx context.Context, rodGUID string, value int64) bool {
+	return s.rodRigSetSetting(ctx, rodGUID, 6, value)
+}
+
+// rodRigSetSpeed 把收线速度写回竿实例钓组桩的第 7 个字段，保留其他钓组状态。
+func (s *Server) rodRigSetSpeed(ctx context.Context, rodGUID string, value int64) bool {
+	return s.rodRigSetSetting(ctx, rodGUID, 7, value)
+}
+
+func (s *Server) rodRigSetSetting(ctx context.Context, rodGUID string, fieldIdx int, value int64) bool {
 	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
 	if err != nil || row == nil {
 		return false
@@ -1660,15 +1689,15 @@ func (s *Server) rodRigSetDrag(ctx context.Context, rodGUID string, value int64)
 		return false
 	}
 	stored := fields[idx].Val
-	if stored == nil || stored.Kind != proto.KindObj || len(stored.Fields) <= 6 {
+	if stored == nil || stored.Kind != proto.KindObj || len(stored.Fields) <= fieldIdx {
 		return false
 	}
 	clone := *stored
 	clone.Fields = append([]proto.Field(nil), stored.Fields...)
-	if clone.Fields[6].Op != "VAL" {
-		clone.Fields[6].Op = "U32"
+	if clone.Fields[fieldIdx].Op != "VAL" {
+		clone.Fields[fieldIdx].Op = "U32"
 	}
-	clone.Fields[6].Num = ptrU64(uint64(value))
+	clone.Fields[fieldIdx].Num = ptrU64(uint64(value))
 	fields[idx].Op = "VAL"
 	fields[idx].Val = &clone
 	s.saveItemFields(ctx, row, fields)

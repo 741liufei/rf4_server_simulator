@@ -10,9 +10,10 @@ import (
 
 // 基础实现：轮管卡默认关闭，按竿持久化卡米数。
 const (
-	reelClipSettingKey = "reel_clip_m"
-	reelDragSettingKey = "reel_drag_setting"
-	maxReelClipM       = 10000
+	reelClipSettingKey  = "reel_clip_m"
+	reelDragSettingKey  = "reel_drag_setting"
+	reelSpeedSettingKey = "reel_speed_setting"
+	maxReelClipM        = 10000
 )
 
 func clampReelClipM(v int64) int64 {
@@ -80,7 +81,26 @@ func buildRig153Like(src *proto.Value, name string, rigType int64, comps map[int
 	if sel&avail != sel {
 		sel = 0
 	}
-	return buildRig153Full(name, rigType, comps, depth, clipM, sel, avail)
+	out := buildRig153Full(name, rigType, comps, depth, clipM, sel, avail)
+	copyRigReelSettings(src, out)
+	return out
+}
+
+// copyRigReelSettings 保留实例 f5 已保存的摩擦档位 f6 和收线速度 f7。
+// 15 只是新建竿的出厂默认；14/2、4/22 重建钓组时如果照抄默认值，
+// 17/14、17/15 保存的玩家设定会在下一次下发时被冲掉。
+func copyRigReelSettings(src, dst *proto.Value) {
+	if src == nil || src.Kind != proto.KindObj || dst == nil || dst.Kind != proto.KindObj {
+		return
+	}
+	for _, idx := range []int{6, 7} {
+		if idx >= len(src.Fields) || idx >= len(dst.Fields) {
+			continue
+		}
+		if f := src.Fields[idx]; f.Num != nil {
+			dst.Fields[idx] = proto.Field{Op: "U32", Num: ptrU64(u64Of(f.Num))}
+		}
+	}
 }
 
 // applyRigBaitMountRender 渲染期按 153.f1 的钓组类型重算 f9 可选掩码，
