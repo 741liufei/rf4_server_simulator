@@ -370,6 +370,32 @@ func (s *Server) resolveRecipe(ctx context.Context, key string) *store.Recipe {
 	return nil
 }
 
+// setItemName 把玩家在制作界面填写的自定义名称写入物品实例。
+// 客户端该字段（phoglfnffah）为空时回落到定义名，非空时原样显示。
+func setItemName(it *store.Item, name string) error {
+	if it == nil {
+		return errors.New("空物品行")
+	}
+	if name == "" {
+		return nil
+	}
+	fields, err := FieldsFromJSON(it.FieldsJSON)
+	if err != nil {
+		return err
+	}
+	idx := fieldIdxByCS(it.WireClass, csCustomName)
+	if idx < 0 || idx >= len(fields) {
+		return fmt.Errorf("物品 %s 没有名称字段", it.ItemID)
+	}
+	fields[idx].Str = &name
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return err
+	}
+	it.FieldsJSON = fj
+	return nil
+}
+
 // ---- 9/1 制作闭环 ----
 
 // hCraft 处理 9/1 制作：解析配方、校验材料、事务内扣料、产出入包并写流水。
@@ -595,6 +621,10 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		if len(touched) == 0 {
 			return fail("配方要求材料但未扣到任何材料")
 		}
+	}
+
+	if err := setItemName(producedRow, req.Name); err != nil {
+		return fail("自定义名称写入失败", "err", err)
 	}
 
 	// 标本挂鱼（事务内）：定位→嵌鱼→消耗一体，任何一步失败整体回滚。

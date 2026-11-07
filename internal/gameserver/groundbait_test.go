@@ -1,6 +1,7 @@
 package gameserver
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -52,7 +53,7 @@ func TestGroundbaitLedgerPortionTimeAndOverdose(t *testing.T) {
 		t.Fatalf("10 份窝料应得 N=10，实得 %.3f", got)
 	}
 	if got := st.hoursLeft; got < 5.99 || got > 6.01 {
-		t.Fatalf("10 份窝料应得 T=6 游戏小时（产品口径：10 份=6 小时），实得 %.3f", got)
+		t.Fatalf("10 份窝料应得 T=6 游戏小时（少爷指示：10 份=6 小时），实得 %.3f", got)
 	}
 	if p := s.groundbaitOverdoseP(st.units); p != 1 {
 		t.Fatalf("15 份以内不该死窝，实得 P=%.2f", p)
@@ -276,7 +277,7 @@ func TestGroundbaitCastDepositMapsChannels(t *testing.T) {
 
 // 先打窝、后抛竿的顺序实测过：弹弓与手抛只上报距离、不上报落点坐标，
 // 这种窝记在「落点未知」那一格。玩家抛竿后判鱼用的是浮标落点格子，两者不同格——
-// 这份窝必须按衰减系数继续生效（否则实机「先用弹弓打窝再抛竿」等于白打），
+// 这份窝必须按衰减系数继续生效（否则少爷「先用弹弓打窝再抛竿」等于白打），
 // 但抬升要低于同一份数、落点正好压在浮标格上的窝；衰减调 0 退回「只认同格」。
 func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
 	s, _ := newRigTestServer(t)
@@ -490,6 +491,96 @@ func TestGroundbaitThrowFallsBackToPlayerCell(t *testing.T) {
 	}
 	if hasPosRow != 0 {
 		t.Fatalf("兜底关闭后应退回落点未知，实得 has_pos=%d", hasPosRow)
+	}
+}
+
+// TestGroundbaitInstanceCarriesUnitWeight 窝料实例必须自带单件克重。
+// 原生品类 46 的 11 个定义 ijbjficbhog 全是 0（实测连商店买的「干混合」在客户端
+// 也显示「质量 0 克」），真实服务端是按实例下发的。客户端「质量」那行读实例
+// 重量字段的 IEEE754 位模式、单位克：写 30.0 显示「30 克」，写 30000.0 显示
+// 「30 公斤」（2026-11-07 两堆各写一个值实测）。
+func TestGroundbaitInstanceCarriesUnitWeight(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	const uid = int64(1000001)
+	cases := []struct {
+		item  string
+		grams float32
+	}{
+		{"feed_karp", 45},          // 窝料档案里带 unit_grams
+		{"feed_probe_missing", 30}, // 档案缺项 â 兜底一球 30 克
+	}
+	for i, c := range cases {
+		if def, err := s.DB.GetItemDefByItemID(ctx, c.item); err != nil || def == nil {
+			if _, err := s.DB.SQL.ExecContext(ctx,
+				`INSERT INTO item_def(numeric_id,item_id,category,attrs_json)
+				 VALUES(999860,?,46,'{"fopbhlmkcpe":1,"ijbjficbhog":0,"ljnnpokapig":0,"hgaijieklek":1069120}')`,
+				c.item); err != nil {
+				t.Fatal(err)
+			}
+		}
+		row, err := s.CreateItem(ctx, uid, c.item, "backpack", 60)
+		if err != nil {
+			t.Fatalf("第 %d 个 %s 建实例失败: %v", i+1, c.item, err)
+		}
+		if row.WireClass != "cilmgoaoofg" {
+			t.Fatalf("窝料实例类应为 cilmgoaoofg，实得 %s", row.WireClass)
+		}
+		fields, err := FieldsFromJSON(row.FieldsJSON)
+		if err != nil {
+			t.Fatal(err)
+		}
+		idx := fieldIdxByCS(row.WireClass, castAttrWaterWeight)
+		if idx < 0 || idx >= len(fields) {
+			t.Fatalf("%s 没有重量字段 %s", row.WireClass, castAttrWaterWeight)
+		}
+		if got := math.Float32frombits(uint32(u64Of(fields[idx].Num))); got != c.grams {
+			t.Fatalf("第 %d 个 %s 的实例克重应为 %.1f，实得 %.4f", i+1, c.item, c.grams, got)
+		}
+	}
+}
+
+// TestGroundbaitRepairBackfillsZeroWeight 老库存里照抄定义生成的窝料实例重量恒 0，
+// 启动修复必须补回单件克重，否则玩家已经做好的那几堆永远显示「质量 0 克」。
+func TestGroundbaitRepairBackfillsZeroWeight(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	row, err := s.CreateItem(ctx, 1000001, "feed_karp", "backpack", 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := fieldIdxByCS(row.WireClass, castAttrWaterWeight)
+	if idx < 0 || idx >= len(fields) {
+		t.Fatalf("%s 没有重量字段", row.WireClass)
+	}
+	fields[idx].Num = ptrU64(0) // 模拟旧版本照抄定义产生的「0 克」实例
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DB.UpdateItemFields(ctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RepairItemPhysics(ctx); err != nil {
+		t.Fatal(err)
+	}
+	after, err := s.DB.GetItemByGUID(ctx, row.GUID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after == nil {
+		t.Fatal("修复后物品消失")
+	}
+	fields, err = FieldsFromJSON(after.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := math.Float32frombits(uint32(u64Of(fields[idx].Num))); got != 45 {
+		t.Fatalf("启动修复应把窝料实例克重补成 45 克，实得 %.4f", got)
 	}
 }
 
