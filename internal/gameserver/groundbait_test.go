@@ -64,7 +64,7 @@ func TestGroundbaitLedgerPortionTimeAndOverdose(t *testing.T) {
 		t.Fatalf("10 份窝料应得 N=10，实得 %.3f", got)
 	}
 	if got := st.hoursLeft; got < 5.99 || got > 6.01 {
-		t.Fatalf("10 份窝料应得 T=6 游戏小时（少爷指示：10 份=6 小时），实得 %.3f", got)
+		t.Fatalf("10 份窝料应得 T=6 游戏小时（产品口径：10 份=6 小时），实得 %.3f", got)
 	}
 	if p := s.groundbaitOverdoseP(st.units); p != 1 {
 		t.Fatalf("15 份以内不该死窝，实得 P=%.2f", p)
@@ -383,7 +383,7 @@ func TestGroundbaitSpodDeductsOnSplashDown(t *testing.T) {
 
 // 先打窝、后抛竿的顺序实测过：弹弓与手抛只上报距离、不上报落点坐标，
 // 这种窝记在「落点未知」那一格。玩家抛竿后判鱼用的是浮标落点格子，两者不同格——
-// 这份窝必须按衰减系数继续生效（否则少爷「先用弹弓打窝再抛竿」等于白打），
+// 这份窝必须按衰减系数继续生效（否则实机「先用弹弓打窝再抛竿」等于白打），
 // 但抬升要低于同一份数、落点正好压在浮标格上的窝；衰减调 0 退回「只认同格」。
 func TestGroundbaitUnknownLandingStillWorks(t *testing.T) {
 	s, _ := newRigTestServer(t)
@@ -713,7 +713,7 @@ func TestGroundbaitKeepaliveAdvancesOnlineClock(t *testing.T) {
 }
 
 // TestGroundbaitHandThrowConsumesAndDeposits 手抛（12/1）必须真扣一份并记进窝账。
-// 实测少爷扔两发后背包数字减少，但库里 qty 一动不动：客户端只扣本地，
+// 实机实测扔两发后背包数字减少，但库里 qty 一动不动：客户端只扣本地，
 // 服务端不接就会在下次全量快照里把这两份补回来（幽灵窝料）。
 // 请求形态实测：args(物件实例 GUID, obj19)，f0=f1=投距（6.108 / 7.567 米），f3=钓点串。
 func TestGroundbaitHandThrowConsumesAndDeposits(t *testing.T) {
