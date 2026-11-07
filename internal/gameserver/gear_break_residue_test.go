@@ -286,3 +286,24 @@ func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
 		t.Fatalf("断饵后不应残留补饵请求，实得 %d 条", got)
 	}
 }
+
+func TestLineBreakClearsBaitSettings(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	ctx, uid, rod, line, hook := mountWeakLineRig(t, srv)
+	_, mountedBait := baitTestMount(t, srv, rod, "worm_01", 3, 350)
+	seedBaitHookResidue(t, srv, rod, mountedBait, hook)
+
+	outcome, err := srv.breakLineOrRod(ctx, uid, rod, line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !outcome.LineBroken || outcome.BreakPart != "line" {
+		t.Fatalf("应断主线: %+v", outcome)
+	}
+	if got := rodSettingCount(t, srv, rod, "bait_hook:%"); got != 0 {
+		t.Fatalf("断线后饵钩映射残留 %d 条", got)
+	}
+	if got := rodSettingCount(t, srv, rod, "rebait:%"); got != 0 {
+		t.Fatalf("断线后补饵请求残留 %d 条", got)
+	}
+}

@@ -260,7 +260,8 @@ func (s *Server) itemBrokenForMount(ctx context.Context, row *store.Item) bool {
 }
 
 // breakLineOrRod 处理 17/9：客户端明确上报断件，服务端在确认归属后按上报件
-// 处置。只有上报件缺失、出厂内嵌件或未知类型时才回退到最弱环裁决。
+// 处置。只有上报件缺失、空/zero GUID 或出厂内嵌件时才回退到最弱环裁决；
+// 已存在但不受支持的装配品类视为无效上报，避免任意物品触发断件。
 func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reportedGUID string) (*gearBreakOutcome, error) {
 	rodGUID = strings.TrimSpace(rodGUID)
 	reportedGUID = strings.TrimSpace(reportedGUID)
@@ -291,7 +292,7 @@ func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reporte
 			return s.breakLineTx(ctx, uid, rodGUID, reportedGUID, report.category)
 		}
 	}
-	// 出厂内嵌件/未知类型：回退到最弱环裁决。
+	// 空/zero 或出厂内嵌件：回退到最弱环裁决。
 	dec, err := s.resolveGearBreak(ctx, uid, rodGUID, reportedGUID)
 	if err != nil {
 		return nil, err
@@ -359,7 +360,8 @@ func (s *Server) validateBreakReport(ctx context.Context, uid int64, rodGUID, re
 	}
 	terminal := terminalBreakCategories[def.Category]
 	// 钩不再是无条件采信的终端件，但仍是客户端会主动上报的合法断件：
-	// 必须放行到 resolveGearBreak 做最弱环裁决，不能直接回"断件类型不支持"。
+	// 只允许终端件和承力链上可判定的品类。已确认挂在该竿上的其他品类
+	// 不能冒充断件，否则任意背包/装饰物品都可能触发真实损坏。
 	if !terminal && !sourceLineCategories[def.Category] &&
 		def.Category != catHook && def.Category != gearCatReel {
 		return validatedBreakReport{}, errors.New("断件类型不支持")
@@ -1368,6 +1370,11 @@ func (s *Server) lineLossTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		if err := store.AddItemDamageLog(ctx, tx, entry); err != nil {
 			return nil, err
 		}
+	}
+	// 线路类断裂会移除所有末端钩/饵/拟饵；对应的自动补饵和饵钩映射
+	// 必须与组件删除同事务清掉，不能留到修好或下一次抛竿才碰巧清理。
+	if err := clearRodBaitSettingsTx(ctx, tx, rodGUID); err != nil {
+		return nil, err
 	}
 
 	if lineRow != nil && afterLength <= 0 {
