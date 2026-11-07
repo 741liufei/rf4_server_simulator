@@ -91,6 +91,14 @@ func TestGroundbaitRuntimeAffinityMatchesOfflineProbe(t *testing.T) {
 			t.Fatalf("%s 的成分算不出食性向量（用料 %v）", itemID, item.Materials)
 		}
 		byFish := table[itemID]
+		if len(prof.Diet) == 0 {
+			// PVA 棒默认只有水溶网，没有固定饵料；吸引由制作实例里的实际填充
+			// 决定，所以它不该在固定亲和表里占任何鱼种。
+			if len(byFish) != 0 {
+				t.Errorf("%s 是纯载体，固定亲和表不该有 %d 行", itemID, len(byFish))
+			}
+			continue
+		}
 		if len(byFish) == 0 {
 			t.Fatalf("亲和表里缺少 %s", itemID)
 		}
@@ -188,6 +196,104 @@ func TestGroundbaitHomeMadeRecipesDivergeBySpecies(t *testing.T) {
 			t.Errorf("%s：动物配 %.3f / 植物配 %.3f，应当更吃%s那一团（差距至少 %.2f）",
 				want.fish.name, appA, appP, want.better, want.minDelta)
 		}
+	}
+}
+
+// PVA 水溶网是载体，不是植物饵：纯网不成窝，棒里填什么才决定吸引哪种鱼。
+func TestGroundbaitPvaCarrierUsesFilling(t *testing.T) {
+	defs := groundbaitDefsLoad()
+	pure, ok := defs.profileOf([]string{"hvz_pva_material"})
+	if !ok || len(pure.Diet) != 0 {
+		t.Fatalf("纯 PVA 载体应是已知空饵，实得 ok=%v diet=%v", ok, pure.Diet)
+	}
+
+	plantFill := []string{"feed_dry", "hvz_pva_material"}
+	animalFill := []string{"mix_semolina", "feedadds_bloodworms", "feedadds_casters", "hvz_pva_material"}
+	plantProf, ok := defs.profileOf(plantFill)
+	if !ok {
+		t.Fatal("PVA 植物填充配算不出档案")
+	}
+	animalProf, ok := defs.profileOf(animalFill)
+	if !ok {
+		t.Fatal("PVA 动物填充配算不出档案")
+	}
+	dryProf, ok := defs.profileOf([]string{"feed_dry"})
+	if !ok {
+		t.Fatal("干混合档案算不出来")
+	}
+	for fam, want := range dryProf.Diet {
+		if math.Abs(plantProf.Diet[fam]-want) > 1e-9 {
+			t.Fatalf("PVA 网不该稀释填充料：%s 实得 %.4f，期望 %.4f", fam, plantProf.Diet[fam], want)
+		}
+	}
+	if animalProf.Diet["worm"] <= plantProf.Diet["worm"] {
+		t.Fatalf("动物填充配的蠕虫占比应更高：动物 %.3f vs 植物 %.3f",
+			animalProf.Diet["worm"], plantProf.Diet["worm"])
+	}
+	if animalProf.Diet["plant"] >= plantProf.Diet["plant"] {
+		t.Fatalf("动物填充配的植物占比应更低：动物 %.3f vs 植物 %.3f",
+			animalProf.Diet["plant"], plantProf.Diet["plant"])
+	}
+
+	// 同一套食性公式：雅罗鱼更吃动物填充，银鲫更吃植物填充。
+	ecology := groundbaitProbeEcology(t)
+	for _, probe := range []struct {
+		fishKey string
+		first   groundbaitProfile
+		second  groundbaitProfile
+	}{
+		{"dace", animalProf, plantProf},
+		{"crucian", plantProf, animalProf},
+	} {
+		fish, hasRule, accepted := groundbaitProbeFish(ecology, probe.fishKey)
+		if len(fish) == 0 || !hasRule {
+			t.Fatalf("%s 缺少生态或攻略资料", probe.fishKey)
+		}
+		a, _ := groundbaitAppetite(probe.first.Diet, fish, accepted, 0.08)
+		b, _ := groundbaitAppetite(probe.second.Diet, fish, accepted, 0.08)
+		if a <= b {
+			t.Errorf("%s 应更吃对应的 PVA 填充配：%.3f vs %.3f", probe.fishKey, a, b)
+		}
+	}
+
+	// 入水链路也要遵守同一口径：纯 PVA 不改权重，填了干混合才开始吸引鱼。
+	s, _ := newRigTestServer(t)
+	setWeatherTestTunable(t, s, "groundbait_enabled", "1")
+	pvaRoll := func(uid int64) float64 {
+		t.Helper()
+		c := fishRollContext{
+			uid: uid, loc: "gb-test-loc", x: 100, z: 100, hasPos: true, spot: 7,
+			now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), rigType: 1, depthCM: 100,
+			cache:   newFishingRollCache(),
+			weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 18, wind: 3},
+		}
+		wts := []float64{100}
+		s.applyGroundbaitWeight(t.Context(), &c, []string{"crucian"}, wts)
+		return wts[0] / 100
+	}
+
+	const uidEmpty = int64(1000004)
+	s.groundbaitDeposit(t.Context(), uidEmpty, "gb-test-loc", 100, 100, true, 7,
+		"pva_stick_m", 6, "pva", "gb:pva-empty", "")
+	if got := pvaRoll(uidEmpty); got != 1 {
+		t.Fatalf("纯 PVA 网不该吸引鱼，实得 x%.3f", got)
+	}
+
+	const uidFilled = int64(1000005)
+	tx, err := s.DB.SQL.BeginTx(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := groundbaitRecordInstanceMaterialsTx(t.Context(), tx, "gb-pva-fill", plantFill); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	s.groundbaitDeposit(t.Context(), uidFilled, "gb-test-loc", 100, 100, true, 7,
+		"pva_stick_m", 6, "pva", "gb:pva-fill", "gb-pva-fill")
+	if got := pvaRoll(uidFilled); got <= 1 {
+		t.Fatalf("填了干混合的 PVA 棒应吸引银鲫，实得 x%.3f", got)
 	}
 }
 
