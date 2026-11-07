@@ -85,26 +85,80 @@ func hItemMove(ctx *Ctx) ([]byte, bool) {
 	if !srv.requireDB(ctx) {
 		return nil, false
 	}
-	guids := deepGUIDs(ctx.Tree)
 	ints := treeIntsDeep(ctx.Tree)
-	var moved []*store.Item
-	if len(guids) > 0 {
-		dst := "backpack"
-		if len(ints) > 1 {
-			dst = containerName(ints[1])
-		}
-		for _, g := range guids {
-			if row, err := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), g); err == nil && row.UID == ctx.Sess.Userid {
-				row.Container = dst
-				if _, err := srv.DB.SQL.ExecContext(ctx.Sess.pushCtx(),
-					`UPDATE item SET container=? WHERE guid=?`, dst, g); err == nil {
-					moved = append(moved, row)
-				}
-			}
+	dstKind := uint64(containerBackpack)
+	if len(ints) > 1 {
+		dstKind = ints[1]
+	}
+	dst := containerName(dstKind)
+	cctx := ctx.Sess.pushCtx()
+	houseCap := int64(houseContainerCapacity)
+	if dst == "house" {
+		houseCap, _ = srv.importedContainerCapacity(cctx, ctx.Sess.Userid, dstKind, houseCap, 0)
+	}
+	tx, err := beginEconomyTx(cctx, srv.DB)
+	if err != nil {
+		ctx.Log.Warn("4/6 开启移动事务失败", "err", err)
+		ctx.ReplyFailure("System.IO.IOException", "物品未能移动，请重试")
+		return nil, true
+	}
+	defer tx.Rollback()
+
+	seen := map[string]bool{}
+	pending := make([]*store.Item, 0)
+	var houseUsed, houseAdded int64
+	if dst == "house" {
+		if err := tx.QueryRowContext(cctx,
+			`SELECT COUNT(*) FROM item WHERE uid=? AND container='house'`, ctx.Sess.Userid).Scan(&houseUsed); err != nil {
+			ctx.Log.Warn("4/6 读取房屋容量失败", "err", err)
+			ctx.ReplyFailure("System.IO.IOException", "房屋仓库容量读取失败，请重试")
+			return nil, true
 		}
 	}
-	for _, row := range moved {
-		if tree, terr := srv.ItemToTree(ctx.Sess.pushCtx(), row); terr == nil {
+	for _, g := range deepGUIDs(ctx.Tree) {
+		if g == "" || seen[g] {
+			continue
+		}
+		seen[g] = true
+		row, err := srv.DB.GetItemByGUIDTx(cctx, tx, g)
+		if errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			ctx.Log.Warn("4/6 读取待移动物品失败", "guid", shortGUID(g), "err", err)
+			ctx.ReplyFailure("System.IO.IOException", "物品未能移动，请重试")
+			return nil, true
+		}
+		if row == nil || row.UID != ctx.Sess.Userid {
+			continue
+		}
+		if dst == "house" && row.Container != "house" {
+			houseAdded++
+		}
+		row.Container = dst
+		pending = append(pending, row)
+	}
+	if dst == "house" && houseUsed+houseAdded > houseCap {
+		ctx.Log.Info("4/6 房屋仓库已满", "used", houseUsed, "add", houseAdded, "cap", houseCap)
+		ctx.ReplyFailure("System.IO.IOException", "房屋仓库已满，无法继续存放")
+		return nil, true
+	}
+	for _, row := range pending {
+		if _, err := tx.ExecContext(cctx,
+			`UPDATE item SET container=? WHERE guid=? AND uid=?`, dst, row.GUID, ctx.Sess.Userid); err != nil {
+			ctx.Log.Warn("4/6 更新物品容器失败", "guid", shortGUID(row.GUID), "err", err)
+			ctx.ReplyFailure("System.IO.IOException", "物品未能移动，请重试")
+			return nil, true
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		ctx.Log.Warn("4/6 提交移动事务失败", "err", err)
+		ctx.ReplyFailure("System.IO.IOException", "物品未能移动，请重试")
+		return nil, true
+	}
+
+	for _, row := range pending {
+		if tree, terr := srv.ItemToTree(cctx, row); terr == nil {
 			ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{row.GUID})))
 			ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
 		}
