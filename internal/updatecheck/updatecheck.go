@@ -194,14 +194,18 @@ func (c *Checker) Check(ctx context.Context, currentVersion, currentBuildTs stri
 	} else {
 		rel = manifest.Stable
 	}
-	if rel != nil && parseBuildTs(rel.BuildTs) > local {
-		res.Available = true
+	if rel != nil {
+		// 即使当前已是最新，也把目标通道的最新版本与链接带回界面；
+		// Available 只表示“是否比本地更新”，不能再用它决定能否展示。
 		res.LatestVersion = rel.Version
 		res.NotesURL = rel.NotesURL
 		res.DownloadURL = rel.DownloadURL
 		res.DownloadMirrorURL = rel.DownloadMirrorURL
-		if channel == ChannelStable && parseBuildTs(rel.MinBuildTs) > local {
-			res.Forced = true
+		if parseBuildTs(rel.BuildTs) > local {
+			res.Available = true
+			if channel == ChannelStable && parseBuildTs(rel.MinBuildTs) > local {
+				res.Forced = true
+			}
 		}
 	}
 	if manifest.Preview != nil {
