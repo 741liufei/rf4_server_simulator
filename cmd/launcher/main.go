@@ -32,6 +32,7 @@ import (
 	"rf4server/internal/seed"
 	"rf4server/internal/store"
 	"rf4server/internal/supervisor"
+	"rf4server/internal/updatecheck"
 )
 
 //go:embed panel.html
@@ -56,6 +57,9 @@ type app struct {
 
 	gameMu    sync.RWMutex
 	startGame func(*exec.Cmd) error
+
+	// 版本更新检测（周期后台任务，结论供 /api/status 与管理后台横幅）
+	updates *updatecheck.Checker
 
 	// 托盘状态：systray 在 Run 之前内部句柄为 nil，提前调用 SetIcon/
 	// SetTooltip 会 panic。这里先记录期望状态，托盘就绪后再应用。
@@ -111,6 +115,7 @@ func main() {
 	app := &app{
 		cfg: cfg, cfgPath: *configPath, log: panelLogger{}, ctx: appCtx, cancel: appCancel,
 		trayColor: 3, trayTip: "fish-localserver 本地服务器", // 3=灰（初始化中）
+		updates: updatecheck.New(updatecheck.DefaultSources, updateStateFile),
 	}
 	defer app.closeAdmin()
 
@@ -135,6 +140,7 @@ func main() {
 	mux.HandleFunc("/api/game/config", app.handleGameConfig)
 	mux.HandleFunc("/api/game/launch", app.handleGameLaunch)
 	mux.HandleFunc("/api/hosts", app.handleHosts)
+	mux.HandleFunc("POST /api/update/dismiss", app.handleUpdateDismiss)
 	mux.HandleFunc("/api/open-admin", func(w http.ResponseWriter, r *http.Request) {
 		openBrowser(app.panelURL + "#admin")
 		_ = r
@@ -147,6 +153,7 @@ func main() {
 	}
 	app.panelURL = "http://" + normalizeLocal(ln.Addr().String())
 	go func() { _ = http.Serve(ln, mux) }()
+	go app.runUpdateChecks()
 	// 启动即用默认浏览器打开统一控制中心
 	openBrowser(app.panelURL)
 
@@ -342,6 +349,10 @@ func (a *app) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	adminErr := a.adminErr
 	a.adminMu.RUnlock()
 	gamePath, gameRegion := a.gameState()
+	var update *updatecheck.Result
+	if a.updates != nil {
+		update = a.updates.Result()
+	}
 	writeJSON(w, map[string]any{
 		"procs":       procs,
 		"last_error":  lastErr,
@@ -351,6 +362,7 @@ func (a *app) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		"game_path":   gamePath,
 		"game_region": gameRegion,
 		"hosts":       hostsMode(hostsFilePath()),
+		"update":      update,
 	})
 }
 
@@ -464,6 +476,12 @@ func (a *app) initAdmin(ctx context.Context) error {
 		return err
 	}
 	srv := admin.NewServer(a.cfg.Admin, db, adminLogger{a.log}, admin.WebFS())
+	// 更新检测可能先于管理后台就绪已有结论，补推一次。
+	var update *updatecheck.Result
+	if a.updates != nil {
+		update = a.updates.Result()
+	}
+	srv.SetUpdateInfo(adminUpdateInfo(update))
 	a.adminMu.Lock()
 	a.adminDB = db
 	a.adminSrv = srv

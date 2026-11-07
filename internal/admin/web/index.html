@@ -95,6 +95,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
 .tunable-group+.tunable-group{margin-top:18px}.tunable-group h3{font-size:14px;margin:0 0 2px}.tunable-fields{display:grid;grid-template-columns:1fr 1fr;gap:0 34px}.tunable-field{display:flex;gap:14px;align-items:center;justify-content:space-between;min-width:0;padding:9px 0;border-bottom:1px solid var(--line)}.tunable-field>div:first-child{flex:1;min-width:0}.tunable-field label{display:block;color:var(--text);margin:0;font-weight:600;overflow-wrap:anywhere}.tunable-field .tunable-hint{margin-top:2px}.tunable-field>div:last-child{display:flex;gap:8px;align-items:center;flex:none}.tunable-field input{width:112px;min-width:0;flex:none;padding:7px 9px}.tunable-field button{flex:none}.section-head{flex-wrap:wrap}
 #storeSummary{max-width:100%;overflow-wrap:anywhere}
 #playerHappyHour{overflow-wrap:anywhere}
+.update-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0 0 18px;padding:12px 16px;border:1px solid var(--accent);border-radius:12px;background:#0e2438;color:#bfe3ff;font-size:13px}.update-banner[hidden]{display:none}.update-banner.muted{border-color:var(--line);background:#101c2b;color:var(--muted)}.update-banner.warn{border-color:var(--warn);background:#3a2b14;color:#ffd9a0}.update-banner .update-actions{display:flex;gap:8px;margin-left:auto;align-items:center}.update-banner a{text-decoration:none;display:inline-block}
 </style>
 </head>
 <body>
@@ -127,6 +128,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
   </aside>
   <main class="main">
     <header class="topbar"><div><h1 id="pageTitle">总览</h1><p id="pageSub">服务器运行状态与快捷操作</p></div><div class="top-actions"><button class="btn alt" onclick="refreshCurrent()">刷新</button></div></header>
+    <div class="update-banner" id="updateBanner" hidden><span id="updateText"></span><span class="update-actions"><a class="btn sm" id="updateMirror" target="_blank" rel="noreferrer" hidden>加速下载</a><a class="btn alt sm" id="updateDownload" target="_blank" rel="noreferrer" hidden>官方下载</a><a class="btn alt sm" id="updatePreview" target="_blank" rel="noreferrer" hidden>最新预览版</a><a class="btn alt sm" id="updateNotes" target="_blank" rel="noreferrer" hidden>更新说明</a><button class="btn alt sm" id="updateDismissBtn" onclick="dismissUpdate()">本版本不再提醒</button></span></div>
     <section class="view on" id="view-dashboard">
       <div class="grid stats" id="stats"></div>
       <div class="card" style="margin-top:16px"><div class="section-head"><h2>常用操作</h2><small>点卡片直达对应功能</small></div><div class="qa-grid" id="qaGrid"></div></div>
@@ -171,6 +173,33 @@ function showModal(title,sub,body){
 }
 function closeModal(){$('#modalBg').classList.remove('on');$('#modal').innerHTML=''}
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closeModal()});
+// ---- 版本更新提示（数据由 launcher 检测后随 /api/me、/api/dashboard 下发）----
+let UPDATE=null;
+function renderUpdate(u){
+  const el=$('#updateBanner');
+  if(!u||!u.available){el.hidden=true;return}
+  UPDATE=u;el.hidden=false;
+  el.classList.toggle('muted',u.channel==='preview'&&!u.forced);
+  el.classList.toggle('warn',!!u.forced);
+  $('#updateText').textContent=u.forced
+    ?`当前版本过旧（${u.current_version}），建议尽快升级到 ${u.latest_version}`
+    :`发现新版本 ${u.latest_version}（当前 ${u.current_version}）`;
+  const safe=u=>typeof u==='string'&&(u.startsWith('https://github.com/')||u.startsWith('https://gh-proxy.com/https://github.com/'))?u:'';
+  const setLink=(id,url,label)=>{const a=$(id);if(!a)return;if(safe(url)){a.href=url;if(label)a.textContent=label;a.hidden=false}else{a.removeAttribute('href');a.hidden=true}};
+  setLink('#updateMirror',u.download_mirror_url,'加速下载');
+  setLink('#updateDownload',u.download_url,'官方下载');
+  // preview 用户自身就在 preview 通道，不重复给"最新预览版"入口。
+  setLink('#updatePreview',u.channel==='preview'?'':u.preview_download_mirror,u.preview_version?`最新预览版 ${u.preview_version}`:'最新预览版');
+  setLink('#updateNotes',u.notes_url);
+  $('#updateDismissBtn').hidden=!!u.forced;
+}
+async function dismissUpdate(){
+  try{
+    const r=await fetch('/api/update/dismiss',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({version:UPDATE.latest_version})});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    $('#updateBanner').hidden=true;
+  }catch(e){toast('操作失败：'+e.message,'bad')}
+}
 async function doLogin(e){
   e.preventDefault();
   try{
@@ -182,6 +211,7 @@ function logout(){clearInterval(DASHBOARD_TIMER);DASHBOARD_TIMER=null;TOKEN='';l
 async function boot(){
   try{
     const me=await api('/api/me');$('#who').textContent=me.username;$('#login').style.display='none';$('#app').style.display='grid';
+    renderUpdate(me.update);
     const initial=location.hash.slice(1);go(titles[initial]?initial:'dashboard',true);if(!DASHBOARD_TIMER)DASHBOARD_TIMER=setInterval(()=>{if(VIEW==='dashboard'&&TOKEN)loadDashboard(false).catch(()=>{})},8000);
   }catch(e){logout()}
 }
@@ -218,6 +248,7 @@ const QA_ICONS={
 };
 async function loadDashboard(refreshForm=true){
   const d=await api('/api/dashboard');
+  renderUpdate(d.update);
   const stats=[['在线会话',d.sessions,'主服实时'],['玩家档案',d.players,'已创建'],['物品实例',d.items,'背包+装备'],['邮件',d.mails,'全部记录']];
   $('#stats').innerHTML=stats.map(([k,v,s])=>`<div class="card stat"><div class="k">${k}</div><div class="v">${fmt(v)}</div><div class="s">${s}</div></div>`).join('');
   $('#qaGrid').innerHTML=QUICK_ACTIONS.map(([icon,title,desc,view])=>`<button class="qa" onclick="go('${view}')"><span class="ico"><svg viewBox="0 0 24 24">${QA_ICONS[icon]}</svg></span><span class="txt"><b>${title}</b><small>${desc}</small></span></button>`).join('');

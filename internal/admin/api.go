@@ -37,6 +37,9 @@ type Server struct {
 
 	// 会话计数（由 gameserver 统计写入共享 KV；这里只读展示）
 	sessionCount atomic.Int64
+
+	// 版本更新检测结果（由 launcher 注入；nil = 尚未检测）
+	updateInfo atomic.Pointer[UpdateInfo]
 }
 
 type plog struct{ l logger }
@@ -100,6 +103,29 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 // SetSessionCount 供外部更新在线会话数。
 func (s *Server) SetSessionCount(n int64) { s.sessionCount.Store(n) }
+
+// UpdateInfo 是版本更新检测结果在管理后台 API 中的投影；
+// 由 launcher 检测后注入，admin 自身不做网络请求。
+type UpdateInfo struct {
+	Available      bool   `json:"available"`
+	Channel        string `json:"channel"` // stable | preview
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	NotesURL       string `json:"notes_url,omitempty"`
+	DownloadURL    string `json:"download_url,omitempty"`
+	// DownloadMirrorURL 国内加速直链（gh-proxy 包裹的 release 附件）。
+	DownloadMirrorURL string `json:"download_mirror_url,omitempty"`
+	// PreviewVersion / PreviewDownloadMirror 最新 preview 通道摘要。
+	PreviewVersion        string `json:"preview_version,omitempty"`
+	PreviewDownloadMirror string `json:"preview_download_mirror,omitempty"`
+	Forced                bool   `json:"forced,omitempty"`
+}
+
+// SetUpdateInfo 供 launcher 推送最近一次更新检测结果（nil 清空）。
+func (s *Server) SetUpdateInfo(u *UpdateInfo) { s.updateInfo.Store(u) }
+
+// updatePayload 返回应并入响应的 update 字段（nil 时调用方应省略该键）。
+func (s *Server) updatePayload() *UpdateInfo { return s.updateInfo.Load() }
 
 // Start 启动监听（返回错误 channel 与绑定错误）。
 func (s *Server) Start() (<-chan error, error) {
@@ -192,7 +218,11 @@ func adminOf(r *http.Request) string {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"username": adminOf(r)})
+	payload := map[string]any{"username": adminOf(r)}
+	if u := s.updatePayload(); u != nil {
+		payload["update"] = u
+	}
+	writeJSON(w, payload)
 }
 
 // ---- 仪表盘 ----
@@ -206,7 +236,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail`).Scan(&mails)
 	_ = s.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log`).Scan(&audits)
 	tunables, _ := s.db.TunableList(ctx)
-	writeJSON(w, map[string]any{
+	payload := map[string]any{
 		"sessions": s.sessionCount.Load(),
 		"players":  players,
 		"items":    items,
@@ -214,7 +244,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"audits":   audits,
 		"tunables": len(tunables),
 		"pg":       "up",
-	})
+	}
+	if u := s.updatePayload(); u != nil {
+		payload["update"] = u
+	}
+	writeJSON(w, payload)
 }
 
 // ---- 运行参数 ----

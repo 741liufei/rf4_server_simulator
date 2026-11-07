@@ -49,6 +49,19 @@ jobs:
           files: ${{ steps.package.outputs.asset_path }}
           prerelease: true
 
+      # 回写 version.json（preview 通道）供客户端更新检测；[skip ci] 防回环。
+      - name: Write back version.json (preview)
+        run: bash .github/scripts/update-version-json.sh preview "${{ steps.package.outputs.version }}" "${{ steps.package.outputs.build_ts }}" "${{ steps.package.outputs.asset_name }}"
+
+      # jsDelivr 对 @main 引用有最长约 12h 缓存；best-effort 清缓存，失败不阻塞。
+      - name: Purge jsDelivr cache
+        continue-on-error: true
+        run: |
+          curl -sf -X POST https://purge.jsdelivr.net/ \
+            -H 'Content-Type: application/json' \
+            -d '{"path":["/gh/glance522/rf4_server_simulator@main/version.json"]}' \
+            || echo "purge 失败（缓存最多 12h 后自动过期）"
+
       - name: Keep latest preview release
         uses: actions/github-script@v7
         with:

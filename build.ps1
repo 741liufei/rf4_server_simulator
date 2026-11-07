@@ -3,7 +3,8 @@ param([switch]$OfflineTools)
 $ErrorActionPreference = "Stop"
 
 $version = Get-Date -Format "yyyyMMddHHmmss"
-$ldflags = "-s -w -X 'rf4server/internal/buildinfo.Version=$version'"
+$buildTs = (Get-Date).ToUniversalTime().ToString("yyyyMMddHHmmss")
+$ldflags = "-s -w -X 'rf4server/internal/buildinfo.Version=$version' -X 'rf4server/internal/buildinfo.BuildTs=$buildTs'"
 New-Item -ItemType Directory -Force -Path "bin" | Out-Null
 
 $commands = @("gateway", "gameserver", "seed")
