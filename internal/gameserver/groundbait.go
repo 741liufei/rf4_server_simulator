@@ -2,9 +2,10 @@ package gameserver
 
 // 窝料吸引系统 v1.1（specs/changes/groundbait-core/spec.md）。
 //
-// 一句话：往一个 5 米格里投窝料，这份料按「1 份 = 0.6 游戏小时」活着，
-// 期间按鱼种食性把对口鱼的候选权重抬起来（最多 x2.60），并且能稍微顶掉
-// 坏天气/低温的惩罚；投超过 15 份开始压开口率，22 份以上这个格子基本不开口。
+// 一句话：以窝料真实落点为圆心，这份料按「1 份 = 0.6 游戏小时」活着，
+// 4 米核心圈全额、10 米外失效；期间按鱼种食性把对口鱼的候选权重抬起来
+// （最多 x2.60），并且能稍微顶掉坏天气/低温的惩罚；投超过 15 份开始压开口率，
+// 22 份以上这个窝点基本不开口。
 // 掠食性鱼种一律 x1.00，不蹭窝。
 //
 // 食性亲和（契合度/专食性/掠食冻结）在运行时按实际用料现算：原料表 → 食性向量
@@ -20,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sort"
 	"sync"
 	"time"
 )
@@ -318,11 +320,15 @@ func (s *Server) groundbaitDeposit(ctx context.Context, uid int64, loc string, x
 		return
 	}
 	defer func() { _ = tx.Rollback() }()
+	var landingX, landingZ any
+	if hasPos {
+		landingX, landingZ = x, z
+	}
 	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO groundbait_deposit
-		(uid,loc,bx,bz,has_pos,channel,item_id,portions,units_left,hours0,deposit_hour,txn_guid,created_ts,materials_json)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		(uid,loc,bx,bz,has_pos,channel,item_id,portions,units_left,hours0,deposit_hour,txn_guid,created_ts,materials_json,landing_x,landing_z)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		uid, loc, bx, bz, hasPosInt, channel, itemID, portions, portions, hours, acc, txnGuid,
-		float64(time.Now().Unix()), matsJSON)
+		float64(time.Now().Unix()), matsJSON, landingX, landingZ)
 	if err != nil {
 		s.log.Warn("窝料投放写账本失败", "err", err, "item", itemID, "channel", channel)
 		return
@@ -337,6 +343,9 @@ func (s *Server) groundbaitDeposit(ctx context.Context, uid int64, loc string, x
 	if err := tx.Commit(); err != nil {
 		s.log.Warn("窝料投放提交失败", "err", err)
 		return
+	}
+	if hasPos {
+		s.huntAnchorGroundbait(ctx, uid, loc, spot, x, z)
 	}
 	s.log.Info("窝料投放", "uid", uid, "loc", loc, "cell", fmt.Sprintf("%d,%d", bx, bz),
 		"item", itemID, "channel", channel, "portions", portions, "hours", hours,
@@ -416,6 +425,15 @@ func newGroundbaitSpotState() groundbaitSpotState {
 
 // groundbaitSpot 汇总某格子当前还活着的投放批次，顺手删掉已过期的行。
 func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, bz int64) groundbaitSpotState {
+	x := (float64(bx) + 0.5) * groundbaitCellSizeM
+	z := (float64(bz) + 0.5) * groundbaitCellSizeM
+	return s.groundbaitSpotAt(ctx, uid, loc, x, z, true, 0)
+}
+
+// groundbaitSpotAt 汇总当前浮标落点附近的窝料。新记录按真实落点计算
+// 圆形距离衰减；旧记录没有坐标时回退到 5 米格中心。
+func (s *Server) groundbaitSpotAt(ctx context.Context, uid int64, loc string, x, z float64,
+	hasPos bool, spot uint64) groundbaitSpotState {
 	st := newGroundbaitSpotState()
 	if s.DB == nil || uid == 0 || loc == "" {
 		return st
@@ -425,15 +443,11 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 		return st
 	}
 	acc := s.groundbaitGameHours(ctx, uid)
-	// 同格投放全额生效；落点未知的投放（has_pos=0）按衰减系数计入，
-	// 免得「先打窝后抛竿」的窝在玩家抛竿后凭空消失。
 	fallDiffuse := s.groundbaitDiffuseFall()
-	radius := s.groundbaitNeighborCells()
-	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id,item_id,portions,units_left,hours0,deposit_hour,has_pos,bx,bz,materials_json
+	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id,item_id,portions,units_left,hours0,deposit_hour,has_pos,bx,bz,materials_json,landing_x,landing_z
 		FROM groundbait_deposit
-		WHERE uid=? AND loc=? AND (has_pos=0 OR (bx BETWEEN ? AND ? AND bz BETWEEN ? AND ?))
-		ORDER BY (bx=? AND bz=?) DESC, has_pos DESC, deposit_hour`,
-		uid, loc, bx-radius, bx+radius, bz-radius, bz+radius, bx, bz)
+		WHERE uid=? AND loc=?
+		ORDER BY deposit_hour`, uid, loc)
 	if err != nil {
 		s.log.Warn("窝料账本读取失败", "err", err)
 		return st
@@ -459,9 +473,10 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 			hasPosRow              int
 			rowBX, rowBZ           int64
 			matsJSON               string
+			landingX, landingZ     sql.NullFloat64
 		)
 		if serr := rows.Scan(&id, &itemID, &portions, &units, &hours, &depositAt, &hasPosRow, &rowBX, &rowBZ,
-			&matsJSON); serr != nil {
+			&matsJSON, &landingX, &landingZ); serr != nil {
 			continue
 		}
 		remain := hours - (acc - depositAt)
@@ -470,12 +485,19 @@ func (s *Server) groundbaitSpot(ctx context.Context, uid int64, loc string, bx, 
 			continue
 		}
 		ratio := groundbaitClamp(remain/hours, 0, 1)
-		// 三档权重：本格全额；落点只知个大概、落在相邻格，或压根没落点，
-		// 都按同一个衰减系数计入（宁可轻算，不能当它不存在）。
 		fall := 1.0
 		unknown := hasPosRow == 0
-		if unknown || rowBX != bx || rowBZ != bz {
+		if !hasPos {
 			fall = fallDiffuse
+		} else if unknown {
+			fall = fallDiffuse
+		} else {
+			cx := (float64(rowBX) + 0.5) * groundbaitCellSizeM
+			cz := (float64(rowBZ) + 0.5) * groundbaitCellSizeM
+			if landingX.Valid && landingZ.Valid {
+				cx, cz = landingX.Float64, landingZ.Float64
+			}
+			fall = s.groundbaitRangeWeight(math.Hypot(x-cx, z-cz))
 		}
 		alive = append(alive, live{id: id, itemID: itemID, materials: groundbaitDecodeMaterials(matsJSON),
 			units: units * ratio * fall, remain: remain * fall, ratio: ratio, fall: fall, unknown: unknown})
@@ -594,19 +616,31 @@ func (s *Server) groundbaitDiffuseFall() float64 {
 	return groundbaitClamp(s.tunableF("groundbait_diffuse_fall", 0.40), 0, 1)
 }
 
-// groundbaitNeighborCells 邻格容差（单位：格）。弹弓与手抛只报距离，落点最多算到
-// 几米精度；实测客户端本次抛饵散布 scatter=3.0 米（活钩 805 到达时 dist=10.000
-// scatter=3.000），窝团本来就摊在落点周围，一格 5 米很容易被切在边界上。
-// 缺省 1 格：相邻一格的窝按同一个衰减系数计入，隔两格以上才算无关。调 0 退回严格同格。
-func (s *Server) groundbaitNeighborCells() int64 {
-	n := int64(s.tunableF("groundbait_neighbor_cells", 1))
-	if n < 0 {
+// groundbaitRangeWeight 按离窝料真实落点的距离计算圆形窝效。
+// 0-4 米全额；4-7 米从 100% 降到 60%；7-10 米从 60% 降到 0。
+func (s *Server) groundbaitRangeWeight(distance float64) float64 {
+	core := s.tunableF("groundbait_range_core_m", 4.0)
+	mid := s.tunableF("groundbait_range_mid_m", 7.0)
+	outer := s.tunableF("groundbait_range_outer_m", 10.0)
+	if core < 0 {
+		core = 0
+	}
+	if mid < core {
+		mid = core
+	}
+	if outer < mid {
+		outer = mid
+	}
+	switch {
+	case distance <= core:
+		return 1
+	case distance <= mid && mid > core:
+		return 1 - 0.40*(distance-core)/(mid-core)
+	case distance <= outer && outer > mid:
+		return 0.60 * (outer - distance) / (outer - mid)
+	default:
 		return 0
 	}
-	if n > 4 {
-		return 4
-	}
-	return n
 }
 
 // groundbaitGates 算习性门：硬门（水层/昼夜/季节/底质/流速/稀有度）与
@@ -838,8 +872,7 @@ func (s *Server) applyGroundbaitWeight(ctx context.Context, c *fishRollContext, 
 	if !s.groundbaitEnabled() || c.uid == 0 || len(keys) == 0 {
 		return
 	}
-	bx, bz, _ := groundbaitCellFor(c.x, c.z, c.hasPos, c.spot)
-	st := s.groundbaitSpot(ctx, c.uid, c.loc, bx, bz)
+	st := s.groundbaitSpotAt(ctx, c.uid, c.loc, c.x, c.z, c.hasPos, c.spot)
 	if st.units <= 0 {
 		return
 	}
@@ -866,7 +899,7 @@ func (s *Server) groundbaitBiteGate(ctx context.Context, uid int64, loc string, 
 		return 1
 	}
 	bx, bz, _ := groundbaitCellFor(x, z, hasPos, spot)
-	st := s.groundbaitSpot(ctx, uid, loc, bx, bz)
+	st := s.groundbaitSpotAt(ctx, uid, loc, x, z, hasPos, spot)
 	if st.units <= 0 {
 		return 1
 	}
@@ -887,33 +920,53 @@ func (s *Server) groundbaitConsumeBite(ctx context.Context, uid int64, loc strin
 		return
 	}
 	acc := s.groundbaitGameHours(ctx, uid)
-	bx, bz, _ := groundbaitCellFor(x, z, hasPos, spot)
-	radius := s.groundbaitNeighborCells()
-	// 扣份顺序与生效权重一致：先扣本格，再扣邻格，最后才动落点未知那几行，
-	// 免得把便宜的全局窝先吃空、本格窝却还满着。
-	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id, units_left, hours0, deposit_hour
+	rows, err := s.DB.SQL.QueryContext(ctx, `SELECT id, units_left, hours0, deposit_hour, has_pos, bx, bz, landing_x, landing_z
 		FROM groundbait_deposit
-		WHERE uid=? AND loc=? AND (has_pos=0 OR (bx BETWEEN ? AND ? AND bz BETWEEN ? AND ?))
-		ORDER BY (bx=? AND bz=?) DESC, has_pos DESC, deposit_hour`,
-		uid, loc, bx-radius, bx+radius, bz-radius, bz+radius, bx, bz)
+		WHERE uid=? AND loc=?`, uid, loc)
 	if err != nil {
 		return
 	}
 	type batch struct {
-		id      int64
-		units   float64
-		hours   float64
-		deposit float64
+		id       int64
+		units    float64
+		hours    float64
+		deposit  float64
+		hasPos   int
+		bx, bz   int64
+		lx, lz   sql.NullFloat64
+		distance float64
 	}
 	var list []batch
 	for rows.Next() {
 		var b batch
-		if serr := rows.Scan(&b.id, &b.units, &b.hours, &b.deposit); serr != nil {
+		if serr := rows.Scan(&b.id, &b.units, &b.hours, &b.deposit, &b.hasPos,
+			&b.bx, &b.bz, &b.lx, &b.lz); serr != nil {
 			continue
+		}
+		b.distance = math.Inf(1)
+		if !hasPos && b.hasPos != 0 {
+			continue
+		}
+		if hasPos && b.hasPos != 0 {
+			cx := (float64(b.bx) + 0.5) * groundbaitCellSizeM
+			cz := (float64(b.bz) + 0.5) * groundbaitCellSizeM
+			if b.lx.Valid && b.lz.Valid {
+				cx, cz = b.lx.Float64, b.lz.Float64
+			}
+			b.distance = math.Hypot(x-cx, z-cz)
+			if s.groundbaitRangeWeight(b.distance) <= 0 {
+				continue
+			}
 		}
 		list = append(list, b)
 	}
 	_ = rows.Close()
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].hasPos != list[j].hasPos {
+			return list[i].hasPos > list[j].hasPos
+		}
+		return list[i].distance < list[j].distance
+	})
 	left := units
 	for _, b := range list {
 		if left <= 0 {

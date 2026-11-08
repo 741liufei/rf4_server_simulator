@@ -157,11 +157,14 @@ func rolledFishToStore(f *RolledFish) *store.FishingFish {
 		return nil
 	}
 	return &store.FishingFish{
-		GearGUID:   f.GearGUID,
-		HookGUID:   f.HookGUID,
-		BaitGUIDs:  f.BaitGUIDs,
-		BaitsKnown: f.BaitsKnown,
-		HappyHour:  f.HappyHour, HappyHourKnown: f.HappyHourKnown,
+		GearGUID:    f.GearGUID,
+		HookGUID:    f.HookGUID,
+		BaitGUIDs:   f.BaitGUIDs,
+		BaitsKnown:  f.BaitsKnown,
+		BiteQuality: f.BiteQuality, HookHoldP: f.HookHoldP, LuckProtected: f.LuckProtected,
+		HookConfirmed: f.HookConfirmed,
+		HuntStage:     f.HuntStage, HuntStageKnown: f.HuntStageKnown,
+		HappyHour: f.HappyHour, HappyHourKnown: f.HappyHourKnown,
 		FishGUID: f.FishGUID,
 		Species:  f.Species,
 		Grade:    f.Grade,
@@ -192,11 +195,14 @@ func rolledFishFromStore(f *store.FishingFish) *RolledFish {
 		return nil
 	}
 	return &RolledFish{
-		GearGUID:   f.GearGUID,
-		HookGUID:   f.HookGUID,
-		BaitGUIDs:  f.BaitGUIDs,
-		BaitsKnown: f.BaitsKnown,
-		HappyHour:  f.HappyHour, HappyHourKnown: f.HappyHourKnown,
+		GearGUID:    f.GearGUID,
+		HookGUID:    f.HookGUID,
+		BaitGUIDs:   f.BaitGUIDs,
+		BaitsKnown:  f.BaitsKnown,
+		BiteQuality: f.BiteQuality, HookHoldP: f.HookHoldP, LuckProtected: f.LuckProtected,
+		HookConfirmed: f.HookConfirmed,
+		HuntStage:     f.HuntStage, HuntStageKnown: f.HuntStageKnown,
+		HappyHour: f.HappyHour, HappyHourKnown: f.HappyHourKnown,
 		FishGUID: f.FishGUID,
 		Species:  f.Species,
 		Grade:    f.Grade,

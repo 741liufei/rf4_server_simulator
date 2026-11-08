@@ -217,7 +217,7 @@ func TestFishingLeftBumpsEscapes(t *testing.T) {
 	st := srv.stateFor(uid)
 	st.mu.Lock()
 	st.Pending = &RolledFish{FishGUID: "44444444444444444444444444444444", Species: "c.roach"}
-	st.CastActive = true
+	st.CastActive, st.Hooked = true, true
 	st.mu.Unlock()
 	obj := proto.Obj("lhicjpmglbo", 0, proto.Field{Op: "U32", Num: ptrU64(0)})
 	tree := proto.Args524(obj)

@@ -52,3 +52,21 @@ func TestMigrateKeepsUnrelatedBranchRowInPlace(t *testing.T) {
 	assertCount(t, db,
 		`SELECT COUNT(*) FROM schema_migrations WHERE name LIKE 'retired/%'`, 0)
 }
+
+func TestMigrateRenumbersFishHuntBranchMigration(t *testing.T) {
+	db := openCatchHistoryDBAtVersion(t, 45)
+	if _, err := db.SQL.Exec(`INSERT INTO schema_migrations VALUES(46,'migrations/00046_fish_hunt.sql',0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("旧鱼猎迁移号挡住了主线 00046: %v", err)
+	}
+
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=46 AND name='migrations/00046_player_condition_comfort_luck.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=49 AND name='migrations/00049_fish_hunt.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE name='migrations/00046_fish_hunt.sql'`, 0)
+}

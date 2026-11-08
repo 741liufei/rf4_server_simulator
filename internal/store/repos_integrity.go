@@ -26,7 +26,7 @@ var PlayerTables = []string{
 	"drink_bonus_clock", "drink_bonus_effect", "trip_state", "trip_grant",
 	// 窝料账本随玩家投放/咬口/衰减变化，必须进玩家存档与备份；
 	// groundbait_recipe 记的是每袋自制窝料实例的用料，丢了就等于把配方忘了。
-	"groundbait_deposit", "groundbait_clock", "groundbait_recipe",
+	"groundbait_deposit", "groundbait_clock", "groundbait_recipe", "fish_hunt_state",
 }
 
 // RuntimeTables 是运营/运行时/迁移元数据表，不属于静态资料或玩家存档。
