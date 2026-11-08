@@ -19,6 +19,7 @@ import (
 // 83 条定义补过长度=10、刚性=0.4+LB/150；11-03 整包替换 static.sqlite3 时补丁被覆盖。
 // 这里在每次测试时校验仓库自带静态库，避免描述/物理估算再次退化成 0。
 func TestLeadcoreDefinitionsCarryLengthAndRigidity(t *testing.T) {
+	t.Parallel()
 	db, err := sql.Open("sqlite", "file:../../server_data/static.sqlite3?mode=ro")
 	if err != nil {
 		t.Fatalf("打开静态库: %v", err)
@@ -66,6 +67,7 @@ func TestLeadcoreDefinitionsCarryLengthAndRigidity(t *testing.T) {
 // f0 为强度位），不是钓线类 ofjgdndfipm / 140。映射缺失时回退到钓线类，
 // 客户端在背包/选择框里只能画出空白卡片。
 func TestLeadcoreUsesWeightQuantityClass(t *testing.T) {
+	t.Parallel()
 	entry, ok := categoryWireClass[57]
 	if !ok {
 		t.Fatal("categoryWireClass 缺少 57（铅芯线）")
@@ -83,6 +85,7 @@ func TestLeadcoreUsesWeightQuantityClass(t *testing.T) {
 
 // TestReclassifyLeadcoreFromFallback 验证存量铅芯线会在启动修复时从钓线类改写成 167。
 func TestReclassifyLeadcoreFromFallback(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 

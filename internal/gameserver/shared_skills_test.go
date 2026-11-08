@@ -13,6 +13,7 @@ import (
 const sharedSkillUID = int64(1000001)
 
 func TestSharedSkillPartialWriteAndResetRollBackTogether(t *testing.T) {
+	t.Parallel()
 	srv := sharedSkillTestServer(t, 10)
 	ctx := t.Context()
 	if _, err := srv.DB.SQL.Exec(`CREATE TRIGGER fail_shared_insert BEFORE INSERT ON skill_node
@@ -69,6 +70,7 @@ func sharedSkillRank(t *testing.T, srv *Server, node int64) int64 {
 }
 
 func TestSharedSkillLearningChargesOnceAndKeepsEachUnlockThreshold(t *testing.T) {
+	t.Parallel()
 	for _, pair := range []struct {
 		cat, first, second int64
 	}{{1, 501, 503}, {2, 702, 708}} {
@@ -115,6 +117,7 @@ func TestSharedSkillLearningChargesOnceAndKeepsEachUnlockThreshold(t *testing.T)
 }
 
 func TestSharedSkillResetRefundsOneAllocationAndPreservesExtraPoints(t *testing.T) {
+	t.Parallel()
 	srv := sharedSkillTestServer(t, 10)
 	ctx := t.Context()
 	if err := srv.DB.SetSkillBonus(ctx, sharedSkillUID, 20); err != nil {
@@ -158,6 +161,7 @@ func TestSharedSkillResetRefundsOneAllocationAndPreservesExtraPoints(t *testing.
 }
 
 func TestSharedSkillConcurrentLearningHonorsBudgetAndMaximumRank(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		level, want int64
 	}{{2, 1}, {10, 7}} {
@@ -191,6 +195,7 @@ func TestSharedSkillConcurrentLearningHonorsBudgetAndMaximumRank(t *testing.T) {
 }
 
 func TestSharedSkillLegacyReadPreservesCurrentPointBalanceAndRawRecords(t *testing.T) {
+	t.Parallel()
 	srv := sharedSkillTestServer(t, 50)
 	ctx := t.Context()
 	if _, err := srv.DB.SQL.Exec(`INSERT INTO skill_node(uid,node_id,level) VALUES
@@ -302,6 +307,7 @@ func sharedSkillNodeForTest(t *testing.T, cat *proto.Value, node int64) *proto.V
 }
 
 func TestSharedSkillEffectsCountOneGroup(t *testing.T) {
+	t.Parallel()
 	srv := sharedSkillTestServer(t, 10)
 	ctx := t.Context()
 	const level = int64(2)

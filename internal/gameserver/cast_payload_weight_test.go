@@ -16,6 +16,7 @@ func testDef(attrs string) *store.ItemDef {
 // 浮漂只登记 jpaemlfkohn（按号数的克重），没有 dhlkahnodoo/
 // ijbjficbhog。旧实现把整支浮漂算成 0 g。
 func TestFloatWeightComesFromRatedGram(t *testing.T) {
+	t.Parallel()
 	float := testDef(fmt.Sprintf(`{"fopbhlmkcpe":1,"jpaemlfkohn":%d,"hkgndoipdlc":%d}`,
 		f32Attr(4.0), f32Attr(11.0)))
 	if got := itemDefCastWeightG(float); math.Abs(got-4.0) > 1e-6 {
@@ -29,6 +30,7 @@ func TestFloatWeightComesFromRatedGram(t *testing.T) {
 
 // 成品前导没有重量字段，只能按“线径 × 长度 × 材质密度”折算。
 func TestLeaderWeightFromGeometry(t *testing.T) {
+	t.Parallel()
 	// 200cm 尼龙前导，内嵌线径 0.35mm。
 	leader := &store.ItemDef{AttrsJSON: fmt.Sprintf(
 		`{"hkgndoipdlc":%d,"mbnambppbom":{"ciichedlnjh":%d,"ocmbfkebgpp":1}}`,
@@ -59,6 +61,7 @@ func TestLeaderWeightFromGeometry(t *testing.T) {
 
 // 拟饵的子配置数组里挂着三本钩，钩重必须与饵体重量相加。
 func TestLureWeightIncludesNestedHooks(t *testing.T) {
+	t.Parallel()
 	lure := &store.ItemDef{AttrsJSON: fmt.Sprintf(
 		`{"dhlkahnodoo":%d,"gpoaffnjbdo":[{"ijbjficbhog":%d},{"ijbjficbhog":%d},{"ijbjficbhog":%d}]}`,
 		f32Attr(20.0), f32Attr(1.6), f32Attr(1.6), f32Attr(1.6))}
@@ -72,6 +75,7 @@ func TestLureWeightIncludesNestedHooks(t *testing.T) {
 
 // 各类部件都要走到正确的重量字段，不能有整类归零。
 func TestRigComponentWeightsByCategory(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		category int64
@@ -92,6 +96,7 @@ func TestRigComponentWeightsByCategory(t *testing.T) {
 
 // 线重必须随线径变化；旧的 lgjeahdobch 在同一材质下是常数。
 func TestLineMassScalesWithDiameter(t *testing.T) {
+	t.Parallel()
 	thin := testDef(fmt.Sprintf(`{"fopbhlmkcpe":1,"ciichedlnjh":%d,"lgjeahdobch":%d}`,
 		f32Attr(0.20), f32Attr(0.02)))
 	thick := testDef(fmt.Sprintf(`{"fopbhlmkcpe":1,"ciichedlnjh":%d,"lgjeahdobch":%d}`,
@@ -114,6 +119,7 @@ func TestLineMassScalesWithDiameter(t *testing.T) {
 
 // 分项摘要要能在日志里定位到最重的几件东西。
 func TestFormatCastWeightParts(t *testing.T) {
+	t.Parallel()
 	parts := []castWeightPart{
 		{Label: "float:bob_1", Weight: 4},
 		{Label: "lure:pilker", Weight: 173.7},
@@ -134,6 +140,7 @@ func TestFormatCastWeightParts(t *testing.T) {
 // 结果主线、鱼钩、浮漂全部退化成 default 磨损率。
 // main 的磨损走 progress_ops.go 的 persistedSlotWearKey（前导按线磨损）。
 func TestRigWearKeyFollowsAssemblyCategory(t *testing.T) {
+	t.Parallel()
 	wearKey := func(slot int64) string {
 		if k, ok := persistedSlotWearKey[slot]; ok {
 			return k

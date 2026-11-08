@@ -8,6 +8,7 @@ import (
 )
 
 func TestCallIDContinuesAcrossSessionAndRestart(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	if a, b := srv.nextCallID("token-x"), srv.nextCallID("token-x"); a != 1 || b != 2 {
 		t.Fatalf("同 token 序号=%d,%d，期望1,2", a, b)

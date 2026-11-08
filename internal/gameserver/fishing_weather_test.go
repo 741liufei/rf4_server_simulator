@@ -14,6 +14,7 @@ func weatherActivitySample(kind int, temperature float64) fishingWeather {
 }
 
 func TestFishWeatherUsesStaticSpeciesNames(t *testing.T) {
+	t.Parallel()
 	db, err := store.OpenWithStatic(":memory:", filepath.Join("..", "..", "server_data", "static.sqlite3"))
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +60,7 @@ func TestFishWeatherUsesStaticSpeciesNames(t *testing.T) {
 }
 
 func TestFishWeatherTemperaturePreferencesAndUnknowns(t *testing.T) {
+	t.Parallel()
 	cold := weatherActivitySample(fishingWeatherUnknown, 7)
 	warm := weatherActivitySample(fishingWeatherUnknown, 24)
 	if fishWeatherActivity("c.carp", warm, 12, 0) <= fishWeatherActivity("c.carp", cold, 12, 0) {
@@ -91,6 +93,7 @@ func TestFishWeatherTemperaturePreferencesAndUnknowns(t *testing.T) {
 }
 
 func TestFishWeatherRainWindFogAndDepth(t *testing.T) {
+	t.Parallel()
 	activity := func(kind int) float64 {
 		return fishWeatherActivity("c.carp", weatherActivitySample(kind, 22), 12, 0)
 	}
@@ -122,6 +125,7 @@ func TestFishWeatherRainWindFogAndDepth(t *testing.T) {
 }
 
 func TestFishWeatherChangesAndSmoothTemperatureEdges(t *testing.T) {
+	t.Parallel()
 	stable := weatherActivitySample(fishingWeatherRain, 22)
 	for _, previous := range []float64{10, 34} {
 		changed := stable
@@ -140,6 +144,7 @@ func TestFishWeatherChangesAndSmoothTemperatureEdges(t *testing.T) {
 }
 
 func TestFishWeatherActivityBoundsAndInvalidValues(t *testing.T) {
+	t.Parallel()
 	for _, species := range []string{"c.carp", "riv_rb_trout", "perch", "unknown"} {
 		for kind := fishingWeatherUnknown; kind <= fishingWeatherThunderstorm; kind++ {
 			for _, temperature := range []float64{-60, 0, 15, 25, 60, math.NaN(), math.Inf(1)} {

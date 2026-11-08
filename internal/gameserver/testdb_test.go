@@ -135,6 +135,45 @@ func openRecipeTestDB(t *testing.T) *store.DB {
 	return openTestDBFromTemplate(t, testDBRecipes)
 }
 
+func staticTestDBPath() string {
+	return filepath.Join("..", "..", "server_data", "static.sqlite3")
+}
+
+// sampleForShort 在 -short 下截取稳定前缀，正常测试仍覆盖完整集合。
+func sampleForShort[T any](t *testing.T, values []T, n int) []T {
+	t.Helper()
+	if !testing.Short() || len(values) <= n {
+		return values
+	}
+	t.Logf("-short: 抽样 %d/%d", n, len(values))
+	return values[:n]
+}
+
+// openStaticDBAtPath 打开已有主库并只读挂载静态资料库。
+func openStaticDBAtPath(t *testing.T, path string) *store.DB {
+	t.Helper()
+	db, err := store.OpenWithStatic(path, staticTestDBPath())
+	if err != nil {
+		t.Fatalf("打开测试 SQLite（只读静态库）: %v", err)
+	}
+	if err := db.EnableStaticReadOnly(t.Context()); err != nil {
+		_ = db.Close()
+		t.Fatalf("启用测试静态库只读保护: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	return db
+}
+
+// openStaticTestDB 只复制小型迁移库，静态资料表通过只读 ATTACH 复用
+// server_data/static.sqlite3。适用于只读 item_def/recipe 等静态表、
+// 但会写入玩家表的用例，避免每次测试复制整份静态资料。
+func openStaticTestDB(t *testing.T) *store.DB {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	seedTestDBFile(t, path, testDBMigrated)
+	return openStaticDBAtPath(t, path)
+}
+
 func openTestDBFromTemplate(t *testing.T, kind testDBTemplateKind) *store.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "test.db")

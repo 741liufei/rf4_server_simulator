@@ -9,6 +9,7 @@ import (
 // 体长系数校准：同一重量下，狗鱼（细长）必须比鲤（短厚）显示得更长；
 // 已有官方标定曲线和未列入校准表的鱼种必须保持原值。
 func TestCalibratedLengthKP(t *testing.T) {
+	t.Parallel()
 	pikeK, pikeP := calibratedLengthKP("n.pike", defaultSpeciesLengthK, defaultSpeciesLengthP)
 	if math.Abs(pikeK-0.065519) > 1e-9 || math.Abs(pikeP-defaultSpeciesLengthP) > 1e-12 {
 		t.Fatalf("n.pike 未应用校准: k=%v p=%v", pikeK, pikeP)
@@ -54,6 +55,7 @@ func TestCalibratedLengthKP(t *testing.T) {
 }
 
 func TestCachedSpeciesLengthKPAppliesCalibration(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	if _, err := db.SQL.Exec(`INSERT OR REPLACE INTO species_weight(fish_key,min_g,max_g,trophy_g,src,length_k,length_p,xp_c,xp_q,trophy_line_g,super_trophy_line_g,avg_g,samples)
 		VALUES('carp',50,5000,2000,'test',0.0355,0.3333333333333333,0,0,0,0,0,0)`); err != nil {

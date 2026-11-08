@@ -29,6 +29,7 @@ func rigTestFieldFloat(t *testing.T, f proto.Field) float64 {
 }
 
 func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -131,6 +132,7 @@ func TestRigMultiSlotSameCategoryAndExactDetach(t *testing.T) {
 }
 
 func TestRigProjectionCanonicalExtraDropsGhosts(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -171,6 +173,7 @@ func TestRigProjectionCanonicalExtraDropsGhosts(t *testing.T) {
 }
 
 func TestExplicitRigTypeIsNotOverwrittenByCompatibilityInference(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -196,6 +199,7 @@ func TestExplicitRigTypeIsNotOverwrittenByCompatibilityInference(t *testing.T) {
 }
 
 func TestWearPersistsColumnFieldsAndVersion(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

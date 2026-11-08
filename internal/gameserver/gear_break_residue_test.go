@@ -48,6 +48,7 @@ func stackQtyForTest(t *testing.T, srv *Server, guid string) int64 {
 // TestHookBreakDetachesBaitAndRefundsStack 锁定 P1-2：钩断后挂在钩上的饵
 // 不能再留在钓组上，拆分出的子饵要并回来源堆，并清掉补饵记录。
 func TestHookBreakDetachesBaitAndRefundsStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -112,6 +113,7 @@ func TestHookBreakDetachesBaitAndRefundsStack(t *testing.T) {
 // 钓组整体销毁，挂载子饵随之丢失，不能再留下 rebait/bait_hook；来源堆
 // 装配时已减 1，保持在 2 并推送刷新对齐客户端。
 func TestRodBreakClearsBaitSettingsAndLosesStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -177,6 +179,7 @@ func TestRodBreakClearsBaitSettingsAndLosesStack(t *testing.T) {
 // 挂在竿上，钓组（主线/钩/饵）原样保留，鱼仍咬钩；rebait/bait_hook 不能清，
 // 否则修好轮子后这套仍在钩上的饵会被重复补饵。
 func TestReelBreakKeepsRigAndBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -246,6 +249,7 @@ func TestReelBreakKeepsRigAndBaitSettings(t *testing.T) {
 // TestBaitBreakClearsItsBaitSettings 锁定 P1-2 的另一半：饵自身断裂时，
 // bait_hook 与 rebait 不能继续把这枚饵补回同一钩。
 func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -295,6 +299,7 @@ func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
 }
 
 func TestLineBreakClearsBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	ctx, uid, rod, line, hook := mountWeakLineRig(t, srv)
 	_, mountedBait := baitTestMount(t, srv, rod, "worm_01", 3, 350)

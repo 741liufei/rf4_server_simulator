@@ -59,6 +59,7 @@ func itoa64(v int64) string {
 }
 
 func TestBaitMountSplitsSingleUnitByDefault(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "tele_10112_5", "backpack", 1)
 	if err != nil {
@@ -87,6 +88,7 @@ func TestBaitMountSplitsSingleUnitByDefault(t *testing.T) {
 }
 
 func TestBaitMountRodBSharesSourceStack(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rodA, err := s.CreateItem(t.Context(), 1000001, "tele_10112_5", "backpack", 1)
 	if err != nil {
@@ -121,6 +123,7 @@ func TestBaitMountRodBSharesSourceStack(t *testing.T) {
 }
 
 func TestBaitMountCountFollowsMountType(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -151,6 +154,7 @@ func TestBaitMountCountFollowsMountType(t *testing.T) {
 }
 
 func TestBaitMountFullTakeClearsSourceRef(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -176,6 +180,7 @@ func TestBaitMountFullTakeClearsSourceRef(t *testing.T) {
 }
 
 func TestBottomSimpleFullMaskPersistsMountSelection(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -198,6 +203,7 @@ func TestBottomSimpleFullMaskPersistsMountSelection(t *testing.T) {
 }
 
 func TestBaitMountBiteConsumesSingleUnitKeepsHookBaited(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "tele_10112_5", "backpack", 1)
 	if err != nil {
@@ -230,6 +236,7 @@ func TestBaitMountBiteConsumesSingleUnitKeepsHookBaited(t *testing.T) {
 }
 
 func TestBaitMountExhaustWritesRebaitAndAutoRemountsSameCount(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -282,6 +289,7 @@ func TestBaitMountExhaustWritesRebaitAndAutoRemountsSameCount(t *testing.T) {
 }
 
 func TestBaitMountUnmountRefundsRemainder(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -317,6 +325,7 @@ func TestBaitMountUnmountRefundsRemainder(t *testing.T) {
 }
 
 func TestBaitMountFullTakeUnmountReturnsWholeStack(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "tele_10112_5", "backpack", 1)
 	if err != nil {
@@ -336,6 +345,7 @@ func TestBaitMountFullTakeUnmountReturnsWholeStack(t *testing.T) {
 }
 
 func TestBaitMountKindOfScopesToBaitCategory(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
 	// fopbhlmkcpe 是共用子类型字段（竿型的字段值恰好也常落在 1..10），
@@ -358,6 +368,7 @@ func TestBaitMountKindOfScopesToBaitCategory(t *testing.T) {
 }
 
 func TestFoamMountX2UsesTwoLureComponents(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {
@@ -406,6 +417,7 @@ func TestFoamMountX2UsesTwoLureComponents(t *testing.T) {
 }
 
 func TestFoamSingleMountStillReplaces(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod, err := s.CreateItem(t.Context(), 1000001, "feeder_10126_FD390", "backpack", 1)
 	if err != nil {

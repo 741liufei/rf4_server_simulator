@@ -56,6 +56,7 @@ func counterValue(t *testing.T, db *store.DB, uid int64, key string) int64 {
 // 用例 1：已结算待处理窗口内，14/12 的 f0=2/7/3 不得清鱼、不得计 escapes；
 // 随后 14/5 仍能正常入护。
 func TestSettledCatchSurvivesLeftReports(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -97,6 +98,7 @@ func TestSettledCatchSurvivesLeftReports(t *testing.T) {
 // 用例 2：已结算待处理窗口内，17/9 不动装备、不清鱼，回零断件 11028
 // 且形状过契约校验；随后 14/5 仍能正常入护。
 func TestSettledCatchSurvivesRodBreakReport(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -144,6 +146,7 @@ func TestSettledCatchSurvivesRodBreakReport(t *testing.T) {
 // 用例 3+4：搏鱼中（CastActive=true）语义不变——GUID 匹配的 f0=2 仍按
 // 真脱钩清鱼并计 escapes；GUID 不一致的陈旧帧不得清当前鱼。
 func TestMidFightLeftSemanticsUnchanged(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -191,6 +194,7 @@ func TestMidFightLeftSemanticsUnchanged(t *testing.T) {
 // 用例 3（17/9 侧）：搏鱼中 17/9 不被守门拦截，仍进入断件处理路径
 // （此处钓组为空，breakLineOrRod 以失败回包证明走到了裁决）。
 func TestMidFightRodBreakNotGuarded(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -229,6 +233,7 @@ func TestMidFightRodBreakNotGuarded(t *testing.T) {
 
 // 用例 5：护网满导致窗口拉长时鱼同样保留；腾出容量后 14/5 成功。
 func TestSettledCatchSurvivesWhenKeepnetFull(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid

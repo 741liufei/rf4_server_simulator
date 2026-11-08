@@ -8,6 +8,7 @@ import (
 )
 
 func TestMissingEconomyContainers(t *testing.T) {
+	t.Parallel()
 	srv, _ := newDetachTestServer(t)
 	sess := newProbeSess(srv)
 

@@ -8,6 +8,7 @@ import (
 )
 
 func TestRestoredRecordUsesFishingRulerAndTrophyCards(t *testing.T) {
+	t.Parallel()
 	s, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid int64 = 1000001

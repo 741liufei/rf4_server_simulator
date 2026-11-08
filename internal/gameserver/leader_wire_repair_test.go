@@ -9,6 +9,7 @@ import (
 )
 
 func TestLeaderWireDefForLineMapping(t *testing.T) {
+	t.Parallel()
 	srv, db := newLeaderTestServer(t)
 	ctx := context.Background()
 
@@ -65,6 +66,7 @@ func TestLeaderWireDefForLineMapping(t *testing.T) {
 // 三条修复路径：有精确孪生按精确孪生；没有孪生按最接近的前导线；只有在隔离区
 // 里且根本没有内嵌线材的成品才继续留在隔离区。
 func TestRepairCraftedLeaderWireMapsNearestAndRestoresQuarantine(t *testing.T) {
+	t.Parallel()
 	srv, db := newLeaderTestServer(t)
 	ctx := context.Background()
 	const uid = int64(2000042)
