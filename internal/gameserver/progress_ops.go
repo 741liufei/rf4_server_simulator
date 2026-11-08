@@ -339,6 +339,8 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	gearGUID := st.GearGuid
 	bait := st.Bait
 	st.mu.Unlock()
+	// 收竿即终局：先把这一竿累计的渔轮磨损落库。
+	s.settleFightReelWearState(s.dbCtx(), st, uid, "14/4")
 
 	cctx := ctx.Sess.pushCtx()
 	var stats813 *proto.Value
