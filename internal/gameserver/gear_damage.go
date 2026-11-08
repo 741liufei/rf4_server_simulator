@@ -265,12 +265,15 @@ func (s *Server) itemBrokenForMount(ctx context.Context, row *store.Item) bool {
 func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reportedGUID string) (*gearBreakOutcome, error) {
 	rodGUID = strings.TrimSpace(rodGUID)
 	reportedGUID = strings.TrimSpace(reportedGUID)
-	// 断件即终局：先把本竿已累计的渔轮磨损落库，否则这条账会随状态重置丢掉。
-	s.settleFightReelWear(ctx, uid, rodGUID, "17/9")
+	// 先确认这条上报本身合法：无效上报不能留下任何磨损，也不能把本竿的账
+	// 标记成已落库，否则真正的断件上报再来时断件冲击就记不上了。
 	report, err := s.validateBreakReport(ctx, uid, rodGUID, reportedGUID)
 	if err != nil {
 		return nil, err
 	}
+	// 断件即终局：把本竿已累计的渔轮磨损落库，否则这条账会随状态重置丢掉。
+	s.markFightReelBreak(uid, rodGUID)
+	s.settleFightReelWear(ctx, uid, rodGUID, "17/9")
 	if report.terminalCategory != 0 {
 		return s.breakComponentTx(ctx, uid, rodGUID, reportedGUID, report.terminalCategory)
 	}
@@ -920,6 +923,18 @@ func (s *Server) damageReelSlipWear(ctx context.Context, uid int64, rodGUID, ree
 		return s.damageReelLockOverload(ctx, uid, rodGUID, reelGUID)
 	}
 
+	// 本体那一格是轮内零件的综合：摩擦片被磨薄了，外面必须跟着降（只降不升，
+	// 换件与修理才允许把它抬回去）。
+	if fresh, ferr := s.DB.GetItemByGUID(ctx, reel.GUID); ferr == nil && fresh != nil {
+		if fields, ferr := FieldsFromJSON(fresh.FieldsJSON); ferr == nil {
+			if body, ok := s.reelBodyDurabilityInFields(ctx, fresh, fields); ok && body < fresh.Durability {
+				if derr := s.DB.SetItemDurability(ctx, fresh.GUID, body); derr == nil {
+					fresh.Durability = body
+				}
+			}
+		}
+		reel = fresh
+	}
 	perf, perr := s.syncReelPerformance(ctx, reel)
 	if perr != nil {
 		return nil, perr

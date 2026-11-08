@@ -6,16 +6,16 @@ import (
 	"testing"
 )
 
-// TestReportedReelBreakDamagesReel 复刻海图实测：轻纺车竿竿身 3.91kg、
-// 渔轮最大摩擦 3.2kg、主线 6.8kg。客户端 UI 显示 1~30，17/14 上报 0~29
-// （UI = 线上值 + 1）。17/9 上报渔轮断件时，服务端按上报件损坏渔轮本体，
-// 不再改判成“无损坏的泄力打滑”，也不改断最弱的主线/竿。
+// TestReportedReelBreakDamagesReel 复刻海图实测：轻纺车竿（Arrow S60UL）
+// 竿身 3.08kg、摩擦片额定 3.2kg 折算后锁轮承力 3.89kg、主线 6.8kg，竿身是最弱环。
+// 客户端 UI 显示 1~30，17/14 上报 0~29（UI = 线上值 + 1）。17/9 上报渔轮断件时，
+// 服务端按上报件损坏渔轮本体，不再改判成“无损坏的泄力打滑”，也不改断最弱的竿身。
 func TestReportedReelBreakDamagesReel(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 
-	rod, err := srv.CreateItem(ctx, uid, "spin_10001_S60L", "backpack", 1)
+	rod, err := srv.CreateItem(ctx, uid, "spin_10003_S60UL", "backpack", 1)
 	if err != nil {
 		t.Fatal(err)
 	}

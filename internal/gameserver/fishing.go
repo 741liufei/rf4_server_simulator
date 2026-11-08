@@ -1600,6 +1600,8 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	// 上一竿的磨损账若还没落库（异常退出、断线等），先取走，解锁后补写。
 	pendingWear, hasPendingWear := st.reelWear.claimLocked()
 	st.reelWear.reset()
+	// 抛竿即算“下水使用”：这一竿即使没咬钩，轮内零件也要结算每竿基准与泡水。
+	st.reelWear.markRodUsedLocked(st.GearGuid)
 	if resetCast || st.CastTs.IsZero() {
 		st.CastTs = now
 	}

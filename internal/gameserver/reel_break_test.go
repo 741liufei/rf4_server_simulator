@@ -2,7 +2,7 @@ package gameserver
 
 // 渔轮损坏回归：
 // TestReelSlipWearsFrictionWasherOut 验证泄力打滑磨的是摩擦片(cat9)制动力
-// csDragForce，本体耐久不受影响；磨穿后泄力失效（最大泄力归零）。
+// csDragForce，本体耐久作为零件综合一起降；磨穿后泄力失效（最大泄力归零）。
 // TestBrokenReelBlocksCastRig 验证 rigBrokenReelGUID 只对已装配且耐久归零的轮子生效。
 
 import (
@@ -71,9 +71,10 @@ func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
 	if err != nil || row == nil {
 		t.Fatalf("读取轮子失败: %v", err)
 	}
-	// 摩擦片是消耗件，磨穿不影响本体耐久。
-	if row.Durability != 1.0 {
-		t.Fatalf("摩擦片磨穿不应伤本体耐久，实得 %v", row.Durability)
+	// 摩擦片是熔断件：烧穿之后本体耐久必须归零，客户端才会给红框、
+	// 轮子才会收不了线、才必须去换片或进修理。
+	if row.Durability != 0 {
+		t.Fatalf("摩擦片烧穿后本体耐久应归零，实得 %v", row.Durability)
 	}
 
 	// 泄力失效：基础刹车力与锁轮承力都归零，重新同步后仍为 0。

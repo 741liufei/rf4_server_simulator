@@ -1291,6 +1291,9 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 		if cerr != nil || child == nil {
 			continue
 		}
+		// 全新件必须写满耐久：轮内零件耐久会聚合成本体那一格，换上去就缺耐久
+		// 等于给玩家装了一只坏件，本体永远抬不回来。
+		setReelChildDurability(child, 1)
 		fields[idx].Val = child
 		ps, pg := srv.partPrice(cctx, o.SysID, def.Category)
 		silver += ps
@@ -1347,6 +1350,10 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 	}
 	row.FieldsJSON = fj
 	if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+		// 本体那一格是轮内零件的综合：换掉烧穿的摩擦片必须能把它抬回来，
+		// 否则“换件修好”永远修不好。抬完本体再写物理参数表，表里的承力与
+		// 抛投摩擦才不会慢一拍，停在磨损前的旧值上。
+		srv.recalcReelBodyDurability(cctx, row)
 		if _, perr := srv.syncReelPerformance(cctx, row); perr != nil {
 			ctx.Log.Warn("工坊换件：轮子物理参数保存失败", "guid", shortGUID(row.GUID), "err", perr)
 		}
@@ -1431,6 +1438,15 @@ func hWorkshopRepair(useGold bool) Handler {
 			}
 			return body, true
 		}
+		// 渔轮是机械总成：先把里面烧掉的摩擦片与磨旧零件一并恢复，只把本体写回
+		// 1.0 的话制动力还是 0，轮子照样收不了线。恢复不进来就不扣钱也不写本体，
+		// 免得出现“外表修好了但摩擦片仍是 0”的状态。
+		if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+			if _, ierr := srv.restoreReelInternals(cctx, row); ierr != nil {
+				ctx.Log.Warn("修理：轮内零件恢复失败，本次修理未生效", "guid", shortGUID(guid), "err", ierr)
+				return nil, false
+			}
+		}
 		// 扣费 + 流水
 		if useGold {
 			_ = srv.DB.UpdateBalance(cctx, ctx.Sess.Userid, p.Silver, p.Gold-cost, p.Bank)
@@ -1441,11 +1457,18 @@ func hWorkshopRepair(useGold bool) Handler {
 		}
 		// 恢复耐久，保留工艺质量。
 		beforeDurability := row.Durability
+
 		if err := srv.DB.SetItemDurability(cctx, guid, 1.0); err != nil {
 			ctx.Log.Warn("修理耐久写库失败", "guid", shortGUID(guid), "err", err)
 			return nil, false
 		}
 		row.Durability = 1.0
+		if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+			// 物理参数表也要跟着回满：搏鱼结算优先读这张表，它不刷新就会继续按磨损后的承力裁决。
+			if _, perr := srv.syncReelPerformance(cctx, row); perr != nil {
+				ctx.Log.Warn("修理：轮子物理参数保存失败", "guid", shortGUID(row.GUID), "err", perr)
+			}
+		}
 		if err := srv.DB.AddItemDamageLog(cctx, store.ItemDamageLog{
 			UID: ctx.Sess.Userid, ItemGUID: guid, ItemID: row.ItemID, Event: damageEventRepair,
 			BeforeDurability: ptrFloat64(beforeDurability), AfterDurability: ptrFloat64(1.0),

@@ -14,6 +14,7 @@ import (
 	"math"
 
 	"rf4server/internal/proto"
+	"rf4server/internal/store"
 )
 
 const (
@@ -44,12 +45,15 @@ type fightReelWear struct {
 	oilBurn  float64 // 轮油对烧穿时长的系数，含轮油自身干涸衰减
 	pullKg   float64 // 服务端已知的鱼拉力（公斤力）
 
-	SlipTicks int
-	SlipWear  float64 // 通道一：泄力打滑累计的寿命比例
-	BurnSecs  float64 // 通道二：锁轮过载累计秒数（跨段，供零件应力账使用）
-	BurnWear  float64 // 通道二：过载曲线累计的寿命比例
-	SegSecs   float64 // 当前过载段内已持续秒数；解锁清零，下段从曲线开头重爬
-	settled   bool    // 本竿是否已落库（每竿一次）
+	SlipTicks   int
+	SlipWear    float64 // 通道一：泄力打滑累计的寿命比例
+	BurnSecs    float64 // 通道二：锁轮过载累计秒数（跨段，供零件应力账使用）
+	BurnWear    float64 // 通道二：过载曲线累计的寿命比例
+	SegSecs     float64 // 当前过载段内已持续秒数；解锁清零，下段从曲线开头重爬
+	Used        bool    // 本竿是否真的下水使用过（抛过竿就算，与是否中鱼无关）
+	BaseCharged bool    // 本竿的“每竿基准 + 泡水”是否已计入本账
+	BreakHits   int     // 断件冲击次数：只在真断线/断竿那一次扣
+	settled     bool    // 本竿是否已落库（每竿一次）
 }
 
 // reset 清空本竿账本（新的一杆）。
@@ -66,12 +70,54 @@ func (w *fightReelWear) invalidate() {
 
 // claimLocked 取走本竿待落库的磨损账（调用方必须持有 FishState 锁）。已落库或没有
 // 磨损时返回 false，保证同一竿的账只写一次。
+// claimLocked 取走本竿待落库的磨损账（调用方必须持有 FishState 锁）。已落库或
+// 本竿什么都没发生时返回 false，保证同一竿的账只写一次。抛过竿就算有账：
+// 即使没咬钩，轮内零件也要按使用时间结算基准与泡水。
 func (w *fightReelWear) claimLocked() (fightReelWear, bool) {
-	if w.settled || (w.SlipWear <= 0 && w.BurnWear <= 0) {
+	if w.settled {
+		return *w, false
+	}
+	if w.SlipWear <= 0 && w.BurnWear <= 0 && w.BreakHits <= 0 && !w.BaseCharged {
 		return *w, false
 	}
 	w.settled = true
 	return *w, true
+}
+
+// markRodUsedLocked 把本竿标成“已下水使用”：抛竿即使没咬钩，轮内零件也要结算
+// 每竿基准与泡水一次。已落库的旧账不再重复记，避免同一竿扣两次基准。
+// 调用方必须持有 FishState 锁。
+func (w *fightReelWear) markRodUsedLocked(rodGUID string) {
+	if w.settled {
+		return
+	}
+	w.Used = true
+	w.BaseCharged = true
+	if w.rodGUID == "" {
+		w.rodGUID = rodGUID
+	}
+}
+
+// markRodBreakLocked 记下本竿发生过断件冲击（断线/断竿那一次），轮内零件随之再扣一点。
+func (w *fightReelWear) markRodBreakLocked() {
+	if w.settled {
+		return
+	}
+	w.Used = true
+	w.BreakHits++
+}
+
+// partCounts 把本竿账本折算成零件消耗事件：过载秒数与打滑次数直接沿用摩擦片那条账，
+// 不重复计数。
+func (w fightReelWear) partCounts() reelPartCounts {
+	var c reelPartCounts
+	if w.BaseCharged {
+		c.Rods, c.Soaks = 1, 1
+	}
+	c.OverloadSecs = w.BurnSecs
+	c.SlipTicks = w.SlipTicks
+	c.BreakHits = w.BreakHits
+	return c
 }
 
 // reelOilBurnFactor 是轮油对锁轮烧穿时长的系数：品质越高越耐烧，
@@ -275,6 +321,9 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 	if !cur.valid || cur.fishGUID != fish.FishGUID || cur.rodGUID != gear {
 		// 换鱼即换一本账：旧鱼那笔若还没落库（客户端没报离场也要兜底），先取走再开新账。
 		previous, hasPrevious = cur.claimLocked()
+		cached.Used = cached.Used || cur.Used
+		cached.BaseCharged = cached.BaseCharged || cur.BaseCharged
+		cached.BreakHits += cur.BreakHits
 		*cur = cached
 	}
 	cur.SlipTicks += ticks
@@ -290,32 +339,108 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 
 // applyFightReelWear 把一笔已取走的磨损账写入摩擦片，返回是否真的写了库。
 // event 只用于损伤日志（14/4 收竿、17/9 断件、14/12 鱼离场、14/7 抛竿兜底）。
+// applyFightReelWear 把一笔已取走的磨损账写进渔轮：摩擦片制动力、轮内零件耐久
+// 与本体耐久在同一次物品树写入里落库，避免出现“片磨了但零件与本体没动”的两套数字。
+// 本体耐久取 min(现值, 零件聚合值)：只降不升，换件与修理才允许抬回去。
+// event 只用于损伤日志（14/4 收竿、17/9 断件、14/12 鱼离场、14/7 抛竿兜底）。
 func (s *Server) applyFightReelWear(ctx context.Context, uid int64, w fightReelWear, event string) bool {
-	if s == nil || s.DB == nil || w.reelGUID == "" {
+	if s == nil || s.DB == nil {
 		return false
 	}
-	wear := w.SlipWear + w.BurnWear
-	if wear > 1 {
-		wear = 1
+	if w.reelGUID == "" && w.rodGUID != "" {
+		// 抛竿只登记了竿：空竿结算要按钓组解析出渔轮，否则每竿基准与泡水会被整笔丢掉。
+		if parsed, perr := s.DB.GetItemGUIDByRigSlot(ctx, w.rodGUID, gearCatReel); perr == nil && parsed != "" {
+			w.reelGUID = parsed
+		}
 	}
-	if wear <= 0 {
+	if w.reelGUID == "" {
 		return false
 	}
+	wear := clampUnit(w.SlipWear + w.BurnWear)
+	counts := w.partCounts()
+	if wear <= 0 && counts.total() <= 0 {
+		return false
+	}
+	reel, err := s.DB.GetItemByGUID(ctx, w.reelGUID)
+	if err != nil || reel == nil || reel.UID != uid {
+		return false
+	}
+	fields, err := FieldsFromJSON(reel.FieldsJSON)
+	if err != nil {
+		return false
+	}
+	var wornOut, found bool
+	if wear > 0 {
+		wornOut, found = s.degradeFrictionWasherFields(ctx, reel, fields, wear)
+		if !found {
+			// 老档没有独立的摩擦片子件：回退到既有的本体耐久通道，继续走零件经济只会读不出东西。
+			_, derr := s.damageReelSlipWear(ctx, uid, w.rodGUID, w.reelGUID, wear, fightWearDetailFields(w, wear, nil))
+			return derr == nil
+		}
+	}
+	parts := s.wearReelPartsInFields(ctx, fields, counts)
+	durability := reel.Durability
+	if body, ok := s.reelBodyDurabilityInFields(ctx, reel, fields); ok && body < durability {
+		durability = body
+	}
+	before := reel.Durability
+	bumpCreatedTicks(fields, reel.WireClass)
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return false
+	}
+	// 摩擦片与母轮受力上限必须一起写，否则下次下发会用旧制动力覆盖新磨损。
+	snapshot := *reel
+	snapshot.FieldsJSON = fj
+	if s.canonicalizeReelStrength(ctx, &snapshot, fields) {
+		if fj, err = FieldsToJSON(fields); err != nil {
+			return false
+		}
+	}
+	if err := s.DB.UpdateItemFields(ctx, reel.GUID, fj, reel.Qty, durability, reel.Workmanship, reel.RigGUID); err != nil {
+		return false
+	}
+	reel.Durability = durability
+	reel.FieldsJSON = fj
+	perf, perr := s.syncReelPerformance(ctx, reel)
+	if perr != nil {
+		return false
+	}
+	if err := s.DB.AddItemDamageLog(ctx, store.ItemDamageLog{
+		UID: uid, ItemGUID: reel.GUID, ItemID: reel.ItemID, Event: damageEventReelOverload,
+		BeforeDurability: ptrFloat64(before), AfterDurability: ptrFloat64(reel.Durability),
+		DetailJSON: frictionWearDetail(w.rodGUID, perf, reel.Durability, wornOut, fightWearDetailFields(w, wear, parts)),
+	}); err != nil {
+		return false
+	}
+	return true
+}
+
+// fightWearDetailFields 把本竿磨损账折算成损伤日志里的诊断字段（万分比），
+// parts 是本次各零件扣掉的寿命比例。
+func fightWearDetailFields(w fightReelWear, wear float64, parts map[string]float64) map[string]any {
 	round2 := func(v float64) float64 { return math.Round(v*100) / 100 }
 	detail := map[string]any{
-		"event": event, "slip_ticks": w.SlipTicks,
-		"slip_wear": round2(w.SlipWear * 10000), "burn_seconds": round2(w.BurnSecs),
+		"slip_ticks": w.SlipTicks,
+		"slip_wear":  round2(w.SlipWear * 10000), "burn_seconds": round2(w.BurnSecs),
 		"burn_wear": round2(w.BurnWear * 10000), "wear_bp": round2(wear * 10000),
 		"locked": w.locked, "pull_kg": round2(w.pullKg), "drag_kg": round2(w.dragKg),
 		"locked_drag_kg": round2(w.lockedKg), "washer_rated_kg": round2(w.ratedKg),
 	}
-	if _, err := s.damageReelSlipWear(ctx, uid, w.rodGUID, w.reelGUID, wear, detail); err != nil {
-		if s.log != nil {
-			s.log.Info("渔轮磨损落库跳过", "rod", guidShort(w.rodGUID), "event", event, "err", err)
-		}
-		return false
+	if w.BaseCharged {
+		detail["rod_base"] = 1
 	}
-	return true
+	if w.BreakHits > 0 {
+		detail["break_hits"] = w.BreakHits
+	}
+	if len(parts) > 0 {
+		partWear := map[string]float64{}
+		for itemID, dropped := range parts {
+			partWear[itemID] = round2(dropped * 10000)
+		}
+		detail["part_wear_bp"] = partWear
+	}
+	return detail
 }
 
 // settleFightReelWearState 结算指定竿的渔轮磨损：同一竿只写一次，重发不重复扣。
@@ -326,6 +451,10 @@ func (s *Server) settleFightReelWearState(ctx context.Context, st *FishState, ui
 	}
 	st.mu.Lock()
 	w, ok := st.reelWear.claimLocked()
+	if w.rodGUID == "" {
+		// 账上只有竿 GUID 时也能结算：状态里的竿就是这一竿的钓组。
+		w.rodGUID = st.GearGuid
+	}
 	st.mu.Unlock()
 	if !ok {
 		return
@@ -343,4 +472,17 @@ func (s *Server) settleFightReelWear(ctx context.Context, uid int64, rodGUID, ev
 		return
 	}
 	s.settleFightReelWearState(ctx, s.fishingStateForRod(uid, rodGUID), uid, event)
+}
+
+// markFightReelBreak 记下本竿发生过断件冲击（17/9 的断线/断竿/断轮），轮内
+// 零件的断件冲击账只在真断件那一次扣，不随打滑与过载重复累加。
+// 必须在结算之前调用：磨损账一旦取走就不再追记。
+func (s *Server) markFightReelBreak(uid int64, rodGUID string) {
+	if s == nil || rodGUID == "" {
+		return
+	}
+	st := s.fishingStateForRod(uid, rodGUID)
+	st.mu.Lock()
+	st.reelWear.markRodBreakLocked()
+	st.mu.Unlock()
 }
