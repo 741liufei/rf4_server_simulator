@@ -245,7 +245,7 @@ func (s *Server) fightReelCache(ctx context.Context, uid int64, rodGUID string, 
 		ratedKg:  rated,
 		oilWear:  perf.OilWearFactor,
 		oilBurn:  reelOilBurnFactor(oilQuality, oilDurability),
-		pullKg:   s.fishFightPullFor(f, s.fishFightProfileFor(f)),
+		pullKg:   s.fishFightPullKgfFor(f, s.fishFightProfileFor(f)),
 	}
 }
 
