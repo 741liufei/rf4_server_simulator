@@ -37,13 +37,28 @@ func deckSealed(fields []proto.Field) uint64 {
 // ItemToTree 读静态库，不得在事务内调用（写锁期间池化读会饿死）。
 type deckStatuettePlan struct {
 	statuettes []string
-	owned      map[string]*store.Item
 	prepared   map[string]*store.Item
-	trees      map[string]*proto.Value
+	trees      map[string]*proto.Value // GUID -> 事务外预生成的响应树
+	containers map[string]string       // 已有奖座 GUID -> 事务外快照容器
 }
 
-// prepareDeckStatuettes 事务外读 def、已有奖座与缺发构造件，并预生成响应树
-// （已有行用行树；缺发用构造件树，grantPreparedItemTx 落库 guid 不变）。
+// firstOwnedItemByItemID 事务外查玩家全部容器中的首个同定义物品。
+// 奖座可被 4/6 移到房屋等容器，判断“已拥有”不能只看背包。
+func (s *Server) firstOwnedItemByItemID(ctx context.Context, uid int64, itemID string) (*store.Item, error) {
+	row := s.DB.SQL.QueryRowContext(ctx, `SELECT `+txItemCols+` FROM item
+		WHERE uid=? AND item_id=? ORDER BY created_ts,guid LIMIT 1`, uid, itemID)
+	it, err := scanTxItem(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return it, nil
+}
+
+// prepareDeckStatuettes 事务外读 def、已有奖座与缺发构造件，并预生成响应树。
+// 已有行按 GUID 保存树和容器快照；缺发构造件落库时 GUID 不变。
 func (s *Server) prepareDeckStatuettes(ctx context.Context, uid int64, deckID string) (*deckStatuettePlan, error) {
 	def, err := s.DB.GetItemDefByItemID(ctx, deckID)
 	if err != nil || def == nil || def.Category != 82 {
@@ -55,40 +70,39 @@ func (s *Server) prepareDeckStatuettes(ctx context.Context, uid int64, deckID st
 	if err := json.Unmarshal([]byte(def.AttrsJSON), &attrs); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.ListItemsByContainer(ctx, uid, "backpack")
-	if err != nil {
-		return nil, err
-	}
 	plan := &deckStatuettePlan{
-		owned:    map[string]*store.Item{},
-		prepared: map[string]*store.Item{},
-		trees:    map[string]*proto.Value{},
+		prepared:   map[string]*store.Item{},
+		trees:      map[string]*proto.Value{},
+		containers: map[string]string{},
 	}
 	for _, st := range attrs.Statuettes {
 		if st == "" {
 			continue
 		}
 		plan.statuettes = append(plan.statuettes, st)
-		for _, r := range rows {
-			if r.ItemID == st {
-				plan.owned[st] = r
-				break
-			}
+		existing, err := s.firstOwnedItemByItemID(ctx, uid, st)
+		if err != nil {
+			return nil, err
 		}
-		if row := plan.owned[st]; row != nil {
-			if tree, terr := s.ItemToTree(ctx, row); terr == nil && tree != nil {
-				plan.trees[st] = tree
+		if existing != nil {
+			tree, err := s.ItemToTree(ctx, existing)
+			if err != nil || tree == nil {
+				return nil, fmt.Errorf("已有奖座树构造失败: %s", st)
 			}
+			plan.trees[existing.GUID] = tree
+			plan.containers[existing.GUID] = existing.Container
 			continue
 		}
 		prepared, err := s.prepareNewItem(ctx, uid, st, "backpack", 1, "")
 		if err != nil {
 			return nil, err
 		}
-		plan.prepared[st] = prepared
-		if tree, terr := s.ItemToTree(ctx, prepared); terr == nil && tree != nil {
-			plan.trees[st] = tree
+		tree, err := s.ItemToTree(ctx, prepared)
+		if err != nil || tree == nil {
+			return nil, fmt.Errorf("待发奖座树构造失败: %s", st)
 		}
+		plan.prepared[st] = prepared
+		plan.trees[prepared.GUID] = tree
 	}
 	return plan, nil
 }
@@ -198,11 +212,17 @@ func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
 	trees := proto.Args(proto.S("61"))
 	granted := 0
 	for _, st := range plan.statuettes {
-		if _, terr := scanTxItem(tx.QueryRowContext(c, `SELECT `+txItemCols+
-			` FROM item WHERE uid=? AND item_id=? ORDER BY created_ts,guid LIMIT 1`, uid, st)); terr == nil {
-			if plan.trees[st] != nil {
-				trees.Items = append(trees.Items, plan.trees[st])
+		existing, terr := scanTxItem(tx.QueryRowContext(c, `SELECT `+txItemCols+
+			` FROM item WHERE uid=? AND item_id=? ORDER BY created_ts,guid LIMIT 1`, uid, st))
+		if terr == nil {
+			tree := plan.trees[existing.GUID]
+			if tree == nil || plan.containers[existing.GUID] != existing.Container {
+				// 事务外预生成的树必须与事务内实际命中的行一致，避免 ACK 幽灵 GUID。
+				ctx.Log.Warn("卡册奖座在事务外准备后状态变化", "item", st, "guid", existing.GUID)
+				ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+				return nil, true
 			}
+			trees.Items = append(trees.Items, tree)
 			continue
 		} else if terr != sql.ErrNoRows {
 			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
@@ -214,15 +234,19 @@ func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
 			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 			return nil, true
 		}
-		if _, _, gerr := grantPreparedItemTx(c, tx, prepared, false); gerr != nil {
+		row, _, gerr := grantPreparedItemTx(c, tx, prepared, false)
+		if gerr != nil {
+			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+			return nil, true
+		}
+		tree := plan.trees[row.GUID]
+		if tree == nil {
 			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 			return nil, true
 		}
 		granted++
 		s.log.Info("卡册塑封发奖座", "uid", uid, "deck", deck.ItemID, "item", st)
-		if plan.trees[st] != nil {
-			trees.Items = append(trees.Items, plan.trees[st])
-		}
+		trees.Items = append(trees.Items, tree)
 	}
 	// 响应在提交前构造完毕：提交后不再有可失败步骤（review 次要项）。
 	// f0 plhpmhpadcg[] 的 args code 未在真实注册表实证（已实证仅 61/362/
