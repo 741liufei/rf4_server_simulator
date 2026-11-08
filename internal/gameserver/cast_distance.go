@@ -555,7 +555,9 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 	p.PlayerPrimary, p.PlayerSecondary = s.castPlayerCondition(ctx, uid)
 	p.ReelType, p.SpoolSize, p.SpoolCapacityM = s.castReelSpoolStats(ctx, reel, ids.Line)
 	if p.SpoolCapacityM > 0 && p.LineLengthM > 0 {
-		p.SpoolFill = p.LineLengthM / p.SpoolCapacityM
+		// 线长是整盘标称长度；超过杯容量时按容量计，避免 600m 线盘被当成
+		// 25 倍超装。
+		p.SpoolFill = spoolFillRatio(p.LineLengthM, p.SpoolCapacityM)
 	}
 
 	c := CastDistanceContext{
