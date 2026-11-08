@@ -28,15 +28,21 @@ func TestCastBaseDistanceProfiles(t *testing.T) {
 }
 
 func TestReelCastFrictionImprovesWithBearingOilAndDurability(t *testing.T) {
-	wornBasic := reelCastFriction(10, 15, 0.4)
-	newBasic := reelCastFriction(10, 15, 1.0)
-	premium := reelCastFriction(100, 100, 1.0)
+	wornBasic := reelCastFriction(10, 1, 15, 1, 0.4)
+	newBasic := reelCastFriction(10, 1, 15, 1, 1.0)
+	premium := reelCastFriction(100, 1, 100, 1, 1.0)
 	if !(wornBasic > newBasic && newBasic > premium) {
 		t.Fatalf("摩擦系数应随轴承/油品/耐久改善而下降: worn=%f basic=%f premium=%f",
 			wornBasic, newBasic, premium)
 	}
 	if math.Abs(premium-0.05) > 1e-9 {
 		t.Fatalf("满品质轮子摩擦=%f，期望0.05", premium)
+	}
+	// 零件自身磨旧也要体现在抛投手感上：油干了、轴承旧了都更甩不出去。
+	dryOil := reelCastFriction(100, 1, 100, 0, 1.0)
+	wornBearing := reelCastFriction(100, 0, 100, 1, 1.0)
+	if !(dryOil > premium && wornBearing > premium) {
+		t.Fatalf("轮油干涸或轴承磨旧应更难抛: 干油=%f 旧轴承=%f 全新=%f", dryOil, wornBearing, premium)
 	}
 }
 

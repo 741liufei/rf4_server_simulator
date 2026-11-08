@@ -619,10 +619,12 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	if scene == "" {
 		scene = sceneForLevel(level)
 	}
-	// 钓鱼游/买断已失效的付费地图不能作为出生地图（钓鱼游到期即失去
-	// 进入资格），回退出生地图，避免到期后重连仍留在原地图。
-	if srv.tripLevelLocked(sess.pushCtx(), uid, level) {
-		ctx.Log.Info("1/13 目标地图无有效钓鱼游，回出生地图", "level", level)
+	// 空请求只恢复上次位置；银币票停留没有 access 记录，不能直接用
+	// tripLevelLocked 判断。只有上次地图明确依赖已到期钓鱼游且之后没有
+	// 新银币票流水时才回出生图。带 key 的真正进入交给 settleTravel：
+	// 买断/有效钓鱼游/房屋免票，否则扣银币门票。
+	if !charge && srv.loginRestoreTripExpired(sess.pushCtx(), uid, level) {
+		ctx.Log.Info("1/13 上次地图钓鱼游已到期，回出生地图", "level", level)
 		level, scene, spot = spawnLevelKey, sceneForLevel(spawnLevelKey), 0
 	}
 
@@ -1400,6 +1402,8 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 		} else {
 			ctx.Log.Info("14/12 鱼未上钩离场，官方静默", "f0", f0, "hooked", hooked)
 		}
+		// 这一尾鱼的渔轮账到此为止，先落库再排下一尾。
+		srv.settleFightReelWearState(srv.dbCtx(), st, ctx.Sess.Userid, "14/12")
 		if castActive && inWater {
 			srv.scheduleBiteState(ctx.Sess, st, false, false)
 		}
@@ -1413,6 +1417,8 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	st.Pending = nil
 	st.CastActive = false
 	st.mu.Unlock()
+	// 脱钩同样是这一竿的终局：渔轮发热账当场落库。
+	srv.settleFightReelWearState(srv.dbCtx(), st, ctx.Sess.Userid, "14/12")
 	srv.bumpFishingCounter(ctx.Sess.Userid, "escapes")
 	if !alreadyResolved {
 		srv.notifyFishEscape(ctx.Sess, pending, "脱钩离开")
@@ -1427,6 +1433,8 @@ func hFishingLoad(ctx *Ctx) ([]byte, bool) {
 	if ctx.Sess.Srv.tunableF("fight_load_full_sync", 0) != 0 {
 		ctx.Sess.Push4_22Full()
 	}
+	// 一条负载上报折算一次判定：未锁轮超泄力算打滑磨摩擦片，锁轮超承力按发热曲线烧。
+	ctx.Sess.Srv.recordFightReelLoad(ctx)
 	return nil, true
 }
 

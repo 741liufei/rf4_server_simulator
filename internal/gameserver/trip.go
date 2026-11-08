@@ -57,6 +57,28 @@ func (s *Server) tripLevelLocked(ctx context.Context, uid int64, level string) b
 	return n == 0
 }
 
+// loginRestoreTripExpired 判断登录恢复的地图是否只依赖已经到期的钓鱼游。
+//
+// 银币门票按次进入但停留期间没有 place_access 记录；玩家下线重登时位置
+// 本身就是仍在图内的凭据，不能直接用 tripLevelLocked 把空请求退回出生图。
+// 只有该地点存在已到期购票记录，且到期后没有新的 place_travel 银币票流水
+// 时，才视为“仅钓鱼游资格已到期”。
+func (s *Server) loginRestoreTripExpired(ctx context.Context, uid int64, level string) bool {
+	if !s.tripLevelLocked(ctx, uid, level) {
+		return false
+	}
+	var n int
+	err := s.DB.SQL.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM trip_state t
+		WHERE t.uid=? AND t.place=? AND t.purchases>0 AND t.remaining_sec<=0
+		  AND NOT EXISTS (
+			SELECT 1 FROM txn x
+			WHERE x.uid=t.uid AND x.item_id=t.place
+			  AND x.note='place_travel' AND x.ts>=t.updated_ts
+		  )`, uid, level).Scan(&n)
+	return err == nil && n > 0
+}
+
 // startTripTimers 兼容旧存档：只把 last_consume_ts=0 的历史已购行置为当前
 // 时刻。新购票已经在 3/38 事务中启表；已启表或未购票的行不动。
 func (s *Server) startTripTimers(ctx context.Context, uid int64, level string) bool {
