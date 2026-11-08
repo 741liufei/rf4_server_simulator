@@ -256,6 +256,12 @@ type RolledFish struct {
 	Force    float64 // obj27#08 拉力；0=按体重和已验证比例计算
 	NamedID  string  // 被命名鱼
 	Name     string
+	// DepthCM/OnBoat 是咬钩瞬间的钓深与船只状态，只供资格判定读取，不落库；
+	// 重启后恢复的 pending 鱼按默认值（0/岸钓）处理。
+	DepthCM int64
+	OnBoat  bool
+	// Drift 记录咬钩瞬间钓组是否处于顺流移动（14/7 0x40），同样只供资格判定。
+	Drift bool
 }
 
 // stateFor 按 uid 取/建状态。
@@ -1694,6 +1700,13 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		f.HappyHour, f.HappyHourKnown = sess.currentHappyHour().Active, true
 		st.Armed = nil
 		f.LocLevel = s.currentLevel(uid)
+		f.DepthCM = st.effectiveBaitDepthCMLocked(now)
+		// 海钓的扬程由 17/12 设置的钓深表达，LureLayer 模型最大只有 5m。
+		if marineRigType(st.RigType) && st.DepthCM > 0 {
+			f.DepthCM = st.DepthCM
+		}
+		f.OnBoat, _ = st.onBoatLocked(now.Unix())
+		f.Drift = st.LureMotionMask&lureMotionDriftBit != 0
 		st.Pending = f
 		st.PendingRepush = 0
 		gear, generation := st.GearGuid, st.castGeneration
@@ -1748,6 +1761,12 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 	}
 	f.HappyHour, f.HappyHourKnown = sess.currentHappyHour().Active, true
 	f.LocLevel = s.currentLevel(uid)
+	f.DepthCM = baitDepthCM
+	if marineRigType(rigType) && st.DepthCM > 0 {
+		f.DepthCM = st.DepthCM
+	}
+	f.OnBoat = boatOn
+	f.Drift = lureMask&lureMotionDriftBit != 0
 	st.Pending = f
 	st.PendingRepush = 0
 	gear, generation := st.GearGuid, st.castGeneration

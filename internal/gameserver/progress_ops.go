@@ -341,9 +341,11 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	st.mu.Unlock()
 
 	cctx := ctx.Sess.pushCtx()
+	castProf := s.castDistanceForRig(cctx, uid, gearGUID, rigType)
 	var stats813 *proto.Value
 	var profileTree *proto.Value
 	var skill312 *proto.Value
+	var qualChanges map[int64]store.QualificationState
 	hasFish := pending != nil && hooked
 
 	if pending != nil && !hooked {
@@ -369,6 +371,30 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		// 奖杯/蓝冠与破纪录经聊天频道播报；普通鱼由结算卡展示。
 		if !res.replayed {
 			s.notifyFishLanded(ctx.Sess, pending, res.isRecord)
+			// 资格判定在上鱼时发生：达标当尾的结算响应即带完成（增量下发），
+			// 完成后封顶不再计数，避免后续鱼重复弹完成窗。
+			bait := s.qualificationMountedBait(cctx, pending.BaitGUIDs)
+			rodType, rodPower, rodTestMax := s.qualificationRod(cctx, gearGUID)
+			mainLine, leaderMat := s.qualificationLineMaterials(cctx, gearGUID)
+			_, gameHour := worldDayAndHour(time.Now().Unix())
+			qualChanges = s.evaluateQualifications(ctx, qualificationEvent{
+				Kind: qevFishLanded, Species: pending.Species, NameZh: pending.Name,
+				WeightG: pending.WeightG, LengthM: pending.LengthM,
+				RigType: rigType, RodType: rodType, RodPower: rodPower,
+				RodTestMax: rodTestMax,
+				Grade:      pending.Grade, CatchGUID: pending.FishGUID,
+				Rarity: s.DB.SpeciesRarity(cctx, pending.Species),
+				Bait:   bait.ID, BaitCat: bait.Cat,
+				BaitClass: bait.Class, BaitFlavor: bait.Flavor,
+				LureLenCM: bait.LenCM, BaitSizeMM: bait.SizeMM,
+				DepthCM: pending.DepthCM, IsShore: !pending.OnBoat,
+				IsNight:  gameHour >= 19 || gameHour < 6,
+				Drift:    pending.Drift,
+				LocLevel: pending.LocLevel,
+				XP:       pending.XP,
+				MainLine: mainLine, LeaderMat: leaderMat,
+				CastM: castProf.DistanceM,
+			})
 		}
 	}
 
@@ -426,9 +452,9 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	}
 	obj801, err := wiregen.MakeObj("caagocpofin", map[int]*proto.Value{
 		0:  f0,
-		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
+		1:  proto.U32(proto.F32Bits(float32(castProf.DistanceM))),
 		2:  proto.U32(f32Const801F2),
-		3:  build5003(),
+		3:  build5003FromStates(qualChanges),
 		4:  giftRows,
 		5:  proto.Null(),
 		6:  f6,
