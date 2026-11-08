@@ -490,9 +490,32 @@ func (s *Server) acceptMails(ctx *Ctx, ids []int64) (int, []*store.Item) {
 					return 0, nil
 				}
 				if def.Category == bundleCategory {
-					if att.BuyPrice != 0 {
+					openable := bundleOpenable(def)
+					if att.BuyPrice != 0 && !openable {
 						ctx.Log.Warn("19/3 组合包有购买价值，需人工处理", "mail", id, "item", att.ItemID)
 						return 0, nil
+					}
+					if openable {
+						// 礼盒附件以本体发放，一包一件（非计件）；玩家 4/8
+						// 使用时拆开。饵料盒维持展开发放。
+						packs := att.Qty
+						if packs < 1 {
+							packs = 1
+						}
+						if packs > maxBundlePreparedItems {
+							ctx.Log.Warn("19/3 礼盒附件数量超过上限", "mail", id,
+								"item", att.ItemID, "qty", packs, "limit", maxBundlePreparedItems)
+							return 0, nil
+						}
+						for i := int64(0); i < packs; i++ {
+							it, berr := s.prepareNewItem(cctx, uid, att.ItemID, "backpack", 1, "")
+							if berr != nil {
+								ctx.Log.Warn("19/3 礼盒附件构造失败", "mail", id, "item", att.ItemID, "err", berr)
+								return 0, nil
+							}
+							plan.prepared = append(plan.prepared, it)
+						}
+						continue
 					}
 					items, berr := s.prepareBundleItems(cctx, uid, att.ItemID, "backpack", att.Qty)
 					if berr != nil {

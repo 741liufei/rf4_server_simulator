@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"rf4server/internal/store"
 )
@@ -142,6 +143,19 @@ func TestCastCalibrationBands(t *testing.T) {
 	}
 }
 
+// 状态修正器边界：0 值是真实空状态，落到 0.70 下限；不再重置为默认值。
+func TestCastPlayerStateFactorZeroStateUsesFloor(t *testing.T) {
+	if got := castPlayerStateFactor(0, 0); math.Abs(got-0.70) > 1e-9 {
+		t.Fatalf("空状态应落到 0.70 下限: %v", got)
+	}
+	if got := castPlayerStateFactor(defaultPlayerConditionPrimary, defaultPlayerConditionSecondary); math.Abs(got-1.0) > 1e-9 {
+		t.Fatalf("默认状态系数应为 1.0: %v", got)
+	}
+	if got := castPlayerStateFactor(1.0, 1.0); math.Abs(got-1.03) > 1e-9 {
+		t.Fatalf("超上限应钳到 1.03: %v", got)
+	}
+}
+
 func TestCastHighEndGearCanReachFortyFiveMeters(t *testing.T) {
 	d, _ := calculateCastDistance(CastDistanceContext{
 		RigType: 5, CastAction: 1, CastPower: 1,
@@ -182,8 +196,9 @@ func TestPlayerConditionUsesDatabase(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
+	// UpdatedTS 放到未来：无在线跨度，懒计算不推进，纯验证读库路径。
 	if err := db.UpsertPlayerCondition(ctx, store.PlayerCondition{
-		UID: uid, Primary: 0.62, Secondary: 0.71, UpdatedTS: 123,
+		UID: uid, Primary: 0.62, Secondary: 0.71, Comfort: 1.0, UpdatedTS: float64(time.Now().Unix()) + 3600,
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -895,11 +895,7 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 	st.GearGuid = gear
 	st.CastPosX, st.CastPosZ, st.HasCastPos = castX, castZ, hasCastPos
 	st.mu.Unlock()
-	if err := ctx.Sess.prepareBaitForCast(st, gear); err != nil {
-		ctx.Log.Warn("抛竿前补饵失败", "err", err)
-		return nil, false
-	}
-	srv.ensureRig(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear)
+
 	// 记录钓组类型并读取当前钩上饵；路亚使用独立的咬钩节奏。
 	rigType := int64(0)
 	if row, err := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), gear); err == nil && row != nil {
@@ -936,6 +932,20 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyFailure("System.InvalidOperationException", "渔线轮已损坏，请先修理")
 		return nil, true
 	}
+	// 精力闸门：低于阈值拒绝抛投。官服结果码 84 = kOperationResult_LowEnergyLevel，
+	// 形状与上面 136 WrongRegion 拒绝一致，客户端弹 kOperationResult_* 文案。
+	if !srv.conditionAllowsCast(ctx.Sess.pushCtx(), ctx.Sess.Userid) {
+		ctx.Log.Info("14/2 被拒：精力不足")
+		ctx.ReplyOperationResult(operationResultLowEnergyLevel)
+		return nil, true
+	}
+	// 补饵/ensureRig 会写库并推送背包状态，必须在精力闸门放行后执行；
+	// 否则一次低精力拒绝也会产生可见的钓组/背包副作用。
+	if err := ctx.Sess.prepareBaitForCast(st, gear); err != nil {
+		ctx.Log.Warn("抛竿前补饵失败", "err", err)
+		return nil, false
+	}
+	srv.ensureRig(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear)
 	// 14/1 给出的是满力度上限；14/2 才携带本次实际落点、动作和出手力度。
 	// 这里只做真实请求诊断，不能把本杆力度写回下一杆的上限。
 	requestedM := throwDistance(ctx.Tree)
@@ -978,6 +988,8 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 			return nil, true
 		}
 	}
+	// 抛投已受理（含够不到水面的空杆）：扣本次抛投精力，动作写入总是落库。
+	srv.spendEnergy(ctx.Sess.pushCtx(), ctx.Sess.Userid, srv.conditionParams().CastEnergyCost)
 
 	// 响应 800.f0 返回当前钓组 157 对象，包含完整竿树和重建后的 f5。
 	cctx := ctx.Sess.pushCtx()
@@ -1195,6 +1207,9 @@ func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	// 海钓使用 Pull 作为实际刺鱼入口，不一定另发普通钓法的 14/11；收到鱼后若只记录
 	// 这条命令，客户端永远得不到 14/15 挂钩确认，表现为不能抬竿且没有力度条。
 	srv := ctx.Sess.Srv
+	// 搏鱼抬杆/小刺扣精力：14/9 无官服拒绝样本，只扣不拒（搏鱼中拒绝会破坏
+	// 鱼战状态一致性）；精力闸门只在 14/2 抛投入口生效。
+	srv.spendEnergy(ctx.Sess.pushCtx(), ctx.Sess.Userid, srv.conditionParams().PullEnergyCost)
 	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	pending, gear, rigType := st.Pending, st.GearGuid, st.RigType
@@ -1468,6 +1483,7 @@ func registerSessionHandlers(d *Dispatch) {
 	d.Register(11, 2, hShortcutBind)
 	d.Register(11, 3, hShortcutUnbind)
 	d.Register(3, 9, hPositionReport) // 位置同步：记录玩家世界坐标
+	d.Register(3, 13, hKitchenEat)    // 3/13 player/kitchen_eat：野外厨房进食，恢复饱食度
 	d.Register(3, 30, hRigSyncBackpack)
 	d.Register(3, 31, hRigSyncRig)
 	d.Register(3, 37, hPlaceBuyout)

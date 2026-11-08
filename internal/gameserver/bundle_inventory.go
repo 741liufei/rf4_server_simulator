@@ -13,6 +13,19 @@ import (
 
 const maxBundlePreparedItems = 10000
 
+// bundleOpenable 判别礼盒：配置位 ieopbeejfmc 为 true 的组合包（官服飞德
+// 套装等）以本体发放、由玩家 4/8 使用时才拆开（见 giftbox_use.go）；该位
+// 为空/假的组合包（官服食品店饵料盒 box_food_egg_10 等）维持购买即展开。
+// 属性损坏时按不可拆礼盒处理，回退既有展开路径。
+func bundleOpenable(def *store.ItemDef) bool {
+	attrs, err := bundleAttrs(def)
+	if err != nil {
+		return false
+	}
+	v, _ := attrs["ieopbeejfmc"].(bool)
+	return v
+}
+
 func bundleAttrs(def *store.ItemDef) (map[string]any, error) {
 	if def.AttrsJSON == "" {
 		return nil, nil

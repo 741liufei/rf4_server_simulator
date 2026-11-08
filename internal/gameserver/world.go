@@ -204,6 +204,7 @@ func hItemRemove(ctx *Ctx) ([]byte, bool) {
 }
 
 // hItemUse 处理 4/8，返回被寻址物品的单件 800 快照。
+// 礼盒（ieopbeejfmc=true 的 cat 55）由 useGiftBox 拦截拆开。
 func hItemUse(ctx *Ctx) ([]byte, bool) {
 	srv := ctx.Sess.Srv
 	if !srv.requireDB(ctx) {
@@ -213,6 +214,9 @@ func hItemUse(ctx *Ctx) ([]byte, bool) {
 		return body, true
 	}
 	if body, handled := srv.useSkillBook(ctx); handled {
+		return body, true
+	}
+	if body, handled := srv.useGiftBox(ctx); handled {
 		return body, true
 	}
 	guids := deepGUIDs(ctx.Tree)

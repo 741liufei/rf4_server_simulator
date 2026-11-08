@@ -79,12 +79,19 @@ func (s *Server) storePrice(ctx context.Context, storeID, itemID string, clientO
 
 // prepareStoreGoods 在事务前展开套盒并构造物品对象。
 // 构造失败会在扣款前返回，避免产生已扣款但未发货的状态。
+// 礼盒（ieopbeejfmc=true，官服飞德套装类）例外：只发放礼盒本体，玩家
+// 4/8 使用时才拆开；饵料盒（ieopbeejfmc 为空）维持购买即展开，与官服
+// 真实报文行为一致（饵料盒购买回执 804 的 f2 直接携带内容物）。
 func (s *Server) prepareStoreGoods(ctx context.Context, uid int64, itemID string) (items []*store.Item, isBundle bool, err error) {
 	def, err := s.DB.GetItemDefByItemID(ctx, itemID)
 	if err != nil || def == nil {
 		return nil, false, fmt.Errorf("无定义 %s", itemID)
 	}
 	if def.Category == bundleCategory {
+		if bundleOpenable(def) {
+			it, err := s.prepareNewItem(ctx, uid, itemID, "backpack", 1, "")
+			return []*store.Item{it}, true, err
+		}
 		items, err = s.prepareBundleItems(ctx, uid, itemID, "backpack", 1)
 		return items, true, err
 	}

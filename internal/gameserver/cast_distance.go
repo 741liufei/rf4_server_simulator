@@ -351,13 +351,10 @@ func castReelTypeFactor(reelType int64) float64 {
 	}
 }
 
+// castPlayerStateFactor 玩家状态修正器：精力/饱食度越低抛得越近。
+// 0 值是真实空状态，按 0 参与加权、落到 0.70 下限；
+// 不再把 <=0 重置为默认值（旧边界会把真·空状态当成满状态）。
 func castPlayerStateFactor(primary, secondary float64) float64 {
-	if primary <= 0 {
-		primary = defaultPlayerConditionPrimary
-	}
-	if secondary <= 0 {
-		secondary = defaultPlayerConditionSecondary
-	}
 	state := 0.55*(primary/defaultPlayerConditionPrimary) +
 		0.45*(secondary/defaultPlayerConditionSecondary)
 	return clampFloat(state, 0.70, 1.03)
