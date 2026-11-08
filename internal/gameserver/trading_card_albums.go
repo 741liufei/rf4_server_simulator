@@ -11,20 +11,19 @@ import (
 )
 
 func registerTradingCardHandlers(d *Dispatch) {
-	d.Register(27, 1, hTradingCardUnavailable)
+	d.Register(27, 1, hTradingCardSell)
 	d.Register(27, 2, hTradingCardAdd)
 	d.Register(27, 3, hTradingCardRemove)
-	d.Register(27, 4, hTradingCardUnavailable)
-	for _, sub := range []uint8{2, 3} {
+	d.Register(27, 4, hTradingCardLaminate)
+	for _, sub := range []uint8{1, 2, 3} {
 		d.RegisterResponseContract(27, sub, ResponseContractRule{
 			Kind: proto.KindObj, TypeIDs: []uint32{800}, Classes: []string{"dlbahppbdad"},
 		})
 	}
-}
-
-func hTradingCardUnavailable(ctx *Ctx) ([]byte, bool) {
-	ctx.ReplyFailure("System.NotSupportedException", "卡片覆膜和卡册奖励暂未开放")
-	return nil, true
+	// 27/4 塑封响应 = llgjfoldbcc（pcnefbpgdhl 派生 + f0 奖励描述数组）。
+	d.RegisterResponseContract(27, 4, ResponseContractRule{
+		Kind: proto.KindObj, TypeIDs: []uint32{809}, Classes: []string{"gglppphenoi"},
+	})
 }
 
 func hTradingCardAdd(ctx *Ctx) ([]byte, bool) {
@@ -150,6 +149,10 @@ func (s *Server) changeTradingCardAlbum(ctx *Ctx, deckKey, deckGUID, cardGUID st
 	if err != nil || deck == nil || deck.WireClass != deckClass || deck.Container != tradingCardContainer ||
 		(add && deckKey != "" && deck.ItemID != deckKey) {
 		return nil, fmt.Errorf("卡册不存在或不属于当前玩家")
+	}
+	// 塑封后的卡册冻结：入册/取回一律拒绝（27/4 塑封语义）。
+	if sealedFields, serr := FieldsFromJSON(deck.FieldsJSON); serr == nil && deckSealed(sealedFields) > 0 {
+		return nil, fmt.Errorf("卡册已塑封")
 	}
 	cards, err := cardsInDeck(deck)
 	if err != nil {

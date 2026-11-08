@@ -433,7 +433,11 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	}
 	if hasFish && res.droppedCardGUID != "" {
 		if card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID); err == nil && card.UID == uid && card.Container == tradingCardContainer {
-			ctx.AfterResponse(func() { s.pushItemUpdate(uid, card) })
+			// 单条 4/22 增量不足以刷新开着的卡牌列表（upsert 不替换本地已有
+			// 物品、视图重建滞后一代，2026-11-08 实机）：改走收藏册全量先删
+			// 后推两代重同步（见 trading_card_sync.go）。
+			sess := ctx.Sess
+			ctx.AfterResponse(func() { s.resyncTradingCardsTwice(sess, uid) })
 		}
 	}
 	// 收竿时补挂同种库存，供客户端校验下一次抛竿；搏鱼中不补挂。
