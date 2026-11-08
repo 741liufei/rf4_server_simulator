@@ -6,6 +6,9 @@ type fishQueryCapture struct {
 	fish                                                 string
 	grade                                                int64
 	selection, acceptance, gradeShare, fishShare, chance float64
+	regional                                             bool
+	regionalWeights                                      []fishQueryRegionalWeight
+	biteProbability                                      float64
 }
 
 // captureFishQuery stops before production RNG, fish creation and bait use.
@@ -48,6 +51,13 @@ func (s *Server) captureFishQuery(keys []string, weights []float64, interests ma
 			p = math.Min(.95, p)
 		}
 		q.chance = p * q.selection * q.acceptance * q.gradeShare
+		if q.regional {
+			q.biteProbability = p
+			q.regionalWeights = make([]fishQueryRegionalWeight, len(keys))
+			for j, key := range keys {
+				q.regionalWeights[j] = fishQueryRegionalWeight{key: key, weight: valid[j], acceptance: accepts[j]}
+			}
+		}
 		return
 	}
 }

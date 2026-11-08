@@ -412,17 +412,7 @@ func (s *Server) biteDelayInWeather(st *FishState, weather fishingWeather, now t
 	weatherDelay := s.weatherBiteDelayFactor(st, weather, now)
 	if st != nil && rigTypeLureFamily[st.RigType] {
 		d := (1.5 + rand.Float64()*(6.0-1.5)) * weatherDelay
-		d *= bonus.BiteSpeed
-		if d < 0.8 {
-			d = 0.8
-		}
-		if capS := cfg.lureMax; capS > 0 && d > capS {
-			d = capS
-		}
-		if cfg.scale != 1.0 {
-			d *= cfg.scale
-		}
-		return math.Max(0.8, d)
+		return lureBiteDelay(d, bonus.BiteSpeed, cfg.lureMax, cfg.scale)
 	}
 	d := officialPushDelay() * weatherDelay
 	return standardBiteDelay(d, bonus.BiteSpeed, cfg.maxDelay, cfg.scale)
@@ -473,6 +463,14 @@ func standardBiteDelay(sample, biteSpeed, capS, scale float64) float64 {
 		d *= scale
 	}
 	return math.Max(0.05, d)
+}
+
+func lureBiteDelay(sample, biteSpeed, capS, scale float64) float64 {
+	d := math.Max(.8, sample*biteSpeed)
+	if capS > 0 && d > capS {
+		d = capS
+	}
+	return math.Max(.8, d*scale)
 }
 
 // biteProbabilityForLoc 上鱼概率（默认 1.0 每杆必出）。后台鱼口覆盖优先。
@@ -824,7 +822,9 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			interests[key] = math.Min(1, wts[i]/base[key]/maxBaitPreference)
 		}
 	}
-	if distribution {
+	// Regional queries capture bait/skill weights once, then apply the same
+	// distribution function to every region without rerunning the DB pipeline.
+	if distribution && (c.query == nil || !c.query.regional) {
 		applyFishDistribution(statLoc, keys, wts, c)
 		if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
 			return nil
@@ -1054,18 +1054,20 @@ type gradeRatioBand struct {
 	lo, hi float64
 }
 
-// sampleWeightByGradeRatio 按控制台配置的档位比例直接抽样体重。
-// 四个比例来自 tunables（grade_pct_below/qualified/trophy/super）；
-// 鱼种缺某一档阈值时，其份额按其余可用档位归一化。
-// 返回 (0,false) 表示未启用或没有可用档位，调用方退回对数正态标定；
-// 返回 (0,true) 表示当前钓组够不到该鱼种，按空竿处理。
-func (s *Server) sampleWeightByGradeRatio(l cachedGradeLines, modeMult, scale, capG float64) (int64, bool) {
+// Shared deterministic bands for grade-ratio sampling and read-only inspection.
+type fishGradeRatioModel struct {
+	bands              []gradeRatioBand
+	weights            []float64
+	total, scale, capG float64
+}
+
+func (s *Server) gradeRatioModel(l cachedGradeLines, modeMult, scale, capG float64) (fishGradeRatioModel, bool) {
 	if s.tunableF("grade_ratio_enabled", 0) != 1 {
-		return 0, false
+		return fishGradeRatioModel{}, false
 	}
 	// 缩放参数不可表示（NaN/Inf/<=0）时按"不可钓"处理，避免溢出成 MinInt64。
 	if math.IsNaN(scale) || math.IsInf(scale, 0) || scale <= 0 {
-		return 0, true
+		return fishGradeRatioModel{}, true
 	}
 	var vf, trof, supf float64
 	if l.val != nil {
@@ -1104,7 +1106,7 @@ func (s *Server) sampleWeightByGradeRatio(l cachedGradeLines, modeMult, scale, c
 		bands = append(bands, gradeRatioBand{4, supf, supf * 1.15}) // 蓝冠
 	}
 	if len(bands) == 0 {
-		return 0, false
+		return fishGradeRatioModel{}, false
 	}
 	// 装备上限远低于该鱼种奖杯线（< 7.2%，与旧标定 lo=M*0.12 同量级）时，
 	// 认为该鱼种在当前钓组下不可钓，交给上层换鱼种或空竿。
@@ -1114,7 +1116,7 @@ func (s *Server) sampleWeightByGradeRatio(l cachedGradeLines, modeMult, scale, c
 			ref = supf
 		}
 		if ref > 0 && capG/scale < ref*0.072 {
-			return 0, true
+			return fishGradeRatioModel{}, true
 		}
 	}
 	w := map[int64]float64{
@@ -1144,8 +1146,17 @@ func (s *Server) sampleWeightByGradeRatio(l cachedGradeLines, modeMult, scale, c
 		total += w[b.grade]
 	}
 	if len(usable) == 0 || total <= 0 {
-		return 0, false
+		return fishGradeRatioModel{}, false
 	}
+	return fishGradeRatioModel{bands: usable, weights: wts, total: total, scale: scale, capG: capG}, true
+}
+
+func (s *Server) sampleWeightByGradeRatio(l cachedGradeLines, modeMult, scale, capG float64) (int64, bool) {
+	model, handled := s.gradeRatioModel(l, modeMult, scale, capG)
+	if !handled || model.total <= 0 {
+		return 0, handled
+	}
+	usable, wts, total := model.bands, model.weights, model.total
 	r := rand.Float64() * total
 	idx := len(usable) - 1
 	for i, ww := range wts {

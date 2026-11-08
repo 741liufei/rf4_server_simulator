@@ -9,16 +9,16 @@ import (
 
 func TestFishQueryReplyCompactReference(t *testing.T) {
 	result := &FishQueryResponse{AsOf: "2026-11-08T05:38:00Z", Plans: []FishQueryPlan{
-		{MapName: "旧奥斯特罗格湖", BaitName: "蚯蚓", RigName: "浮钓", Chance: .183,
+		{MapName: "旧奥斯特罗格湖", BaitName: "蚯蚓", RigName: "浮钓", Chance: .183, TheoreticalPerHour: 65.88,
 			References: []FishQueryReference{{Coordinate: "45:12", Catches: 100}}},
-		{MapName: "旧奥斯特罗格湖", BaitName: "蛆", RigName: "底钓", Chance: .125,
+		{MapName: "旧奥斯特罗格湖", BaitName: "蛆", RigName: "底钓", Chance: .125, TheoreticalPerHour: 45,
 			References: []FishQueryReference{{Coordinate: "45:12", Catches: 100}}},
 	}}
 	want := "旧奥斯特罗格湖 · 河鲈\n" +
-		"1. 蚯蚓 · 浮钓 · 18.30%\n" +
-		"2. 蛆 · 底钓 · 12.50%\n" +
+		"1. 蚯蚓 · 浮钓 · 理论 65.88条/小时\n" +
+		"2. 蛆 · 底钓 · 理论 45.00条/小时\n" +
 		"攻略参考点：45:12（未参与概率计算）\n" +
-		"概率：模拟器当前时段、单饵无窝料的单次判鱼估算。"
+		"理论速率不计搏鱼、收鱼时间。"
 	if got := formatFishQueryReply("河鲈", result); got != want {
 		t.Fatalf("reply = %q; want %q", got, want)
 	}
@@ -47,10 +47,10 @@ func TestFishQueryReplyLimitedAndNoInventedCoordinate(t *testing.T) {
 		t.Fatalf("empty reply = %s", got)
 	}
 	for range 4 {
-		result.Plans = append(result.Plans, FishQueryPlan{MapName: "测试湖", BaitName: "饵", RigName: "浮钓", Chance: .001, Action: "drift"})
+		result.Plans = append(result.Plans, FishQueryPlan{MapName: "测试湖", BaitName: "饵", RigName: "浮钓", Chance: .001, TheoreticalPerHour: .36, Action: "drift"})
 	}
 	got := formatFishQueryReply("河鲈", result)
-	if strings.Contains(got, "4.") || !strings.Contains(got, "3. 饵 · 浮钓·顺水漂流 · 0.10%") ||
+	if strings.Contains(got, "4.") || !strings.Contains(got, "3. 饵 · 浮钓·顺水漂流 · 理论 0.36条/小时") ||
 		strings.Contains(got, "参考点") || strings.Contains(got, "落点") || strings.Contains(got, "饵深") {
 		t.Fatalf("too many plans, unnecessary fields or invented position: %s", got)
 	}
@@ -59,6 +59,19 @@ func TestFishQueryReplyLimitedAndNoInventedCoordinate(t *testing.T) {
 func TestFishQueryHelpWaitNotice(t *testing.T) {
 	if !strings.Contains(fishQueryHelp, "约3秒") || !strings.Contains(fishQueryHelp, "个人消息返回") {
 		t.Fatalf("help does not explain query wait: %s", fishQueryHelp)
+	}
+}
+
+func TestFishQueryReplyExplanationsMovedToHelp(t *testing.T) {
+	result := &FishQueryResponse{WaterFiltered: true, Plans: []FishQueryPlan{{MapName: "铜湖", BaitName: "饵", RigType: 5, CoordinateKind: "inland_region", Region: &FishQueryRegion{MinX: 40, MinZ: 48, MaxX: 48, MaxZ: 56}}}}
+	got := formatFishQueryReply("绯写锦鲤", result)
+	for _, detail := range []string{"粗筛", "不保证", "五点", "混合格", "预测", "单竿"} {
+		if strings.Contains(got, detail) || !strings.Contains(fishQueryHelp, detail) {
+			t.Fatalf("detail %q should be help-only: reply=%s help=%s", detail, got, fishQueryHelp)
+		}
+	}
+	if !strings.HasSuffix(got, "理论速率不计搏鱼、收鱼时间。") {
+		t.Fatalf("missing short rate explanation: %s", got)
 	}
 }
 

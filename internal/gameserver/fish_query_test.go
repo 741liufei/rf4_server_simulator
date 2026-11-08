@@ -82,10 +82,14 @@ func TestFishQueryReadOnlyAndCatalog(t *testing.T) {
 	t.Setenv("GODEBUG", "randseednop=0")
 	s, db := seedBaitWeightTest(t)
 	const uid int64 = 1000001
+	const mapKey = "level_015_tunguska"
+	if _, err := db.SQL.Exec(`UPDATE loc_alias SET alias=? WHERE alias='level_900_rules'`, mapKey); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := db.EnsureProfile(t.Context(), uid); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetPlayerLocation(t.Context(), uid, "level_900_rules", "level_900_rules", 11); err != nil {
+	if err := db.SetPlayerLocation(t.Context(), uid, mapKey, mapKey, 11); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.SQL.Exec(`INSERT INTO spot_fish(loc,spot,fish_key,catches) VALUES('rules-test','67:57','c.roach',5)`); err != nil {
@@ -99,7 +103,7 @@ func TestFishQueryReadOnlyAndCatalog(t *testing.T) {
 	rand.Seed(314159)
 	wantNext := rand.Int63()
 	rand.Seed(314159)
-	req := FishQueryRequest{UID: uid, Fish: "c.roach", Map: "level_900_rules", Grade: 3}
+	req := FishQueryRequest{UID: uid, Fish: "c.roach", Map: mapKey, Grade: 3}
 	result, err := s.QueryFish(t.Context(), req)
 	if err != nil || len(result.Plans) == 0 {
 		t.Fatalf("query=%+v err=%v", result, err)
@@ -108,11 +112,11 @@ func TestFishQueryReadOnlyAndCatalog(t *testing.T) {
 		t.Fatal("query consumed production random numbers")
 	}
 	for _, plan := range result.Plans {
-		if plan.Map != req.Map || plan.Chance <= 0 || plan.Chance > 1 || plan.CoordinateKind != "reference_only" || plan.X != nil || len(plan.References) != 1 || plan.References[0].Coordinate != "67:57" {
+		if plan.Map != req.Map || plan.Chance <= 0 || plan.Chance > 1 || plan.CoordinateKind != "region_uniform" || plan.X != nil || plan.Region != nil || len(plan.References) != 0 {
 			t.Fatalf("invalid plan or invented world coordinates: %+v", plan)
 		}
 	}
-	if result.Maps != 1 || result.BaitGroups > 48 || result.Evaluated > 96 {
+	if result.Maps != 1 || result.BaitGroups > 48 || result.Evaluated > 96 || result.CandidateRegions != 0 {
 		t.Fatalf("query exceeded candidate bounds: %+v", result)
 	}
 	if key, err := s.resolveFishQuerySpecies(t.Context(), "常见拟鲤"); err != nil || key != "c.roach" {
@@ -124,14 +128,14 @@ func TestFishQueryReadOnlyAndCatalog(t *testing.T) {
 	if _, err := s.resolveFishQuerySpecies(t.Context(), "%"); err == nil {
 		t.Fatal("punctuation matched a fish")
 	}
-	if reply := s.fishQueryReply(t.Context(), &Session{Srv: s, Userid: uid}, "常见拟鲤 level_900_rules"); !strings.Contains(reply, "rules-test") || !strings.Contains(reply, "67:57") {
+	if reply := s.fishQueryReply(t.Context(), &Session{Srv: s, Userid: uid}, "常见拟鲤 "+mapKey); !strings.Contains(reply, "rules-test") || !strings.Contains(reply, "鱼群分布未开启") || strings.Contains(reply, "67:57") {
 		t.Fatalf("reply=%s", reply)
 	}
 	req.Map = ""
 	if _, err := s.QueryFish(t.Context(), req); err == nil {
 		t.Fatal("query accepted an unbounded map search")
 	}
-	req.Map, req.Fish = "level_900_rules", "absent-fish"
+	req.Map, req.Fish = mapKey, "absent-fish"
 	if empty, err := s.QueryFish(t.Context(), req); err != nil || len(empty.Plans) != 0 {
 		t.Fatalf("absent fish=%+v err=%v", empty, err)
 	}

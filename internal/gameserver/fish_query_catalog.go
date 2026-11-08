@@ -31,6 +31,10 @@ func (s *Server) fishQueryMaps(ctx context.Context, req FishQueryRequest, c fish
 		if _, ok := names[req.Map]; !ok {
 			return nil, fmt.Errorf("不支持的地图")
 		}
+		_, supported := fishQueryRegionScenes[req.Map]
+		if req.X == nil && !sonarChartLevel(req.Map) && !supported {
+			return nil, fmt.Errorf("%w：%s", errFishQueryRegionMapUnsupported, names[req.Map])
+		}
 	}
 	current, err := s.DB.GetPlayerLocation(ctx, req.UID)
 	if err != nil {
@@ -52,16 +56,25 @@ func (s *Server) fishQueryMaps(ctx context.Context, req FishQueryRequest, c fish
 			return nil, err
 		}
 		eligible := false
+		coarseWeights := make(map[string]float64, len(roster))
 		for _, fish := range roster {
+			coarseWeights[fish.FishKey] = fish.Catches
 			if fish.FishKey == req.Fish {
 				eligible = true
-				break
 			}
 		}
 		if ovs, e := s.DB.FishWeightOverrides(ctx, statLoc); e != nil {
 			return nil, e
-		} else if ov, ok := ovs[req.Fish]; ok && ov.Enabled && ov.Weight > 0 {
-			eligible = true
+		} else {
+			for fish, ov := range ovs {
+				coarseWeights[fish] = 0
+				if ov.Enabled && ov.Weight > 0 {
+					coarseWeights[fish] = ov.Weight
+					if fish == req.Fish {
+						eligible = true
+					}
+				}
+			}
 		}
 		if len(roster) == 0 {
 			pool := fishPools[key]
@@ -151,10 +164,29 @@ func (s *Server) fishQueryMaps(ctx context.Context, req FishQueryRequest, c fish
 				loc.points = loc.points[:6]
 			}
 		} else {
-			kind := "unavailable"
-			if len(loc.references) > 0 {
-				kind = "reference_only"
+			loc.regions, err = newFishQueryRegions(statLoc, fishQueryRegionScenes[key], c.now, s.tunableF("fish_distribution_enabled", 0) == 1)
+			if err != nil {
+				return nil, err
 			}
+			if loc.regions.enabled {
+				water, err := loadFishQueryWater()
+				if err != nil {
+					return nil, err
+				}
+				if water != nil {
+					if err := loc.regions.filterWater(water.Maps[key]); err != nil {
+						return nil, err
+					}
+				}
+			}
+			if err := loc.regions.shortlist(ctx, req.Fish, coarseWeights); err != nil {
+				return nil, err
+			}
+			kind := "region_uniform"
+			if loc.regions.enabled {
+				kind = "inland_region"
+			}
+			loc.references = nil
 			loc.points = []fishQueryPoint{{kind: kind}}
 		}
 		if len(loc.points) > 0 {

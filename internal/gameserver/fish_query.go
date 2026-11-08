@@ -27,57 +27,65 @@ type FishQueryReference struct {
 }
 
 type FishQueryPlan struct {
-	Map             string               `json:"map"`
-	MapName         string               `json:"map_name"`
-	Scene           string               `json:"scene"`
-	Bait            string               `json:"bait"`
-	BaitName        string               `json:"bait_name"`
-	EquivalentBaits int                  `json:"equivalent_baits"`
-	RigType         int64                `json:"rig_type"`
-	RigName         string               `json:"rig_name"`
-	DepthCM         int64                `json:"depth_cm"`
-	LureLayer       float64              `json:"lure_layer"`
-	Action          string               `json:"action"`
-	OnBoat          bool                 `json:"on_boat"`
-	At              string               `json:"at"`
-	GameHour        int64                `json:"game_hour"`
-	GameMinute      int64                `json:"game_minute"`
-	WaitSeconds     int64                `json:"wait_seconds"`
-	X               *float64             `json:"x"`
-	Z               *float64             `json:"z"`
-	Zone            int                  `json:"zone"`
-	CoordinateKind  string               `json:"coordinate_kind"`
-	References      []FishQueryReference `json:"references"`
-	Chance          float64              `json:"chance"`
-	FishShare       float64              `json:"fish_share"`
-	Selection       float64              `json:"selection"`
-	Acceptance      float64              `json:"acceptance"`
-	GradeShare      float64              `json:"grade_share"`
-	BaitTier        int64                `json:"bait_tier"`
-	WeightMode      float64              `json:"weight_mode"`
-	CapKg           float64              `json:"cap_kg"`
-	Weather         map[string]any       `json:"weather"`
+	Map                  string               `json:"map"`
+	MapName              string               `json:"map_name"`
+	Scene                string               `json:"scene"`
+	Bait                 string               `json:"bait"`
+	BaitName             string               `json:"bait_name"`
+	EquivalentBaits      int                  `json:"equivalent_baits"`
+	RigType              int64                `json:"rig_type"`
+	RigName              string               `json:"rig_name"`
+	DepthCM              int64                `json:"depth_cm"`
+	LureLayer            float64              `json:"lure_layer"`
+	Action               string               `json:"action"`
+	OnBoat               bool                 `json:"on_boat"`
+	At                   string               `json:"at"`
+	GameHour             int64                `json:"game_hour"`
+	GameMinute           int64                `json:"game_minute"`
+	WaitSeconds          int64                `json:"wait_seconds"`
+	X                    *float64             `json:"x"`
+	Z                    *float64             `json:"z"`
+	Zone                 int                  `json:"zone"`
+	CoordinateKind       string               `json:"coordinate_kind"`
+	Region               *FishQueryRegion     `json:"region,omitempty"`
+	References           []FishQueryReference `json:"references"`
+	Chance               float64              `json:"chance"`
+	MeanDelaySeconds     float64              `json:"mean_delay_seconds"`
+	TheoreticalPerMinute float64              `json:"theoretical_per_minute"`
+	TheoreticalPerHour   float64              `json:"theoretical_per_hour"`
+	FishShare            float64              `json:"fish_share"`
+	Selection            float64              `json:"selection"`
+	Acceptance           float64              `json:"acceptance"`
+	GradeShare           float64              `json:"grade_share"`
+	BaitTier             int64                `json:"bait_tier"`
+	WeightMode           float64              `json:"weight_mode"`
+	CapKg                float64              `json:"cap_kg"`
+	Weather              map[string]any       `json:"weather"`
 }
 
 type FishQueryResponse struct {
-	Fish       string             `json:"fish"`
-	Grade      int64              `json:"grade"`
-	AsOf       string             `json:"as_of"`
-	Flags      map[string]float64 `json:"flags"`
-	Plans      []FishQueryPlan    `json:"plans"`
-	Evaluated  int                `json:"evaluated"`
-	BaitItems  int                `json:"bait_items"`
-	BaitGroups int                `json:"bait_groups"`
-	Maps       int                `json:"maps"`
-	Complete   bool               `json:"complete"`
-	Elapsed    float64            `json:"elapsed_seconds"`
-	Notes      []string           `json:"notes"`
+	Fish             string             `json:"fish"`
+	Grade            int64              `json:"grade"`
+	AsOf             string             `json:"as_of"`
+	Flags            map[string]float64 `json:"flags"`
+	Plans            []FishQueryPlan    `json:"plans"`
+	Evaluated        int                `json:"evaluated"`
+	Regions          int                `json:"regions"`
+	CandidateRegions int                `json:"candidate_regions"`
+	WaterFiltered    bool               `json:"water_filtered"`
+	BaitItems        int                `json:"bait_items"`
+	BaitGroups       int                `json:"bait_groups"`
+	Maps             int                `json:"maps"`
+	Complete         bool               `json:"complete"`
+	Elapsed          float64            `json:"elapsed_seconds"`
+	Notes            []string           `json:"notes"`
 }
 
 type fishQueryMap struct {
 	id, name, scene string
 	points          []fishQueryPoint
 	references      []FishQueryReference
+	regions         *fishQueryRegions
 }
 type fishQueryPoint struct {
 	x, z *float64
@@ -124,6 +132,16 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 	for key, def := range map[string]float64{"fish_bait_rules_enabled": 0, "fish_distribution_enabled": 0, "fish_weather_enabled": 0, "fish_ecology_enabled": 0, "bait_pref_scale": 1, "bait_pref_weight_shift": 1, "fish_weight_scale": 1, "fish_weight_cap": 0, "hook_entry_cap": 0, "bite_probability": 1} {
 		response.Flags[key] = s.tunableF(key, def)
 	}
+	maps, err := s.fishQueryMaps(ctx, req, base)
+	if err != nil {
+		return nil, err
+	}
+	response.Maps = len(maps)
+	if len(maps) == 0 {
+		response.Elapsed = time.Since(started).Seconds()
+		response.Notes = []string{"当前地图的服务端鱼种名册没有目标鱼；可指定其他地图再查。"}
+		return response, nil
+	}
 	capKg := 0.0
 	var allowedRigs []int64
 	if req.Gear != "" {
@@ -143,16 +161,6 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 	} else if response.Flags["fish_weight_cap"] > 0 || response.Flags["hook_entry_cap"] > 0 {
 		return nil, fmt.Errorf("装备限重已开启，请先选择鱼竿")
 	}
-	maps, err := s.fishQueryMaps(ctx, req, base)
-	if err != nil {
-		return nil, err
-	}
-	response.Maps = len(maps)
-	if len(maps) == 0 {
-		response.Elapsed = time.Since(started).Seconds()
-		response.Notes = []string{"当前地图的服务端鱼种名册没有目标鱼；可指定其他地图再查。"}
-		return response, nil
-	}
 	baits, count, err := s.fishQueryBaits(ctx, req, base, response.Flags)
 	if err != nil {
 		return nil, err
@@ -162,6 +170,11 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 	weatherSession := &Session{Srv: s}
 	for _, loc := range maps {
 		weatherSession.rememberWeather(loc.id, started.Unix())
+		if loc.regions != nil {
+			response.Regions += loc.regions.scanned
+			response.CandidateRegions += len(loc.regions.areas)
+			response.WaterFiltered = response.WaterFiltered || loc.regions.waterFiltered
+		}
 	}
 	happy, err := s.DB.GetHappyHourStatus(ctx, req.UID, started)
 	if err != nil {
@@ -174,7 +187,7 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 	weatherCache := map[weatherKey]fishingWeather{}
 	names, _ := s.cachedFishNames(ctx, base)
 	rule := fishBaitRules[ruleName(names[req.Fish])]
-	evaluate := func(loc fishQueryMap, bait fishQueryBait, point fishQueryPoint, at time.Time, rig int64, depth int64, layer float64, action string, mask uint32) FishQueryPlan {
+	evaluate := func(loc fishQueryMap, bait fishQueryBait, point fishQueryPoint, at time.Time, rig int64, depth int64, layer float64, action string, mask uint32) (FishQueryPlan, error) {
 		c := base
 		c.loc, c.baits, c.now, c.rigType, c.depthCM, c.lureLayer, c.lureAction, c.lureMask = loc.scene, []string{bait.id}, at, rig, depth, layer, action, mask
 		c.onBoat, c.boatKnown = sonarChartLevel(loc.id), true
@@ -197,12 +210,25 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 			weatherCache[wk] = w
 		}
 		c.weather = w
-		c.query = &fishQueryCapture{fish: req.Fish, grade: req.Grade}
+		c.query = &fishQueryCapture{fish: req.Fish, grade: req.Grade, regional: loc.regions != nil}
 		s.rollFishWithRules(loc.scene, bait.id, capKg, bonus, c)
 		response.Evaluated++
+		var region *FishQueryRegion
+		if loc.regions != nil {
+			var err error
+			region, err = loc.regions.best(ctx, c.query)
+			if err != nil {
+				return FishQueryPlan{}, err
+			}
+			response.Evaluated += max(0, len(loc.regions.areas)-1)
+		}
 		_, hour := worldDayAndHour(at.Unix())
 		minute := ((at.Unix() - worldDayEpochUnix) % realSecPerGameHour) * 60 / realSecPerGameHour
-		return FishQueryPlan{Map: loc.id, MapName: loc.name, Scene: loc.scene, Bait: bait.id, BaitName: bait.name, EquivalentBaits: bait.equivalents, RigType: rig, RigName: rigNameForType(rig), DepthCM: depth, LureLayer: layer, Action: action, OnBoat: c.onBoat, At: at.UTC().Format(time.RFC3339), GameHour: hour, GameMinute: minute, WaitSeconds: int64(at.Sub(started).Seconds()), X: point.x, Z: point.z, Zone: point.zone, CoordinateKind: point.kind, References: loc.references, Chance: c.query.chance, FishShare: c.query.fishShare, Selection: c.query.selection, Acceptance: c.query.acceptance, GradeShare: c.query.gradeShare, BaitTier: s.cachedBaitTiers(ctx, base, bait.id)[req.Fish], WeightMode: s.baitWeightModeForRoll(req.Fish, []string{bait.id}, base), CapKg: capKg, Weather: map[string]any{"known": w.known, "kind": w.kind, "air_temp": roundTo(w.airTemp, 1), "wind": roundTo(w.wind, 2)}}
+		plan := FishQueryPlan{Map: loc.id, MapName: loc.name, Scene: loc.scene, Bait: bait.id, BaitName: bait.name, EquivalentBaits: bait.equivalents, RigType: rig, RigName: rigNameForType(rig), DepthCM: depth, LureLayer: layer, Action: action, OnBoat: c.onBoat, At: at.UTC().Format(time.RFC3339), GameHour: hour, GameMinute: minute, WaitSeconds: int64(at.Sub(started).Seconds()), X: point.x, Z: point.z, Zone: point.zone, CoordinateKind: point.kind, Region: region, References: loc.references, Chance: c.query.chance, FishShare: c.query.fishShare, Selection: c.query.selection, Acceptance: c.query.acceptance, GradeShare: c.query.gradeShare, BaitTier: s.cachedBaitTiers(ctx, base, bait.id)[req.Fish], WeightMode: s.baitWeightModeForRoll(req.Fish, []string{bait.id}, base), CapKg: capKg, Weather: map[string]any{"known": w.known, "kind": w.kind, "air_temp": roundTo(w.airTemp, 1), "wind": roundTo(w.wind, 2)}}
+		// Candidate bait, not the selected rod's currently equipped bait.
+		state := &FishState{Loc: loc.scene, Bait: bait.id, RigType: rig, DepthCM: depth, LureLayer: layer, LureAction: action, Bonus: bonus}
+		plan.setTheoreticalRate(s.fishQueryMeanDelay(state, w, at))
+		return plan, nil
 	}
 	var candidates []FishQueryPlan
 	for _, loc := range maps {
@@ -242,22 +268,22 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 				// Every shortlisted bait sees every candidate point, including
 				// points where the first chart zone has zero target probability.
 				for _, point := range loc.points {
-					plan := evaluate(loc, bait, point, started, rig, depth, layer, action, mask)
-					if plan.Chance > best.Chance {
+					plan, err := evaluate(loc, bait, point, started, rig, depth, layer, action, mask)
+					if err != nil {
+						return nil, err
+					}
+					if fishQueryPlanBetter(plan, best) {
 						best = plan
 					}
 				}
-				if best.Chance > 0 {
+				if best.TheoreticalPerHour > 0 {
 					candidates = append(candidates, best)
 				}
 			}
 		}
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if math.Abs(candidates[i].Chance-candidates[j].Chance) < 1e-12 {
-			return candidates[i].WaitSeconds < candidates[j].WaitSeconds
-		}
-		return candidates[i].Chance > candidates[j].Chance
+		return fishQueryPlanBetter(candidates[i], candidates[j])
 	})
 	seen := map[string]bool{}
 	for _, plan := range candidates {
@@ -271,9 +297,19 @@ func (s *Server) QueryFish(ctx context.Context, req FishQueryRequest) (*FishQuer
 		}
 	}
 	response.Elapsed = time.Since(started).Seconds()
-	response.Notes = []string{"概率按模拟器一次判鱼估计，不是官服概率；不包含窝料、刺鱼、跑鱼、收鱼和鱼竿操作。", "快速推荐只查指定地图和当前时段：按目标鱼饵效档位及观测数筛选天然饵、拟饵各最多24组，再用实际服务端规则计算；不是全饵、全地图或全天候最优解。", "海图比较最多6个有依据的候选落点；指定鱼饵可单独精算。海钓假设已上船，内陆默认岸钓。", "世界X/Z是抛竿落点，不是角色站位；内陆攻略坐标只作历史观测参考，未换算成世界坐标。", "钓深、水层、底质与水温使用模拟器模型；使用单饵与代表动作，未穷举双饵、多钩和全部钓组。"}
-	if response.Flags["fish_distribution_enabled"] == 1 || response.Flags["fish_ecology_enabled"] == 1 {
-		response.Notes = append(response.Notes, "内陆未输入世界坐标时，位置项按场景钓点0预估，抵达真实落点后的概率可能变化。")
+	response.Notes = []string{"理论条/小时 = 3600 × 单次目标鱼概率 ÷ 平均判鱼间隔；单竿、单饵无窝料，按当前条件折算，不是官服概率或未来一小时预测。不含客户端等待、占竿、搏鱼、收鱼、重抛及落水就位保护，非实际鱼获。", "只查指定地图、当前时段，比较天然饵及拟饵各最多24组与代表钓法；不是全饵、全天候最优解。", "海图比较最多6个有依据的落点，假设已上船；内陆默认岸钓。"}
+	if maps[0].regions != nil {
+		response.Notes = append(response.Notes, "区域范围采用游戏显示坐标，左闭右开；代表鱼饵落入的区域，不是角色站位或指定落点。忽略局部水深、底质、水流和结构，实际落点概率会有差异。")
+		if response.WaterFiltered {
+			response.Notes = append(response.Notes, "已按中心与四角五点做水陆粗筛；任一点有水即保留，混合格仍可能含陆地，不保证可达。")
+		} else if maps[0].regions.enabled {
+			response.Notes = append(response.Notes, "缺少本图水陆数据，未排除陆地，不保证可达。")
+		}
+		if !maps[0].regions.enabled {
+			response.Notes = append(response.Notes, "鱼群分布未开启，不推荐区域；仅比较饵料和钓法。")
+		} else {
+			response.Notes = append(response.Notes, fmt.Sprintf("先忽略饵料粗筛最多%d个区域，再比较候选饵料和钓法；按理论条/小时排序，不保证全图最佳组合。", fishQueryCoarseRegionLimit))
+		}
 	}
 	return response, nil
 }

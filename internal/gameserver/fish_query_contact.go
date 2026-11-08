@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -46,7 +47,10 @@ func fishQueryContactCard() *proto.Value {
 	})
 }
 
-const fishQueryHelp = "发送：鱼名 [地图]\n例如：河鲈；河鲈 下通古斯卡河。\n鱼名支持拼音前缀，如“圆腹”或“yuanfu”；多种匹配直接取第一种。\n默认当前地图，最多推荐三组鱼饵和钓法；概率是当前时段、无窝料的模拟器估算。\n查询一般很快；复杂地图请预留约3秒，结果通过个人消息返回。"
+const fishQueryHelp = "发送：鱼名 [地图]\n例如：河鲈；河鲈 下通古斯卡河。\n鱼名支持拼音前缀，如“圆腹”或“yuanfu”；多种匹配直接取第一种。\n默认当前地图，最多推荐三组区域、鱼饵和钓法。仅支持已核对坐标的地图；按当前条件估算理论条/小时，不含客户端等待、非实际鱼获。\n查询一般很快；复杂地图请预留约3秒，结果通过个人消息返回。\n\n" +
+	"计算说明：单竿、单饵无窝料，先粗筛区域再配饵，不保证全图最优。区域估算不逐点计算水深、底质和水流。\n" +
+	"水陆说明：有本图数据时做中心与四角五点粗筛，任一点有水即保留；混合格可能含陆地，不保证可达。缺少本图数据时未排除陆地。\n" +
+	"理论速率不含客户端等待、占竿、搏鱼、收鱼、重抛及落水就位保护，不是实际鱼获或未来一小时预测。"
 const fishQueryBudget = 3 * time.Second
 const fishQueryTimeoutReply = "查询超时（计算预算3秒），请稍后重试。"
 
@@ -87,6 +91,13 @@ func (s *Server) fishQueryReply(ctx context.Context, sess *Session, text string)
 	}
 	result, err := s.QueryFish(ctx, req)
 	if err != nil {
+		if errors.Is(err, errFishQueryRegionMapUnsupported) {
+			return err.Error()
+		}
+		if errors.Is(err, errFishQueryWaterInvalid) {
+			s.log.Warn("查鱼水陆数据无效", "err", err)
+			return errFishQueryWaterInvalid.Error()
+		}
 		s.log.Warn("查鱼失败", "uid", req.UID, "err", err)
 		if ctx.Err() != nil {
 			return fishQueryTimeoutReply
@@ -106,6 +117,7 @@ func formatFishQueryReply(fishName string, result *FishQueryResponse) string {
 	}
 	lines := []string{result.Plans[0].MapName + " · " + fishName}
 	reference := ""
+	uniform := false
 	for i, plan := range result.Plans[:min(3, len(result.Plans))] {
 		method := fishQueryMethodLabel(plan)
 		if plan.Action == "drift" {
@@ -113,8 +125,10 @@ func formatFishQueryReply(fishName string, result *FishQueryResponse) string {
 		} else if plan.Action == "jig" {
 			method += "·阶梯"
 		}
-		lines = append(lines, fmt.Sprintf("%d. %s · %s · %.2f%%", i+1, plan.BaitName, method, plan.Chance*100))
-		if plan.X != nil && plan.Z != nil {
+		lines = append(lines, fmt.Sprintf("%d. %s · %s · 理论 %.2f条/小时", i+1, plan.BaitName, method, plan.TheoreticalPerHour))
+		if plan.Region != nil {
+			lines = append(lines, "   "+formatFishQueryRegion(*plan.Region))
+		} else if plan.X != nil && plan.Z != nil {
 			point := fmt.Sprintf("   世界落点 X %.1f / Z %.1f", *plan.X, *plan.Z)
 			if plan.Zone > 0 {
 				point += fmt.Sprintf("（海图区%d）", plan.Zone)
@@ -123,12 +137,29 @@ func formatFishQueryReply(fishName string, result *FishQueryResponse) string {
 		} else if reference == "" && len(plan.References) > 0 {
 			reference = plan.References[0].Coordinate
 		}
+		uniform = uniform || plan.CoordinateKind == "region_uniform"
 	}
 	if reference != "" {
 		lines = append(lines, "攻略参考点："+reference+"（未参与概率计算）")
 	}
-	lines = append(lines, "概率：模拟器当前时段、单饵无窝料的单次判鱼估算。")
+	if uniform {
+		lines = append(lines, "鱼群分布未开启，不推荐区域。")
+	}
+	lines = append(lines, "理论速率不计搏鱼、收鱼时间。")
 	return strings.Join(lines, "\n")
+}
+
+func formatFishQueryRegion(r FishQueryRegion) string {
+	var labels [4]string
+	approx := ""
+	for i, value := range [4]float64{r.MinX, r.MinZ, r.MaxX, r.MaxZ} {
+		rounded := math.Round(value*100) / 100
+		if math.Abs(rounded-value) > 1e-9 {
+			approx = "约"
+		}
+		labels[i] = strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", rounded), "0"), ".")
+	}
+	return fmt.Sprintf("区域%s %s:%s～%s:%s（上限不含）", approx, labels[0], labels[1], labels[2], labels[3])
 }
 
 func fishQueryMethodLabel(plan FishQueryPlan) string {
