@@ -1,11 +1,146 @@
 package gameserver
 
 import (
+	"context"
+	"math"
+	"math/rand"
+	"strings"
 	"testing"
 	"time"
 
 	"rf4server/internal/proto"
 )
+
+func TestFishQueryMatchesProduction(t *testing.T) {
+	t.Setenv("GODEBUG", "randseednop=0")
+	for _, fallback := range []bool{false, true} {
+		for _, rules := range []string{"0", "1"} {
+			name := "database/"
+			if fallback {
+				name = "pool/"
+			}
+			t.Run(name+rules, func(t *testing.T) {
+				rand.Seed(271828)
+				s, db := seedBaitWeightTest(t)
+				for key, value := range map[string]string{"fish_bait_rules_enabled": rules, "fish_weather_enabled": rules, "fish_weight_scale": "1.25", "bite_probability": "0.6"} {
+					if err := db.TunableSet(t.Context(), key, value, "test"); err != nil {
+						t.Fatal(err)
+					}
+				}
+				s.execAdminCmd(&AdminCommand{Op: "reload_tunables"})
+				loc := "level_900_rules"
+				if fallback {
+					loc = "query-fallback"
+				}
+				bonus := neutralFishingSkillBonus()
+				bonus.TrophyLuck = .35
+				c := fishRollContext{loc: loc, now: time.Unix(1794096000, 0), cache: newFishingRollCache(), forRig: true, rigType: 1, depthCM: 150, happyBite: .05,
+					weather: fishingWeather{known: true, kind: 1, airTemp: 18, previousAirTemp: 18, wind: 2}}
+				c.skill = bonus
+				q := &fishQueryCapture{fish: "c.roach", grade: 2}
+				inspect := c
+				inspect.query = q
+				if fish := s.rollFishWithRules(loc, "rule_worm", .8, bonus, inspect); fish != nil {
+					t.Fatal("inspection generated a fish")
+				}
+				const attempts = 4000
+				matched := 0
+				for range attempts {
+					fish := s.rollFishWithRules(loc, "rule_worm", .8, bonus, c)
+					if fish != nil && fish.Species == q.fish && fish.Grade >= q.grade {
+						matched++
+					}
+				}
+				observed := .6 * float64(matched) / attempts
+				if q.chance <= 0 || math.Abs(observed-q.chance) > .025 {
+					t.Fatalf("estimated=%g observed=%g selection=%g acceptance=%g grade=%g", q.chance, observed, q.selection, q.acceptance, q.gradeShare)
+				}
+				t.Logf("estimated=%.4f sampled=%.4f", q.chance, observed)
+			})
+		}
+	}
+}
+
+func TestFishQueryCaptureUsesWeightsAndBiteGate(t *testing.T) {
+	s, db := seedBaitWeightTest(t)
+	if err := db.TunableSet(t.Context(), "bite_probability", "0.5", "test"); err != nil {
+		t.Fatal(err)
+	}
+	q := &fishQueryCapture{fish: "c.roach", grade: 1}
+	c := fishRollContext{query: q, cache: newFishingRollCache(), forRig: true}
+	law := fishWeightLaw{lower: 1, upper: 10000, scale: 1, mass: func(lo, hi float64) float64 { return hi - lo }}
+	s.captureFishQuery([]string{"c.roach", "frog"}, []float64{3, 1}, map[string]float64{"c.roach": .4, "frog": .8}, true, neutralFishingSkillBonus(), c, true, func(string) fishWeightLaw { return law })
+	if math.Abs(q.selection-.75) > 1e-12 || math.Abs(q.acceptance-.4) > 1e-12 || math.Abs(q.chance-.15) > 1e-12 {
+		t.Fatalf("wrong weighted bite probability: %+v", q)
+	}
+	if math.Abs(q.fishShare-.6) > 1e-12 {
+		t.Fatalf("wrong share among successful bites: %g", q.fishShare)
+	}
+}
+
+func TestFishQueryReadOnlyAndCatalog(t *testing.T) {
+	t.Setenv("GODEBUG", "randseednop=0")
+	s, db := seedBaitWeightTest(t)
+	const uid int64 = 1000001
+	if _, err := db.EnsureProfile(t.Context(), uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetPlayerLocation(t.Context(), uid, "level_900_rules", "level_900_rules", 11); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO spot_fish(loc,spot,fish_key,catches) VALUES('rules-test','67:57','c.roach',5)`); err != nil {
+		t.Fatal(err)
+	}
+	// query_only rejects writes even when they would be hidden inside a helper.
+	db.SQL.SetMaxOpenConns(1)
+	if _, err := db.SQL.Exec(`PRAGMA query_only=ON`); err != nil {
+		t.Fatal(err)
+	}
+	rand.Seed(314159)
+	wantNext := rand.Int63()
+	rand.Seed(314159)
+	req := FishQueryRequest{UID: uid, Fish: "c.roach", Map: "level_900_rules", Grade: 3}
+	result, err := s.QueryFish(t.Context(), req)
+	if err != nil || len(result.Plans) == 0 {
+		t.Fatalf("query=%+v err=%v", result, err)
+	}
+	if rand.Int63() != wantNext {
+		t.Fatal("query consumed production random numbers")
+	}
+	for _, plan := range result.Plans {
+		if plan.Map != req.Map || plan.Chance <= 0 || plan.Chance > 1 || plan.CoordinateKind != "reference_only" || plan.X != nil || len(plan.References) != 1 || plan.References[0].Coordinate != "67:57" {
+			t.Fatalf("invalid plan or invented world coordinates: %+v", plan)
+		}
+	}
+	if result.Maps != 1 || result.BaitGroups > 48 || result.Evaluated > 96 {
+		t.Fatalf("query exceeded candidate bounds: %+v", result)
+	}
+	if key, err := s.resolveFishQuerySpecies(t.Context(), "常见拟鲤"); err != nil || key != "c.roach" {
+		t.Fatalf("species=%s err=%v", key, err)
+	}
+	if key, err := s.resolveFishQueryMap(t.Context(), "rules-test"); err != nil || key != req.Map {
+		t.Fatalf("map=%s err=%v", key, err)
+	}
+	if _, err := s.resolveFishQuerySpecies(t.Context(), "%"); err == nil {
+		t.Fatal("punctuation matched a fish")
+	}
+	if reply := s.fishQueryReply(t.Context(), &Session{Srv: s, Userid: uid}, "常见拟鲤 level_900_rules"); !strings.Contains(reply, "rules-test") || !strings.Contains(reply, "67:57") {
+		t.Fatalf("reply=%s", reply)
+	}
+	req.Map = ""
+	if _, err := s.QueryFish(t.Context(), req); err == nil {
+		t.Fatal("query accepted an unbounded map search")
+	}
+	req.Map, req.Fish = "level_900_rules", "absent-fish"
+	if empty, err := s.QueryFish(t.Context(), req); err != nil || len(empty.Plans) != 0 {
+		t.Fatalf("absent fish=%+v err=%v", empty, err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := s.QueryFish(cancelled, req); err == nil {
+		t.Fatal("cancelled query did not stop")
+	}
+}
 
 func TestFishQueryContactAndMailReplay(t *testing.T) {
 	s, db := newProgressSrv(t)

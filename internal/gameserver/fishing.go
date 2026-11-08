@@ -881,6 +881,12 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			return nil
 		}
 	}
+	if c.query != nil {
+		s.captureFishQuery(keys, wts, interests, strict, bonus, c, true, func(key string) fishWeightLaw {
+			return s.weightLawDB(cctx, key, s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c)
+		})
+		return nil
+	}
 	for range len(keys) {
 		if !slices.ContainsFunc(wts, func(w float64) bool { return w > 0 }) {
 			return nil
@@ -1001,18 +1007,6 @@ const weightSkewK = 1.6
 // sampleWeightDB 按鱼种自然体重分布采样。
 // 在自然体重范围与装备上限的交集中按对数正态分布采样。
 func (s *Server) sampleWeightDB(ctx context.Context, key string, modeMult, scale, capG float64, c fishRollContext) int64 {
-	lines := s.cachedGradeLines(ctx, c, key)
-	val, tro, sup := lines.val, lines.trophy, lines.blue
-	var vf, trof, supf float64
-	if val != nil {
-		vf = float64(*val)
-	}
-	if tro != nil {
-		trof = float64(*tro)
-	}
-	if sup != nil {
-		supf = float64(*sup)
-	}
 	// 控制台可配置的档位比例（未达标/合格/奖杯/蓝冠）优先；
 	// 抽样与最终判档必须共用 settleStatics 同一真源，避免鱼档占比失真。
 	if s.tunableF("grade_ratio_enabled", 0) == 1 {
@@ -1022,46 +1016,8 @@ func (s *Server) sampleWeightDB(ctx context.Context, key string, modeMult, scale
 			return w
 		}
 	}
-	// 峰值 M：达标带中点（缺 val→tro*0.6→sup*0.3→250）
-	M := 250.0
-	switch {
-	case val != nil && tro != nil && trof > vf:
-		M = (vf + trof) / 2.0
-	case tro != nil:
-		M = trof * 0.6
-	case sup != nil:
-		M = supf * 0.3
-	}
-	if modeMult != 1.0 {
-		M *= modeMult // 饵效命中：峰值锚点向奖杯线右移
-	}
-	// 整体峰值向右上抬 15%，让日常鱼获里更容易出现中大个体。
-	M *= 1.15
-	// 上限 hi：蓝冠线×1.25（缺 sup→tro*1.45→M*6.0）
-	var hi float64
-	switch {
-	case sup != nil:
-		hi = supf * 1.25
-	case tro != nil:
-		hi = trof * 1.45
-	default:
-		hi = M * 6.0
-	}
-	// 下限 lo：少量"太小/不达标"个体
-	lo := M * 0.12
-	if val != nil {
-		lo = math.Min(lo, vf*0.2)
-	}
-	lo = math.Max(1.0, math.Min(lo, M*0.6))
-	if hi <= M {
-		hi = M * 1.6
-	}
-	hi = math.Max(hi, lo+1.0)
-	sd := math.Max(0.20, (math.Log(hi)-math.Log(M))/weightSkewK)
-	mu := math.Log(M) + sd*sd
-	if capG > 0 {
-		hi = math.Min(hi, capG/scale)
-	}
+	model := s.weightModelDB(ctx, key, modeMult, scale, capG, c)
+	lo, hi, mu, sd := model.lower, model.upper, model.mu, model.sd
 	if hi <= lo {
 		return 0
 	}
@@ -1333,6 +1289,23 @@ func (s *Server) rollFishPoolsWithRules(loc string, gearCapKg float64, bonus fis
 		if len(keys) == 0 {
 			return nil
 		}
+	}
+	if c.query != nil {
+		interests := map[string]float64{}
+		if strict {
+			for i, key := range keys {
+				interests[key] = math.Min(1, wts[i]/maxBaitPreference)
+			}
+		}
+		s.captureFishQuery(keys, wts, interests, strict, bonus, c, false, func(key string) fishWeightLaw {
+			for _, entry := range pool {
+				if entry.species == key {
+					return s.poolWeightLaw(entry, scale, capG, c)
+				}
+			}
+			return fishWeightLaw{}
+		})
+		return nil
 	}
 	key := weightedChoice(keys, wts)
 	if strict {
