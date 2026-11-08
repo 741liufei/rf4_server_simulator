@@ -303,6 +303,9 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		s.notifyFishKept(ctx.Sess, &kept)
 		// 钓获礼包：入护成功后按概率当场开箱（异步，避免拖慢入护回包）。
 		s.scheduleLootBox(ctx.Sess, &kept)
+		// 本尾已落 catch_log；14/4 结算卡 f7 的档案快照早于落库、不含本尾，
+		// 在此补推新档案，等级旁星号（307.f16）即时计入新奖杯鱼种。
+		ctx.Sess.Push2_1()
 		out := proto.Args(proto.S("61"))
 		if keptInNet {
 			out.Items = append(out.Items, s.buildPending25(&kept, st, keepLevel))
@@ -423,9 +426,13 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		if !replayed && pending.NamedID != "" {
 			s.DB.NamedFishNoteRecatch(cctx, pending.NamedID)
 		}
+		if !replayed {
+			// 放生同样在结算卡之后落 catch_log，补推新档案刷新等级旁星号
+			// （与 14/5 入护路径同一时机）；与放生经验是否为 0 无关。
+			ctx.Sess.Push2_1()
+		}
 		if !replayed && result.Bonus > 0 {
 			ctx.Sess.Push2_9(100, uint64(bonus))
-			ctx.Sess.Push2_1()
 			if result.LevelsGained > 0 {
 				ctx.Sess.Push2_6(max64(1, result.Level-1))
 			}
