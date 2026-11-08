@@ -392,10 +392,10 @@ func TestFightReelCachePullKgfNoSlipForSmallFish(t *testing.T) {
 func TestFightWearRolloverChargesBaseOncePerCast(t *testing.T) {
 	const rodGUID = "rod0000000000000000000000000000001"
 	st := &FishState{}
-	// 抛竿：本竿基准入账。
-	st.reelWear.markRodUsedLocked(rodGUID)
+	// 抛竿：本竿基准入账（折扣系数 1 = 非路亚钓组）。
+	st.reelWear.markRodUsedLocked(rodGUID, 1)
 	// 嘬饵否决/鱼离场重排：同一竿续段。
-	pending, has := rollFightWearLedgerLocked(st, rodGUID, false)
+	pending, has := rollFightWearLedgerLocked(st, rodGUID, false, 1)
 	if !has || !pending.BaseCharged {
 		t.Fatalf("第一段应携带每竿基准落库: has=%v base=%v", has, pending.BaseCharged)
 	}
@@ -403,24 +403,59 @@ func TestFightWearRolloverChargesBaseOncePerCast(t *testing.T) {
 		t.Fatal("重排续段不应再带每竿基准")
 	}
 	// 无战斗磨损的续段不产生落库账（修复前这里会再写一条同秒基准）。
-	if _, has := rollFightWearLedgerLocked(st, rodGUID, false); has {
+	if _, has := rollFightWearLedgerLocked(st, rodGUID, false, 1); has {
 		t.Fatal("无战斗磨损的续段不应产生落库账")
 	}
 	// 真正换竿重抛：重新扣基准。
-	rollFightWearLedgerLocked(st, rodGUID, true)
+	rollFightWearLedgerLocked(st, rodGUID, true, 1)
 	if !st.reelWear.BaseCharged {
 		t.Fatal("新竿应重新扣每竿基准")
 	}
 	// 续段里发生的战斗磨损仍要落库；这段是换竿后新竿的首段，基准随它一起落库。
 	st.reelWear.SlipWear = 0.1
-	pending, has = rollFightWearLedgerLocked(st, rodGUID, false)
+	pending, has = rollFightWearLedgerLocked(st, rodGUID, false, 1)
 	if !has || pending.SlipWear != 0.1 || !pending.BaseCharged {
 		t.Fatalf("新竿首段的战斗磨损应随基准一起落库: has=%v slip=%v base=%v",
 			has, pending.SlipWear, pending.BaseCharged)
 	}
 	// 再往后重排的续段恢复"不带基准"。
-	pending, has = rollFightWearLedgerLocked(st, rodGUID, false)
+	pending, has = rollFightWearLedgerLocked(st, rodGUID, false, 1)
 	if has && pending.BaseCharged {
 		t.Fatalf("第二段续段不应再带基准: has=%v base=%v", has, pending.BaseCharged)
+	}
+}
+
+// TestFightWearCastBaseLureFactor 钉住路亚族每竿基准折扣：折扣只进"每竿 + 泡水"，
+// 过载秒与打滑次数不缩水；账本没记折扣（旧账）按 1 结算。期望值由手算样例给出：
+// 品质 50 轮油 Fq=0.625，路亚每竿 = (0.32+0.04)×0.25 / 0.625 = 14.4bp。
+func TestFightWearCastBaseLureFactor(t *testing.T) {
+	srv := &Server{}
+	if got := srv.reelCastBaseFactor(1); got != 1 {
+		t.Fatalf("非路亚钓组不应打折，实得 %v", got)
+	}
+	if got := srv.reelCastBaseFactor(5); got != reelCastBaseFactorLureDefault {
+		t.Fatalf("路亚族（钓组 5）应按默认折扣 %.2f，实得 %v", reelCastBaseFactorLureDefault, got)
+	}
+	lure := fightReelWear{BaseCharged: true, castBaseFactor: reelCastBaseFactorLureDefault}
+	c := lure.partCounts()
+	if c.Rods != reelCastBaseFactorLureDefault || c.Soaks != reelCastBaseFactorLureDefault {
+		t.Fatalf("路亚折扣应进每竿与泡水计数，实得 rods=%v soaks=%v", c.Rods, c.Soaks)
+	}
+	// 旧账没记折扣：按 1 结算。
+	legacy := fightReelWear{BaseCharged: true}.partCounts()
+	if legacy.Rods != 1 || legacy.Soaks != 1 {
+		t.Fatalf("未记折扣的账本应按 1 结算，实得 rods=%v soaks=%v", legacy.Rods, legacy.Soaks)
+	}
+	// 手算样例：品质 50 轮油在路亚折扣下的每竿消耗（矩阵是百分点，返回寿命比例）。
+	want := (0.32 + 0.04) * reelCastBaseFactorLureDefault / 0.625 / 100
+	if got := reelPartWearFor(reelPartCatOil, 50, lure.partCounts()); math.Abs(got-want) > 1e-9 {
+		t.Fatalf("品质 50 轮油路亚每竿应为 %.6f（14.4bp），实得 %.6f", want, got)
+	}
+	// 打滑/过载是搏鱼事件账，不随钓组折扣缩水。
+	fight := fightReelWear{BaseCharged: true, castBaseFactor: reelCastBaseFactorLureDefault,
+		SlipTicks: 4, BurnSecs: 10}
+	c = fight.partCounts()
+	if c.SlipTicks != 4 || c.OverloadSecs != 10 {
+		t.Fatalf("战斗磨损计数不应打折，实得 slip=%d secs=%v", c.SlipTicks, c.OverloadSecs)
 	}
 }

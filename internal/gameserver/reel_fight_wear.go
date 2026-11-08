@@ -61,7 +61,10 @@ type fightReelWear struct {
 	Used        bool    // 本竿是否真的下水使用过（抛过竿就算，与是否中鱼无关）
 	BaseCharged bool    // 本竿的“每竿基准 + 泡水”是否已计入本账
 	BreakHits   int     // 断件冲击次数：只在真断线/断竿那一次扣
-	settled     bool    // 本竿是否已落库（每竿一次）
+	// castBaseFactor 是每竿基准（每竿 + 泡水）的钓组折扣：路亚族抛投频率高，
+	// 同样的"一竿"要便宜得多。≤0 表示账本没记折扣（旧账/未标记），按 1 结算。
+	castBaseFactor float64
+	settled        bool // 本竿是否已落库（每竿一次）
 	// lastLoadAt 是上一条 14/8 到达服务端的时刻，用来把过载秒数换成真实时长；
 	// loadProbe 累计负载上报里的字段读数。两者都不结算，也只是进程内状态，
 	// 所以做成非导出字段，不进钓组状态的 JSON 快照。
@@ -98,14 +101,15 @@ func (w *fightReelWear) claimLocked() (fightReelWear, bool) {
 }
 
 // markRodUsedLocked 把本竿标成“已下水使用”：抛竿即使没咬钩，轮内零件也要结算
-// 每竿基准与泡水一次。已落库的旧账不再重复记，避免同一竿扣两次基准。
-// 调用方必须持有 FishState 锁。
-func (w *fightReelWear) markRodUsedLocked(rodGUID string) {
+// 每竿基准与泡水一次（按钓组折扣系数折算）。已落库的旧账不再重复记，避免同一竿
+// 扣两次基准。调用方必须持有 FishState 锁。
+func (w *fightReelWear) markRodUsedLocked(rodGUID string, castBaseFactor float64) {
 	if w.settled {
 		return
 	}
 	w.Used = true
 	w.BaseCharged = true
+	w.castBaseFactor = castBaseFactor
 	if w.rodGUID == "" {
 		w.rodGUID = rodGUID
 	}
@@ -123,15 +127,34 @@ func (w *fightReelWear) markRodBreakLocked() {
 // rollFightWearLedgerLocked 结束当前磨损账段并开新段：未落库的部分取走由调用方
 // 在锁外落库。只有真正换新的一竿（newCast）才重新打每竿基准与泡水——嘬饵否决
 // 重排、鱼离场重排、补排咬钩都是"同一竿续段"，续段再打基准会把同一竿的基准扣
-// 两次（实测同秒双条 reel_overload，零件整晚双倍消耗）。
-// 口径见 specs/changes/reel-cast-base-once/spec.md。
-func rollFightWearLedgerLocked(st *FishState, rodGUID string, newCast bool) (fightReelWear, bool) {
+// 两次（实测同秒双条 reel_overload，零件整晚双倍消耗）。castFactor 是本竿钓组的
+// 每竿基准折扣（s.reelCastBaseFactor(st.RigType)），只在 newCast 时记入新段。
+func rollFightWearLedgerLocked(st *FishState, rodGUID string, newCast bool, castFactor float64) (fightReelWear, bool) {
 	pending, has := st.reelWear.claimLocked()
 	st.reelWear.reset()
 	if newCast {
-		st.reelWear.markRodUsedLocked(rodGUID)
+		st.reelWear.markRodUsedLocked(rodGUID, castFactor)
 	}
 	return pending, has
+}
+
+// reelCastBaseFactorLureDefault 是路亚族钓组的每竿基准折扣（tunable
+// reel_cast_base_factor_lure）。路亚一小时几十到几百竿，同一竿的基准若与底钓
+// 同价，保养品会被抛投频率烧穿；底钓与其它钓组不打折。
+// 口径见 specs/changes/reel-cast-base-lure-factor/spec.md。
+const reelCastBaseFactorLureDefault = 0.25
+
+// reelCastBaseFactor 按钓组类型给出每竿基准（每竿 + 泡水）的折扣系数：
+// 路亚族（rigmeta.go:rigTypeLureFamily）打折，其余钓组 1.0。
+func (s *Server) reelCastBaseFactor(rigType int64) float64 {
+	if s == nil || !rigTypeLureFamily[rigType] {
+		return 1
+	}
+	f := s.tunableF("reel_cast_base_factor_lure", reelCastBaseFactorLureDefault)
+	if f <= 0 {
+		return reelCastBaseFactorLureDefault
+	}
+	return f
 }
 
 // loadTickSecondsLocked 把两条 14/8 之间的真实间隔折算成结算时长（秒）。
@@ -152,11 +175,15 @@ func (w *fightReelWear) loadTickSecondsLocked(now time.Time, def, maxTick float6
 }
 
 // partCounts 把本竿账本折算成零件消耗事件：过载秒数与打滑次数直接沿用摩擦片那条账，
-// 不重复计数。
+// 不重复计数。每竿基准与泡水按钓组折扣折算（路亚族 <1），账本没记折扣按 1。
 func (w fightReelWear) partCounts() reelPartCounts {
 	var c reelPartCounts
 	if w.BaseCharged {
-		c.Rods, c.Soaks = 1, 1
+		f := w.castBaseFactor
+		if f <= 0 {
+			f = 1
+		}
+		c.Rods, c.Soaks = f, f
 	}
 	c.OverloadSecs = w.BurnSecs
 	c.SlipTicks = w.SlipTicks
@@ -379,6 +406,8 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 		previous, hasPrevious = cur.claimLocked()
 		cached.Used = cached.Used || cur.Used
 		cached.BaseCharged = cached.BaseCharged || cur.BaseCharged
+		// 每竿基准折扣随竿走：抛竿时按钓组记下，换鱼、换账都不能丢。
+		cached.castBaseFactor = cur.castBaseFactor
 		cached.BreakHits += cur.BreakHits
 		*cur = cached
 	}

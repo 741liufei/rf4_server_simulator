@@ -36,18 +36,19 @@ var reelPartWearMatrix = map[int64]reelPartWearRates{
 	reelPartCatSpool:   {perRod: 0.008, perOverloadSec: 0.006, perBreak: 0.20},
 }
 
-// reelPartCounts 是本竿攒下来要结算的应力事件计数。
+// reelPartCounts 是本竿攒下来要结算的应力事件计数。Rods/Soaks 是浮点：路亚族
+// 钓组的每竿基准按钓组折扣折算（0~1 之间的小数竿），其余钓组为整数 1。
 type reelPartCounts struct {
-	Rods         int     // 本竿是否算一次正常使用（抛过竿就算，与是否中鱼无关）
+	Rods         float64 // 本竿的正常使用次数（抛过竿就算，与是否中鱼无关；可带钓组折扣）
 	OverloadSecs float64 // 锁轮过载累计秒数（与摩擦片发热曲线同一个数）
 	SlipTicks    int     // 泄力打滑判定次数
-	Soaks        int     // 泡水次数（每竿一次）
+	Soaks        float64 // 泡水次数（每竿一次；可带钓组折扣）
 	BreakHits    int     // 断件冲击次数
 }
 
 // total 报告除了摩擦片之外还有没有要结算的账。
 func (c reelPartCounts) total() float64 {
-	return float64(c.Rods) + c.OverloadSecs + float64(c.SlipTicks) + float64(c.Soaks) + float64(c.BreakHits)
+	return c.Rods + c.OverloadSecs + float64(c.SlipTicks) + c.Soaks + float64(c.BreakHits)
 }
 
 // reelPartLifeFactor 是品质寿命系数 Fq = clamp(0.25 + 0.75 x 品质/100, 0.35, 1)：
@@ -76,10 +77,10 @@ func reelPartWearFor(category int64, quality float64, counts reelPartCounts) flo
 	if !ok {
 		return 0
 	}
-	points := rates.perRod*float64(counts.Rods) +
+	points := rates.perRod*counts.Rods +
 		rates.perOverloadSec*counts.OverloadSecs +
 		rates.perSlip*float64(counts.SlipTicks) +
-		rates.perSoak*float64(counts.Soaks) +
+		rates.perSoak*counts.Soaks +
 		rates.perBreak*float64(counts.BreakHits)
 	if points <= 0 {
 		return 0
