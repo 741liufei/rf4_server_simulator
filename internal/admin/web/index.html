@@ -251,6 +251,9 @@ function refreshCurrent(){
   const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,bait:loadBaitPrefs,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
+// 发放物品会偶发造成玩家坏档，暂时关闭前端入口；后端接口保留。
+// 修复坏档问题后把此开关改回 true 即可恢复。
+const GRANT_ITEM_UI_ENABLED=false;
 // 总览常用操作：图标 + 名称 + 一句功能定义
 const QUICK_ACTIONS=[
   ['grant','给玩家发物品','从物品目录发放到背包 / 护网','players'],
@@ -259,7 +262,7 @@ const QUICK_ACTIONS=[
   ['fish','调鱼口','各水域出什么鱼 · 咬钩快慢','fish'],
   ['store','商店货架','改卖的价格和库存','stores'],
   ['audit','查操作记录','后台改过什么都有留痕','audit'],
-];
+].filter(([id])=>GRANT_ITEM_UI_ENABLED||id!=='grant');
 const QA_ICONS={
   grant:'<path d="M20 12v9H4v-9"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7Z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z"/>',
   profile:'<circle cx="12" cy="8" r="4"/><path d="M5 21c.9-3.4 3.8-5 7-5s6.1 1.6 7 5"/>',
@@ -568,12 +571,13 @@ async function saveProfile(){
   await api('/api/players/update',{method:'POST',body:JSON.stringify(body)});toast('已保存，在线玩家立即收到刷新');await sleep(400);await selectPlayer(PLAYER.uid);
 }
 function renderItems(){
-  $('#playerTabBody').innerHTML=`<div class="toolbar"><input class="grow" id="itemFilter" placeholder="筛选 item_id / 名称 / GUID" value="${esc(ITEM_FILTER)}" oninput="ITEM_FILTER=this.value;renderItemRows()"><button class="btn" onclick="showGrantItem()">+ 发放物品</button></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>物品</th><th>类型</th><th>容器</th><th>数量</th><th>耐久</th><th>GUID</th><th></th></tr></thead><tbody id="itemRows"></tbody></table></div>`;
+  const grantButton=GRANT_ITEM_UI_ENABLED?'<button class="btn" onclick="showGrantItem()">+ 发放物品</button>':'';
+  $('#playerTabBody').innerHTML=`<div class="toolbar"><input class="grow" id="itemFilter" placeholder="筛选 item_id / 名称 / GUID" value="${esc(ITEM_FILTER)}" oninput="ITEM_FILTER=this.value;renderItemRows()">${grantButton}</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>物品</th><th>类型</th><th>容器</th><th>数量</th><th>耐久</th><th>GUID</th><th></th></tr></thead><tbody id="itemRows"></tbody></table></div>`;
   renderItemRows();
 }
 function renderItemRows(){
   const q=ITEM_FILTER.toLowerCase();const rows=(PLAYER.items||[]).filter(x=>!q||`${x.item_id} ${x.name} ${x.guid}`.toLowerCase().includes(q));
-  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">没有物品，点上方「+ 发放物品」添加</td></tr>';
+  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||`<tr><td colspan="7" class="empty">没有物品${GRANT_ITEM_UI_ENABLED?'，点上方「+ 发放物品」添加':''}</td></tr>`;
 }
 async function deletePlayerItem(guid){
   askConfirm('删除物品','把这件物品从该玩家的背包/装备中删除，不可恢复。',async()=>{
