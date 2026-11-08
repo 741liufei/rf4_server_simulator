@@ -58,6 +58,27 @@ func ruleName(s string) string {
 	}, s)
 }
 
+// BaitRuleInfo 一条"鱼吃饵"规则的可读形态（供管理后台展示）。
+type BaitRuleInfo struct {
+	Allow      []string `json:"allow"`
+	Deny       []string `json:"deny"`
+	BottomOnly []string `json:"bottom_only"`
+	Condition  string   `json:"condition"`
+}
+
+// ExportedBaitRules 按中文鱼名查规则表，供管理后台只读展示。
+// 返回 ok=false 表示该鱼在规则表里没有条目（严格模式下只能靠饵效证据放行）。
+func ExportedBaitRules(fishZh string) (BaitRuleInfo, bool) {
+	r, ok := fishBaitRules[ruleName(fishZh)]
+	if !ok {
+		return BaitRuleInfo{}, false
+	}
+	return BaitRuleInfo{Allow: r.allow, Deny: r.deny, BottomOnly: r.bottomOnly, Condition: r.condition}, true
+}
+
+// ExportedBaitRuleCount 规则表条目数（前端展示用）。
+func ExportedBaitRuleCount() int { return len(fishBaitRules) }
+
 func parseFishBaitRules(raw string) map[string]fishBaitRule {
 	out := map[string]fishBaitRule{}
 	for _, line := range strings.Split(raw, "\n") {
