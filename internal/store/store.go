@@ -64,6 +64,14 @@ func (d *DB) Migrate() error {
 		WHERE name='migrations/00036_trip_grant.sql'`); err != nil {
 		return fmt.Errorf("兼容钓鱼游分支迁移编号: %w", err)
 	}
+	// 大鱼狩猎分支曾以 00046 登记 fish_hunt，上游现在已有
+	// 00047 qualification_progress 与 00048 fishing_state_cast_m：
+	// 按文件名重映射到 00049，让主线迁移能正常补齐。
+	if _, err := d.SQL.Exec(`UPDATE schema_migrations
+		SET version=49, name='migrations/00049_fish_hunt.sql'
+		WHERE name='migrations/00046_fish_hunt.sql'`); err != nil {
+		return fmt.Errorf("兼容大鱼狩猎分支迁移编号: %w", err)
+	}
 	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return err

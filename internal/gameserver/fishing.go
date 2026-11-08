@@ -74,6 +74,7 @@ type FishState struct {
 	biteTicket      uint64
 	pendingTicket   uint64
 	PendingRepush   int           // 14/12 f0=3/5/6 连续拒收鱼实体时的重推次数
+	LuckRepush      int           // 蓝冠天命鱼的有限重推次数
 	BiteAt          time.Time     // 原定咬钩绝对时刻；硬重启后据此恢复 timer
 	Keepnet         []*RolledFish // 回退缓存（DB 权威）
 	Bait            string
@@ -247,6 +248,12 @@ type RolledFish struct {
 	HappyHourKnown bool
 	BaitGUIDs      string
 	BaitsKnown     bool
+	BiteQuality    string  // solid / nibble
+	HookHoldP      float64 // 钩型保持率；蓝冠天命鱼固定 1
+	LuckProtected  bool    // 蓝冠天命保护
+	HookConfirmed  bool    // 本尾鱼已经通过首次中钩确认，后续重放不再抽样/扣饵
+	HuntStage      int     // 发鱼时的鱼猎阶段；用于结算保底，不随入护时状态变化
+	HuntStageKnown bool
 
 	FishGUID string
 	Species  string
@@ -703,6 +710,7 @@ func (s *Server) rollFishForRig(ctx context.Context, uid int64, gearGUID, loc, b
 			continue
 		}
 		c.baits = group.baits
+		c.hook = selected
 		f := s.rollFishWithRules(loc, group.baits[0], s.fishWeightCapKg(selected), bonus, c)
 		if f != nil {
 			f.HookGUID = group.hookGUID
@@ -878,10 +886,21 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			return nil
 		}
 		key := weightedChoice(keys, wts)
-		sample := func() float64 {
-			return float64(s.sampleWeightDB(cctx, key, s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c))
+		var w, grade int64
+		var huntReady fishHuntReadiness
+		if s.fishHuntEnabled() && c.uid > 0 {
+			h := s.loadFishHuntState(cctx, c.uid, c.loc, c.spot)
+			w, grade, huntReady = s.sampleHuntWeight(cctx, key,
+				s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c, h)
+			if w > 0 {
+				s.recordHuntBite(cctx, h)
+			}
+		} else {
+			sample := func() float64 {
+				return float64(s.sampleWeightDB(cctx, key, s.baitWeightModeForRoll(key, c.baits, c), scale, capG, c))
+			}
+			w = int64(applyTrophyLuck(sample(), bonus.TrophyLuck, sample))
 		}
-		w := int64(applyTrophyLuck(sample(), bonus.TrophyLuck, sample))
 		if w == 0 {
 			for i, candidate := range keys {
 				if candidate == key {
@@ -897,7 +916,9 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 		if c.forRig && !c.acceptHappyHourBite(fishingBaitInterest(interest, bonus), s.weatherFishActivity(key, c)) {
 			return nil
 		}
-		grade := s.rollGradeForRoll(cctx, key, w, c)
+		if grade <= 0 {
+			grade = s.rollGradeForRoll(cctx, key, w, c)
+		}
 		lk, lp := s.cachedSpeciesLengthKP(cctx, c, key)
 		length := lk * math.Pow(float64(w), lp)
 		length = math.Round(length*100000) / 100000
@@ -908,8 +929,20 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			WeightG:  w,
 			LengthM:  length,
 		}
+		if s.fishHuntEnabled() && c.uid > 0 {
+			f.HuntStage = huntReady.Stage
+			f.HuntStageKnown = true
+		}
+		applyHookBiteQuality(f, c.hook)
 		if baitHit {
 			s.log.Info("roll_from_db 命中饵效", "鱼种", key, "重量", w, "tier", tiers[key])
+		}
+		if s.fishHuntEnabled() && c.uid > 0 {
+			s.log.Info("发鱼阶段", "uid", c.uid, "loc", c.loc, "spot", c.spot,
+				"stage", fishHuntStageName(huntReady.Stage), "A", roundTo(huntReady.A, 3),
+				"E", roundTo(huntReady.E, 3), "G", roundTo(huntReady.G, 3),
+				"P", roundTo(huntReady.P, 3), "Q", roundTo(huntReady.Q, 3),
+				"grade", grade)
 		}
 		return f
 	}
@@ -1766,6 +1799,7 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.Pending = nil
 	st.hookedChatFishGUID = ""
 	st.PendingRepush = 0
+	st.LuckRepush = 0
 	if !preserveHooked {
 		st.Hooked = false
 	}
@@ -1788,6 +1822,7 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	}
 	st.Bonus = bonus
 	delay := s.biteDelayInWeather(st, sess.weatherAt(st.Loc, now), now, bonus)
+	delay *= s.hookBiteDelayFactorForRig(sess.pushCtx(), sess.Userid, st.GearGuid)
 	s.armBiteTimerLocked(sess.Userid, st, now.Add(time.Duration(delay*float64(time.Second))))
 	st.mu.Unlock()
 	if hasPendingWear {
