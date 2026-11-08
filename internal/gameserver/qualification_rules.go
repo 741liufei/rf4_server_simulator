@@ -537,7 +537,7 @@ func worldIsNight(unix int64) bool {
 
 // qualificationEventForCatch 用咬钩快照装配 14/4 上鱼事件。
 // 饵属性、抛投距离、夜间标记和竿型都取本尾鱼咬钩时的值；竿/线从原竿
-//（f.GearGUID）读取，避免玩家中途换竿后把新竿条件算到旧鱼上。
+// （f.GearGUID）读取，避免玩家中途换竿后把新竿条件算到旧鱼上。
 func (s *Server) qualificationEventForCatch(ctx context.Context, f *RolledFish, rigType int64) qualificationEvent {
 	ev := qualificationEvent{Kind: qevFishLanded}
 	if f == nil {
