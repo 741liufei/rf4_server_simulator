@@ -385,8 +385,26 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 	}
 }
 
-// applyFightReelWear 把一笔已取走的磨损账写入摩擦片，返回是否真的写了库。
-// event 只用于损伤日志（14/4 收竿、17/9 断件、14/12 鱼离场、14/7 抛竿兜底）。
+// resolveFightReelGUID 在账上缺渔轮实例时按竿的当前装配补出 GUID。
+// 返回 true 表示账本已有可用的渔轮 GUID；对无轮手竿返回 false。
+func (s *Server) resolveFightReelGUID(ctx context.Context, w *fightReelWear) bool {
+	if w == nil {
+		return false
+	}
+	if w.reelGUID != "" {
+		return true
+	}
+	if s == nil || s.DB == nil || w.rodGUID == "" {
+		return false
+	}
+	parsed, err := s.DB.GetItemGUIDByRigSlot(ctx, w.rodGUID, gearCatReel)
+	if err != nil || parsed == "" {
+		return false
+	}
+	w.reelGUID = parsed
+	return true
+}
+
 // applyFightReelWear 把一笔已取走的磨损账写进渔轮：摩擦片制动力、轮内零件耐久
 // 与本体耐久在同一次物品树写入里落库，避免出现“片磨了但零件与本体没动”的两套数字。
 // 本体耐久取 min(现值, 零件聚合值)：只降不升，换件与修理才允许抬回去。
@@ -395,13 +413,7 @@ func (s *Server) applyFightReelWear(ctx context.Context, uid int64, w fightReelW
 	if s == nil || s.DB == nil {
 		return false
 	}
-	if w.reelGUID == "" && w.rodGUID != "" {
-		// 抛竿只登记了竿：空竿结算要按钓组解析出渔轮，否则每竿基准与泡水会被整笔丢掉。
-		if parsed, perr := s.DB.GetItemGUIDByRigSlot(ctx, w.rodGUID, gearCatReel); perr == nil && parsed != "" {
-			w.reelGUID = parsed
-		}
-	}
-	if w.reelGUID == "" {
+	if !s.resolveFightReelGUID(ctx, &w) {
 		return false
 	}
 	wear := clampUnit(w.SlipWear + w.BurnWear)
@@ -509,6 +521,11 @@ func (s *Server) settleFightReelWearState(ctx context.Context, st *FishState, ui
 	}
 	st.mu.Unlock()
 	if !ok {
+		return
+	}
+	// 空竿账本里可能只有竿 GUID；先在调用方账本上解析出渔轮，
+	// 这样 apply 成功后 push 仍能拿到正确的 reelGUID。
+	if !s.resolveFightReelGUID(ctx, &w) {
 		return
 	}
 	if s.applyFightReelWear(ctx, uid, w, event) {

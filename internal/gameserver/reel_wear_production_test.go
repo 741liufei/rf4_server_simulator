@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"testing"
+	"time"
 
 	"rf4server/internal/logging"
 	"rf4server/internal/proto"
@@ -106,8 +107,33 @@ func TestEmptyRodRealCastSettlesReelParts(t *testing.T) {
 	ctx := t.Context()
 	_, rodGUID, reelGUID := castRigWithReel(t, srv, 732)
 
+	// 注册一个带真实隧道的在线会话，验证磨损不只落库，还会推送 4/22。
+	tunnelSess, peer := newTunnelProbe(t, srv)
+	t.Cleanup(func() {
+		srv.mu.Lock()
+		delete(srv.sessions, tunnelSess.ID)
+		srv.mu.Unlock()
+	})
+	srv.mu.Lock()
+	srv.sessions[tunnelSess.ID] = tunnelSess
+	srv.mu.Unlock()
+	pushed := receiveTestPush(peer, 4, 22)
+
 	// 一尾未上，直接收竿结算。
 	srv.settleFightReelWear(ctx, reviewWearUID, rodGUID, "14/4")
+
+	select {
+	case env := <-pushed:
+		if env == nil {
+			t.Fatal("空竿结算后没有收到 4/22 推送")
+		}
+		v, _, err := proto.DecodeValue(env.Body, 0, srv.Table())
+		if err != nil || !containsGUID(deepGUIDs(v), reelGUID) {
+			t.Fatalf("4/22 推送未包含渔轮树: err=%v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("等待空竿结算的 4/22 推送超时")
+	}
 
 	row := wearReelRow(t, db, ctx, reelGUID)
 	if row.Durability >= 1 {
