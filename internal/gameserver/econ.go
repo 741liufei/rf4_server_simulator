@@ -132,7 +132,7 @@ func (s *Server) fishingEnd(ctx *Ctx) ([]byte, bool) {
 		0:  f0,
 		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
 		2:  proto.U32(f32Const801F2),
-		3:  build5003(),
+		3:  s.build5003(cctx, uid),
 		4:  proto.Null(),
 		5:  proto.Null(),
 		6:  f6,
@@ -214,15 +214,6 @@ func stLastSkill(s *Server, uid int64) int64 {
 func (s *Server) buildSingleSkill312(ctx context.Context, uid, catID int64) *proto.Value {
 	effects, _ := s.effectiveFishingSkills(ctx, uid)
 	return s.skillCategory312(catID, effects)
-}
-
-// build5003 5012 赛季块（801.f3）。
-func build5003() *proto.Value {
-	return wiregen.MustMakeObj("fopkeoppndn", map[int]*proto.Value{
-		0: build5012(),
-		1: proto.Null(),
-		2: proto.Null(),
-	})
 }
 
 // buildPending25 由 RolledFish 构造 25 条目（14/5 回包与 813.f9 共用）。
@@ -310,6 +301,8 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		}
 		st.mu.Unlock()
 		s.notifyFishKept(ctx.Sess, &kept)
+		// 钓获礼包：入护成功后按概率当场开箱（异步，避免拖慢入护回包）。
+		s.scheduleLootBox(ctx.Sess, &kept)
 		out := proto.Args(proto.S("61"))
 		if keptInNet {
 			out.Items = append(out.Items, s.buildPending25(&kept, st, keepLevel))

@@ -50,7 +50,7 @@ func (s *Server) baitedHookSets(ctx context.Context, rod string) []baitedHookSet
 	}
 	comps := s.storedRigComponents(ctx, rod)
 	rigType := s.rigTypeForWrite(ctx, rod)
-	count := max(len(slotIndicesFor(rigType, catHook)), len(slotIndicesFor(rigType, catLure)))
+	count := hookPositionsFor(rigType)
 	assignments, err := s.baitHookAssignments(ctx, rod, comps, count <= 1)
 	if err != nil {
 		return nil
@@ -216,7 +216,7 @@ func (s *Server) rememberMountedBaitHook(ctx context.Context, rod, bait, previou
 	}
 	if hook == "" {
 		rigType := s.rigTypeForWrite(ctx, rod)
-		if max(len(slotIndicesFor(rigType, catHook)), len(slotIndicesFor(rigType, catLure))) <= 1 && len(hooks) > 0 {
+		if hookPositionsFor(rigType) <= 1 && len(hooks) > 0 {
 			hook = comps[hooks[0]].GUID
 		} else if row, ok := comps[rigCompKey(catHook, ordinal)]; ok {
 			hook = row.GUID
@@ -607,7 +607,7 @@ func (s *Server) reloadBaitForCast(ctx context.Context, uid int64, rod string) (
 		return out, fmt.Errorf("不能为其他玩家的钓组补饵")
 	}
 	rigType := s.rigTypeForWrite(ctx, rod)
-	multi := max(len(slotIndicesFor(rigType, catHook)), len(slotIndicesFor(rigType, catLure))) > 1
+	multi := hookPositionsFor(rigType) > 1
 	for ordinal := int64(0); ordinal < int64(baitSlotCount(rigType)); ordinal++ {
 		key := fmt.Sprintf("rebait:%d", ordinal)
 		id, err := s.DB.GetRodSetting(ctx, rod, key)

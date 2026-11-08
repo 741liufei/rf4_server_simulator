@@ -178,6 +178,51 @@ func TestGiftBoxUseOpensBundle(t *testing.T) {
 	}
 }
 
+// TestGiftBoxUseAbsoluteQuantityEntry 4/8 拆开 mlapkoadfnh=true 的绝对个数条目
+// 应按条目数发放，不乘子物定义默认量。实机事故回归：box_worm_asurv_100 曾误发
+// 30（worm_asurv def ljnnpokapig）×100 = 3000，官服语义应为一堆 100。
+func TestGiftBoxUseAbsoluteQuantityEntry(t *testing.T) {
+	srv, db := newBundleTestServer(t)
+	ctx := context.Background()
+	const uid = int64(4205)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	row, err := srv.prepareNewItem(ctx, uid, "box_worm_asurv_100", "backpack", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertItem(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+
+	c := giftBoxTestCtx(t, srv, uid, proto.Args524(proto.U64(0), proto.Guid(row.GUID)))
+	body, ok := hItemUse(c)
+	if !ok || len(body) == 0 {
+		t.Fatalf("蚯蚓盒使用无响应: ok=%v", ok)
+	}
+	value, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f0 := value.Fields[0].Val
+	if f0 == nil || f0.Kind != proto.KindArgs || len(f0.Items) != 1 {
+		t.Fatalf("800.f0 应携带 1 件内容物，实得 kind=%v n=%v", f0.Kind, len(f0.Items))
+	}
+	if n := giftBoxItemCount(t, srv, uid, "box_worm_asurv_100"); n != 0 {
+		t.Errorf("蚯蚓盒使用后仍残留 %d 行", n)
+	}
+	rows := giftBoxRows(t, srv, uid, "worm_asurv")
+	if len(rows) != 1 {
+		t.Fatalf("应入库一行 worm_asurv，实得 %d 行", len(rows))
+	}
+	granted, err := db.GetItemByGUID(ctx, rows[0].guid)
+	if err != nil || granted == nil {
+		t.Fatalf("读取入库行: %v", err)
+	}
+	assertBundleItemQuantity(t, granted, 100)
+}
+
 // TestGiftBoxUseRejectsOutsideBackpack 非背包容器中的礼盒拒绝拆开且不产生任何变更。
 func TestGiftBoxUseRejectsOutsideBackpack(t *testing.T) {
 	srv, db := newBundleTestServer(t)

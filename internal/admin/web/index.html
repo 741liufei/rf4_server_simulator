@@ -304,6 +304,9 @@ const TUNABLE_DEFS=[
   ['release_xp_ratio','放生经验比例',0.5,'放生时拿到入护经验的几成，0.5=一半'],
   ['fish_escape_taunt','跑鱼提示',1,'1=随机嘲讽文案；0=回退官方“鱼脱钩了”模板'],
   ['fish_hooked_chat','上钩播报',0,'确认鱼已挂钩时仅向本人显示快捷栏竿号、鱼种和克级重量；默认关闭'],
+  ['loot_box_enabled','钓获礼包开关',0,'默认关闭；1=钓上鱼按概率开礼包'],
+  ['loot_box_chance','礼包触发概率',0.05,'0~1；留空则用 kv.loot_box_defs 里的 chance'],
+  ['loot_box_trophy_guarantee','奖杯/蓝冠保底',1,'1=钓到奖杯或蓝冠鱼必定开一包；0=关'],
   ['card_drop_normal','普通 / 达标鱼掉卡率',0.001,'0~1。默认 0.001 = 0.1%，每尾实际钓获抽一次'],
   ['card_drop_star','星鱼掉卡率',0.5,'0~1。默认 0.5 = 50%'],
   ['card_drop_blue','蓝冠鱼掉卡率',0.8,'0~1。默认 0.8 = 80%'],
@@ -365,6 +368,7 @@ async function loadTunables(){
   +group('经验与结算','改后只对新结算的鱼生效，已入护的不重算',['xp_gain','release_xp_ratio'])
   +group('钓获掉卡','本地自定概率；最多 30 秒生效，重连或重复结算不补抽',['card_drop_normal','card_drop_star','card_drop_blue','card_drop_rare_scale'])
   +group('鱼获档位比例','按四档占比出鱼；缺某档阈值时其余档自动归一',['grade_ratio_enabled','grade_pct_below','grade_pct_qualified','grade_pct_trophy','grade_pct_super'])
+  +group('钓获礼包','钓上鱼当场开箱，奖励直接进背包并播报',['loot_box_enabled','loot_box_chance','loot_box_trophy_guarantee'])
   +group('聊天通知','跑鱼提示与上钩播报分别设置；保存后最多 30 秒生效',['fish_escape_taunt','fish_hooked_chat']);
 }
 async function saveTunableVal(key,val){

@@ -262,15 +262,22 @@ func TestGroundbaitCatapultThrowDepositsSpot(t *testing.T) {
 		t.Fatal("13/5 未处理")
 	}
 	gate := s.groundbaitSpot(ctx, uid, "gb-test-loc", int64(100/groundbaitCellSizeM), int64(100/groundbaitCellSizeM))
-	if gate.units < 0.99 || gate.units > 1.01 {
-		t.Fatalf("弹弓一弹应投进 1 份窝料，实得 %.3f", gate.units)
+	// 窝料游戏钟按整秒推进；投放后立即读取时可能已经走过一个 tick，
+	// 默认 1 份 0.6 游戏小时会按剩余时间稀释到约 0.989。精确份数由
+	// 账本字段断言，这里只要求它确实落在目标格且没有被放大。
+	if gate.units <= 0 || gate.units > 1.000001 {
+		t.Fatalf("弹弓一弹应投进目标窝点，实得 %.3f", gate.units)
 	}
 	var channel, itemID, matsJSON string
-	if err := s.DB.SQL.QueryRowContext(ctx, `SELECT channel,item_id,materials_json FROM groundbait_deposit WHERE uid=?`, uid).Scan(&channel, &itemID, &matsJSON); err != nil {
+	var portions, unitsLeft float64
+	if err := s.DB.SQL.QueryRowContext(ctx, `SELECT channel,item_id,materials_json,portions,units_left FROM groundbait_deposit WHERE uid=?`, uid).Scan(&channel, &itemID, &matsJSON, &portions, &unitsLeft); err != nil {
 		t.Fatalf("弹弓投放没落账: %v", err)
 	}
 	if channel != "catapult" || itemID != "feedcompleted" {
 		t.Fatalf("投放通道/物品不符: %s %s", channel, itemID)
+	}
+	if portions != 1 || unitsLeft != 1 {
+		t.Fatalf("弹弓一弹应入账 1 份且未消耗，实得 portions=%.3f units_left=%.3f", portions, unitsLeft)
 	}
 	mats := groundbaitDecodeMaterials(matsJSON)
 	if len(mats) != 3 || mats[0] != "mix_groundpeas" || mats[1] != "feedadds_corn" || mats[2] != "aroma_vanila" {

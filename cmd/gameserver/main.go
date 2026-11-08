@@ -64,6 +64,11 @@ func main() {
 	} else {
 		log.Info("装配投影回填完成", "rods", n)
 	}
+	if n, err := srv.RecoverStorePurchases(ctx); err != nil {
+		log.Warn("旧商店购买凭据恢复失败", "restored", n, "err", err)
+	} else {
+		log.Info("旧商店购买凭据恢复完成", "restored", n)
+	}
 	if n, path, err := srv.LoadCompatTable(); err != nil {
 		log.Info("工坊兼容表未加载", "err", err)
 	} else {
