@@ -619,10 +619,12 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	if scene == "" {
 		scene = sceneForLevel(level)
 	}
-	// 钓鱼游/买断已失效的付费地图不能作为出生地图（钓鱼游到期即失去
-	// 进入资格），回退出生地图，避免到期后重连仍留在原地图。
-	if charge && srv.tripLevelLocked(sess.pushCtx(), uid, level) {
-		ctx.Log.Info("1/13 目标地图无有效钓鱼游，回出生地图", "level", level)
+	// 空请求只恢复上次位置；银币票停留没有 access 记录，不能直接用
+	// tripLevelLocked 判断。只有上次地图明确依赖已到期钓鱼游且之后没有
+	// 新银币票流水时才回出生图。带 key 的真正进入交给 settleTravel：
+	// 买断/有效钓鱼游/房屋免票，否则扣银币门票。
+	if !charge && srv.loginRestoreTripExpired(sess.pushCtx(), uid, level) {
+		ctx.Log.Info("1/13 上次地图钓鱼游已到期，回出生地图", "level", level)
 		level, scene, spot = spawnLevelKey, sceneForLevel(spawnLevelKey), 0
 	}
 

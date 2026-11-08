@@ -1,32 +1,40 @@
 # 登录恢复保留上次地图
 
-Status: ready
+Status: done
 
 ## Problem Statement
 
-1/13 空请求是登录恢复，服务端先从 `profile.last_level_key` 读回上次地图，但只要该地图在 `placeTripPrices` 里且玩家当前没有有效钓鱼游或买断，`tripLevelLocked` 就会把位置改回出生图。结果玩家每次重新登录都站在克马羚诺也湖，进度感丢失；日志里能看到成对的 `1/13 目标地图无有效钓鱼游，回出生地图` 与 `1/13 下发出生地图 level=level_001_lake`。
+1/13 空请求是登录恢复，服务端先从 `profile.last_level_key` 读回上次地图，但旧逻辑只要该地图在 `placeTripPrices` 里且玩家当前没有有效钓鱼游或买断，就用 `tripLevelLocked` 把位置改回出生图。结果是银币票进入后停在付费地图的玩家每次重登都站在出生图；同时 1/13 带 key 的银币票进入也会在 `settleTravel` 扣费前被误拦。
 
 ## Solution
 
-把资格检查限定在真正的切图动作上：只有 1/13 携带地图 key（`charge == true`）时才执行 `tripLevelLocked` 回退；登录恢复（空请求）直接采用 `profile` 里的上次位置，资格问题留给钓鱼入口与 3/38 购票流程。
+登录恢复直接采用 `profile` 里的上次位置，不扣门票。只有该地点存在已到期钓鱼游记录、玩家没有买断/房屋/有效钓鱼游，且到期后也没有新的 `place_travel` 银币票流水时，才回出生图。
+
+1/13 带 key 的真正进入不再用 `tripLevelLocked` 前置拦截，统一交给 `settleTravel`：金币买断、有效钓鱼游、房屋免票，否则扣银币门票；余额不足整体回滚。
 
 ## User Stories
 
-1. 作为玩家，上次在海图/20 图下线，重新登录后仍在同一张图，而不是被送回出生图。
-2. 作为玩家，钓鱼游到期后重新登录，位置保留，但进入钓鱼流程时仍会被门票/钓鱼游规则拦下。
-3. 作为运维，切图路径的防逃票行为不变：带 key 进入失效付费地图仍然回出生图。
+1. 作为银币票玩家，下线时停在付费地图，重登后仍在原图且不重复扣票。
+2. 作为已金币买断地图的玩家，重登后仍在原图。
+3. 作为钓鱼游仍在期限内的玩家，重登后仍在原图。
+4. 作为仅依赖钓鱼游进入的玩家，游到期后重登回出生图，不继续保留已失效地图。
+5. 作为运维，带 key 进入付费地图的银币票路径不中断，买断/钓鱼游/房屋的免票行为不变。
 
 ## Implementation Decisions
 
-- `hEnterMap`：`if srv.tripLevelLocked(...)` 改为 `if charge && srv.tripLevelLocked(...)`。
+- `hEnterMap`：移除 `charge && tripLevelLocked(...)` 前置回退；带 key 的进入由 `settleTravel` 统一结算。
+- `trip.go`：新增 `loginRestoreTripExpired`，只在空请求恢复时识别“仅钓鱼游且已到期”的地图。银币票停留没有 `place_access` 行，因此不能直接用 `tripLevelLocked` 判断。
+- `loginRestoreTripExpired` 同时检查 `txn.note='place_travel'`：钓鱼游到期后用银币票重新进入过的地图仍可恢复。
 - 位置写回、旅费结算、装备回收逻辑不变；登录恢复仍然 `charge=false`，不扣旅费。
 - 进程重启后的恢复路径（`currentLevel` 从 `player_location` 读）不变。
 
 ## Testing Decisions
 
-- 新增 `TestLoginRestoreKeepsLastPaidMap`：把 `last_level_key` 设为 `level_012_north_sea`（无钓鱼游、无买断），1/13 空请求必须返回该地图，且 `currentLevel` 同步。
-- 既有 `TestPlayerLocationFirstLoginTravelReconnectAndRestart`、`TestPlayerLocationInvalidMapFallsBackToSpawn`、`TestTravel*` 全部保持通过，确认首登、无效地图与切图扣费行为未回退。
-- 回滚该改动后新用例会变红（返回 `level_001_lake`）。
+- `TestEnterMapKeyedPaidMapChargesSilver`：1/13 带 key 进入北海，无买断/钓鱼游但有足够银币，必须扣票并落图。
+- `TestLoginRestoreKeepsPaidMapByAccessMode`：银币票停留、金币买断、有效钓鱼游三种入口重登都保留地图，且不重复扣费。
+- `TestLoginRestoreExpiredTripFallsBackToSpawn`：仅钓鱼游且已到期，空请求回出生图。
+- `TestLoginRestoreExpiredTripWithLaterTicketKeepsMap`：到期后用银币票重新进入并下线，重登仍保留地图。
+- 既有 `TestPlayerLocationFirstLoginTravelReconnectAndRestart`、`TestPlayerLocationInvalidMapFallsBackToSpawn`、`TestTravel*` 全部保持通过。
 
 ## Out of Scope
 
