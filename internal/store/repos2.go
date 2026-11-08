@@ -46,6 +46,28 @@ func (d *DB) AddSkillPoints(ctx context.Context, uid, skillID int64, delta float
 	return err
 }
 
+// GetSkillPointsTx 在事务内读取技能大类熟练度；无记录时返回 0。
+func (d *DB) GetSkillPointsTx(ctx context.Context, tx *sql.Tx, uid, skillID int64) (float64, error) {
+	var pts float64
+	err := tx.QueryRowContext(ctx,
+		`SELECT MIN(points, ?) FROM skill WHERE uid=? AND skill_id=?`,
+		maxSkillPoints, uid, skillID).Scan(&pts)
+	if err == sql.ErrNoRows {
+		return 0, nil
+	}
+	return pts, err
+}
+
+// AddSkillPointsTx 在事务内增加熟练度，供“扣物 + 加熟练度”原子提交使用。
+func (d *DB) AddSkillPointsTx(ctx context.Context, tx *sql.Tx, uid, skillID int64, delta float64) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO skill(uid, skill_id, points) VALUES(?,?,MIN(?,?))
+		ON CONFLICT (uid, skill_id) DO UPDATE
+		SET points = MIN(points + excluded.points, ?)`,
+		uid, skillID, delta, maxSkillPoints, maxSkillPoints)
+	return err
+}
+
 // ListSkillNodes 取玩家技能节点等级，并把共享身份投影到组内全部节点。
 func (d *DB) ListSkillNodes(ctx context.Context, uid int64) (map[int64]int64, error) {
 	out, err := d.listRawSkillNodes(ctx, uid)
@@ -189,6 +211,23 @@ func (d *DB) KeepnetGet(ctx context.Context, uid int64, echoGUID string) (*Keepn
 	return e, nil
 }
 
+// KeepnetGetTx KeepnetGet 的事务版：标本制作等需要在同一事务内
+// "读取-校验-消费"鱼护条目时使用。
+func (d *DB) KeepnetGetTx(ctx context.Context, tx *sql.Tx, uid int64, echoGUID string) (*KeepnetEntry, error) {
+	row := tx.QueryRowContext(ctx, `
+		SELECT echo_guid, uid, COALESCE(species,''), COALESCE(name_zh,''), weight_g, length_m,
+		       cat, COALESCE(keep_loc,''), COALESCE(keep_spot,0), COALESCE(keep_bait,''),
+		       COALESCE(keep_level,''), COALESCE(ts,0)
+		FROM keepnet_items WHERE uid=? AND echo_guid=?`, uid, echoGUID)
+	e := &KeepnetEntry{}
+	err := row.Scan(&e.EchoGUID, &e.UID, &e.Species, &e.NameZh, &e.WeightG, &e.LengthM,
+		&e.Cat, &e.KeepLoc, &e.KeepSpot, &e.KeepBait, &e.KeepLevel, &e.TS)
+	if err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
 // KeepnetDelete 卖鱼出护。
 func (d *DB) KeepnetDelete(ctx context.Context, uid int64, echoGUIDs []string) error {
 	if len(echoGUIDs) == 0 {
@@ -208,6 +247,15 @@ func (d *DB) KeepnetDelete(ctx context.Context, uid int64, echoGUIDs []string) e
 }
 
 // ---- 钓获日志 ----
+
+// CatchCountAtLeastGrade 统计玩家 grade≥minGrade 的钓获条数。
+// 稀有鱼（奖杯）按 grade>=3 计，与统计页和玩家卡片的计数口径一致。
+func (d *DB) CatchCountAtLeastGrade(ctx context.Context, uid, minGrade int64) (int64, error) {
+	var n int64
+	err := d.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM catch_log WHERE uid=? AND COALESCE(grade,0)>=?`, uid, minGrade).Scan(&n)
+	return n, err
+}
 
 // CatchLogInsert 记录一次新增钓获；入护重试由 KeepFishingCatch 按鱼 GUID 去重。
 func (d *DB) CatchLogInsert(ctx context.Context, uid int64, loc string, spot int64, fishKey, nameZh string, weightG int64, lengthM float64, source, bait string, grade, xp, silver int64, locLevel string) error {
@@ -246,7 +294,10 @@ func (d *DB) CatchLogTotals(ctx context.Context, uid int64) (total, trophy, supe
 
 // ---- 地点买断 ----
 
-// PlaceAccessList 玩家已买断地点（档案 307 f22）。
+// PlaceAccessList 玩家已买断地点（档案 307 f22 与 placeOwned 买断判断同源）。
+// 只含 kind='buyout'：房屋走 HouseAccessList 进 f20（客户端据 f20 把已购
+// 房屋显示为"进入"），f22 一律渲染成"永久买断"——混入房屋会让仅有房契的
+// 玩家在地图上呈现买断态，也污染买断判断与地图免费准入（审查 P2）。
 func (d *DB) PlaceAccessList(ctx context.Context, uid int64) ([]string, error) {
 	rows, err := d.SQL.QueryContext(ctx, `SELECT place FROM place_access WHERE uid=? AND kind='buyout'`, uid)
 	if err != nil {
@@ -258,6 +309,9 @@ func (d *DB) PlaceAccessList(ctx context.Context, uid int64) ([]string, error) {
 		var p string
 		if err := rows.Scan(&p); err != nil {
 			return nil, err
+		}
+		if p == "" {
+			continue
 		}
 		out = append(out, p)
 	}

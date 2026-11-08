@@ -64,27 +64,28 @@ var bottomRigTypes = map[int64]bool{
 	12: true, 13: true, 14: true, 15: true, 16: true, 17: true, 18: true,
 	23: true, 24: true, 25: true, 26: true, 27: true, 28: true, 29: true,
 	32: true, 34: true,
+	55: true, 56: true, 57: true, 58: true, 59: true, 60: true,
+}
+
+// floatRigTypes 是可调漂、允许饵在下沉行程中被接口的浮钓族。
+var floatRigTypes = map[int64]bool{
+	1: true, 2: true, 3: true, 4: true, 21: true, 30: true, 31: true,
 }
 
 // rigTypeLureFamily 收索拟饵族：鱼在收线中攻击拟饵，咬钩节奏与"就位"守门单独走。
 var rigTypeLureFamily = map[int64]bool{
 	5: true, 6: true, 7: true, 8: true, 9: true, 10: true, 11: true,
 	19: true, 20: true, 22: true,
+	50: true, 51: true, 52: true, 53: true, 54: true,
 }
 
-// baitFullStackRigTypes 钩饵整包装填的适用钓组。浮钓族与沉底族都是天然饵
-// 配饵：挂载背包里的一整包饵（qty>1），咬口逐份扣减，避免每口试探就吃光
-// 单份饵、逼玩家反复重挂。路亚族假饵非计件不走整包；海钓族钓组多配非计件
-// 死饵，暂不纳入。多钩水底钓组（钩组件 >1）在 baitFullStackRod 里按钩数
-// 降级回逐份拆分，保持一钩一份的配饵习惯。
-var baitFullStackRigTypes = map[int64]bool{
-	// 浮钓族
-	1: true, 2: true, 3: true, 4: true, 21: true, 30: true, 31: true,
-	// 沉底族（同 bottomRigTypes）
-	12: true, 13: true, 14: true, 15: true, 16: true, 17: true, 18: true,
-	23: true, 24: true, 25: true, 26: true, 27: true, 28: true, 29: true,
-	32: true, 34: true,
-}
+func marineRigType(rigType int64) bool { return rigType >= 50 && rigType <= 60 }
+
+// rigTypeSpod 打窝器竿（18 = rig_BottomFeedRocket）：竿只把窝料送去落点，
+// 自己不钓鱼，所以客户端不发 14/7 钓组动画，入水信号只有 14/3 那一条。
+const rigTypeSpod = int64(18)
+
+var spodRigTypes = map[int64]bool{rigTypeSpod: true}
 
 // defaultRigTypeForRod 按竿型选择第一个有资源名映射的允许钓组。
 func (s *Server) defaultRigTypeForRod(ctx context.Context, rodItemID string) int64 {

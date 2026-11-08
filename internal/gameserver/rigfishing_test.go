@@ -378,6 +378,117 @@ func TestLureBiteGating(t *testing.T) {
 	}
 }
 
+// TestLureEscapeRebitesSameRetrieve 验证路亚脱钩后仍在收线时，服务端会在
+// 同一杆内继续排咬钩：抛投 → 首次 14/14 → 14/11 中鱼 → 14/12 f0=8 脱钩 →
+// 不重新抛竿、不发 14/4，仍能收到第二尾 14/14。
+func TestLureEscapeRebitesSameRetrieve(t *testing.T) {
+	db := connectTestDB(t)
+	gsAddr, srv := startGameserverWithDB(t, db)
+	gw := testutil.StartGateway(t, gsAddr, testutil.TestPSK)
+	token, uid := gw.Login(t)
+	fc := testutil.NewFakeClient(t, gw.RealAddr)
+	fc.Dial(token, false)
+	if boot := fc.WaitPush(2 * time.Second); boot.Main != 0 || boot.Sub != 1 {
+		t.Fatalf("boot 应为 0/1: %d/%d", boot.Main, boot.Sub)
+	}
+	ctx := context.Background()
+
+	rodGUID, lureGUID := "", ""
+	guids, _ := db.ItemGUIDsByContainers(ctx, uid, []string{"backpack", "rig"})
+	for _, g := range guids {
+		row, err := db.GetItemByGUID(ctx, g)
+		if err != nil {
+			continue
+		}
+		switch {
+		case row.WireClass == "cnolibojkao" && row.NumericID == 13328:
+			rodGUID = g
+		case row.WireClass == "ioombppcnlh" && row.NumericID == 14026:
+			lureGUID = g
+		}
+	}
+	if rodGUID == "" || lureGUID == "" {
+		t.Fatalf("starter 缺路亚竿/拟饵: rod=%q lure=%q", rodGUID, lureGUID)
+	}
+	if _, err := db.SQL.Exec(`INSERT OR IGNORE INTO item_def(numeric_id, item_id, category, kind, brand, attrs_json)
+		VALUES(14026,'spinnerbaits_1244',17,'lure','', '{}')`); err != nil {
+		t.Fatalf("播种拟饵定义: %v", err)
+	}
+	mountLure(t, db, srv, rodGUID, lureGUID)
+	lureRow, _ := db.GetItemByGUID(ctx, lureGUID)
+	lureFields, _ := FieldsFromJSON(lureRow.FieldsJSON)
+	storedHooks := storedLureHookGUIDs(&lureFields[0])
+	if len(storedHooks) == 0 {
+		t.Fatal("starter 拟饵 f0 缺落库出厂钩")
+	}
+	wantHook := storedHooks[0]
+
+	enableFastBites(t, db, srv)
+	fc.SendRequest(600, 14, 1, bodyWithGUIDs(rodGUID)...)
+	if resp := fc.WaitResponse(3 * time.Second); resp == nil || resp.Body[0] != 0x01 {
+		t.Fatalf("14/1 应回 158: %+v", resp)
+	}
+	fc.SendRequest(601, 14, 2, bodyWithGUIDs(rodGUID)...)
+	if resp := fc.WaitResponse(3 * time.Second); resp == nil || resp.Body[0] != 0x01 {
+		t.Fatalf("14/2 应回 800: %+v", resp)
+	}
+	backdateCastForFastBite(t, srv, uid)
+	waterBody, err := proto.EncodeValue(proto.Args524(wiregen.MustMakeObj("lobemkloehp", map[int]*proto.Value{5: proto.U32(0x600)})), wiregen.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.SendRequest(602, 14, 7, waterBody...)
+
+	fish14 := waitPushCmd(t, fc, 14, 14, 5*time.Second)
+	if fish14 == nil {
+		t.Fatal("路亚首次咬钩未到达")
+	}
+	first, _, err := proto.DecodeValue(fish14.Body, 0, wiregen.Table())
+	if err != nil || first.ArgCount() != 2 {
+		t.Fatalf("首次 14/14 应为 args[2]: %v", err)
+	}
+	firstObj := first.ArgItem(1)
+	if firstObj == nil || firstObj.Field(23).Hex != wantHook {
+		t.Fatalf("首次 14/14 f23 应=出厂钩 %s，实得 %+v", wantHook, firstObj)
+	}
+	firstFishGUID := firstObj.Field(0).Hex
+
+	fc.SendRequest(603, 14, 11)
+	escBody, err := proto.EncodeValue(proto.Args524(wiregen.MustMakeObj("lhicjpmglbo", map[int]*proto.Value{0: proto.U32(8)})), wiregen.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fc.SendRequest(604, 14, 12, escBody...)
+
+	fish14b := waitPushCmd(t, fc, 14, 14, 5*time.Second)
+	if fish14b == nil {
+		t.Fatal("路亚脱钩后未在同一杆内再次咬钩")
+	}
+	second, _, err := proto.DecodeValue(fish14b.Body, 0, wiregen.Table())
+	if err != nil || second.ArgCount() != 2 {
+		t.Fatalf("第二次 14/14 应为 args[2]: %v", err)
+	}
+	secondObj := second.ArgItem(1)
+	if secondObj == nil || secondObj.Field(23).Hex != wantHook {
+		t.Fatalf("第二次 14/14 f23 应=出厂钩 %s，实得 %+v", wantHook, secondObj)
+	}
+	if secondObj.Field(0).Hex == firstFishGUID {
+		t.Fatalf("脱钩后应重新判鱼，不能重推已脱钩的鱼 %s", firstFishGUID)
+	}
+
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	if !st.CastActive || !st.InWater {
+		st.mu.Unlock()
+		t.Fatalf("脱钩后本杆应保持进行中: CastActive=%v InWater=%v", st.CastActive, st.InWater)
+	}
+	if st.Hooked || st.Resolved || st.Pending == nil {
+		st.mu.Unlock()
+		t.Fatalf("第二尾待处理状态异常: Hooked=%v Resolved=%v Pending=%+v", st.Hooked, st.Resolved, st.Pending)
+	}
+	st.mu.Unlock()
+}
+
 // mountLure 将拟饵写入竿实例组件表并同步钓组索引。
 func mountLure(t *testing.T, db *store.DB, srv *Server, rodGUID, lureGUID string) {
 	t.Helper()

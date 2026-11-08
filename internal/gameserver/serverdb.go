@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,19 @@ func (s *Server) attachDB(db *store.DB, log *slog.Logger) {
 		return
 	}
 	s.loadFightCurves()
+	if n, err := s.ensureFishEcology(context.Background()); err != nil {
+		s.log.Warn("鱼种生态档案初始化失败", "err", err)
+	} else if n > 0 {
+		s.log.Info("鱼种生态档案初始化", "inserted", n)
+	}
+	if err := s.reloadFishEcologyCache(context.Background()); err != nil {
+		s.log.Warn("鱼种生态缓存加载失败", "err", err)
+	}
+	if n, err := s.ensureFishSkillEffects(context.Background()); err != nil {
+		s.log.Warn("鱼口技能效果初始化失败", "err", err)
+	} else if n > 0 {
+		s.log.Info("鱼口技能效果初始化", "inserted", n)
+	}
 }
 
 // loadFightCurves 解析搏鱼曲线池，把 f0==100 的基础行放在首位。
@@ -73,12 +87,27 @@ func (s *Server) loadFightCurves() {
 	}
 }
 
-// buildFightCurves 构造 26 行曲线池，并按基础行 f8 缩放张力。
+// buildFightCurves 构造 27.f21 的完整搏鱼阶段池。
 func (s *Server) buildFightCurves(species string, pull float64) *proto.Value {
+	profile := s.fishFightProfileFor(&RolledFish{Species: species})
+	return s.buildFightCurvesWithProfile(species, pull, profile)
+}
+
+func (s *Server) buildFightCurvesForFish(f *RolledFish, pull float64, profile fishFightProfile) *proto.Value {
+	if f == nil {
+		return s.buildFightCurves("", pull)
+	}
+	return s.buildFightCurvesWithProfile(f.Species, pull, profile)
+}
+
+func (s *Server) buildFightCurvesWithProfile(species string, pull float64, profile fishFightProfile) *proto.Value {
 	s.curveMu.Lock()
 	rows := s.curves[species]
 	if len(rows) == 0 {
-		rows = s.curves["crucian"]
+		rows = s.curves[fishFightArchetypeFor(species).CurvePool]
+		if len(rows) == 0 {
+			rows = s.curves["crucian"]
+		}
 	}
 	s.curveMu.Unlock()
 
@@ -86,17 +115,33 @@ func (s *Server) buildFightCurves(species string, pull float64) *proto.Value {
 	if len(rows) == 0 {
 		return out
 	}
-	baseTension := rows[0][8]
+	selected := make([][19]float64, 0, len(rows))
+	if s.tunableF("fight_curves_fixture", 0) != 0 {
+		selected = append(selected, knownRealFightCurveRows()...)
+	} else {
+		selected = rows
+	}
+	baseTension := selected[0][8]
 	scale := 1.0
 	if baseTension > 0 {
 		scale = pull / baseTension
 	}
-	for _, r := range rows {
+	for _, r := range selected {
 		items := map[int]*proto.Value{0: proto.U32(uint32(r[0]))}
+		stage := uint32(r[0])
+		phaseTension := fightPhaseTensionScale(stage)
+		phaseDuration := fightPhaseDurationScale(stage)
+		durationScale := profile.DurationScale * phaseDuration
+		if fightIsRestPhase(stage) {
+			durationScale = profile.RestScale * phaseDuration
+		}
 		for i := 1; i <= 14; i++ {
 			v := r[i]
 			if i == 8 || i == 9 {
-				v *= scale
+				v *= scale * phaseTension
+			}
+			if (i == 2 || i == 3) && v > 0 {
+				v = math.Max(0.1, v*durationScale)
 			}
 			items[i] = proto.F32(float32(v))
 		}
@@ -108,13 +153,34 @@ func (s *Server) buildFightCurves(species string, pull float64) *proto.Value {
 	return out
 }
 
+func findFightCurveRow(rows [][19]float64, want int) ([19]float64, bool) {
+	for _, r := range rows {
+		if int(r[0]) == want {
+			return r, true
+		}
+	}
+	return [19]float64{}, false
+}
+
+// knownRealFightCurveRows 是 2026-10-31 真服 14/14 抓包中 27.f21 的原始两行。
+// 仅用于对照验证客户端的鱼状态机；正式曲线仍应从表/鱼种映射生成。
+func knownRealFightCurveRows() [][19]float64 {
+	return [][19]float64{
+		{105, 1, 0.2, 0.4, 0.25774, 0.42957, 0.75, 1.25, 0.12994, 0.38981, -0.5, 0.5, 0, 0, math.Inf(1), 0, 0, 0, 0},
+		{301, 348, 2, 2, 0.23323, 0.46645, 1, 2, 1.55926, 1.55926, 0, 0, 0, 0, 0, 4500, 5000, 0, 0},
+	}
+}
+
 // buildFightItems 构造 4/22 物品同步元素：full 返回竿和线，非 full 返回钩。
 // 14/11 以钩强 f0 作为负载比基准，因此非 full 分支不能返回竿树。
-func (s *Server) buildFightItems(ctx context.Context, uid int64, full bool) ([]*proto.Value, error) {
+func (s *Server) buildFightItems(ctx context.Context, uid int64, full bool, gears ...string) ([]*proto.Value, error) {
 	st := s.stateFor(uid)
 	st.mu.Lock()
 	gear := st.GearGuid
 	st.mu.Unlock()
+	if len(gears) > 0 {
+		gear = gears[0]
+	}
 	if gear == "" {
 		// 无手持竿：取背包第一件竿
 		guids, _ := s.DB.ItemGUIDsByContainers(ctx, uid, []string{"backpack", "rig"})
@@ -205,6 +271,9 @@ func (s *Server) EnsurePlayer(ctx context.Context, uid int64) error {
 	if _, err := s.DB.EnsureProfile(ctx, uid); err != nil {
 		return err
 	}
+	if _, _, err := s.removeItemsAndRepairRigs(ctx, uid, nil); err != nil {
+		return fmt.Errorf("修复物品装配引用: %w", err)
+	}
 	var parsed struct {
 		Items []struct {
 			ItemID string `json:"item_id"`
@@ -241,11 +310,9 @@ func (s *Server) EnsurePlayer(ctx context.Context, uid int64) error {
 			if err != nil {
 				return fmt.Errorf("解析 starter %s 字段: %w", si.ItemID, err)
 			}
-			idx := fieldIdxByCS(it.WireClass, csQty)
-			if idx < 0 || idx >= len(fields) {
+			if !setItemQty(it.WireClass, fields, uint64(si.Qty)) {
 				return fmt.Errorf("starter %s 不支持数量 %d", si.ItemID, si.Qty)
 			}
-			fields[idx].Num = ptrU64(uint64(si.Qty))
 			fj, err := FieldsToJSON(fields)
 			if err != nil {
 				return fmt.Errorf("编码 starter %s 字段: %w", si.ItemID, err)

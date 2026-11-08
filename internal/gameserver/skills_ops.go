@@ -17,9 +17,19 @@ import (
 
 // fishingSkillBonus 保存钓鱼判定使用的三类技能增益。
 type fishingSkillBonus struct {
-	BiteSpeed      float64 // 咬钩等待倍率，<1 更快
-	TrophyLuck     float64 // 额外抽一次体重取较重者的概率
-	FightTolerance float64 // 默认鱼池体重上限的放宽比例
+	BiteSpeed         float64 // 咬钩等待倍率，<1 更快
+	TrophyLuck        float64 // 额外抽一次体重取较重者的概率
+	FightTolerance    float64 // 默认鱼池体重上限的放宽比例
+	EcologyInterest   float64
+	RareFish          float64
+	LureTolerance     float64
+	WeatherAdaptation float64
+	LayerAccuracy     float64
+	WormBoost         float64
+	PredatorBoost     float64
+	SalmonidBoost     float64
+	BottomBoost       float64
+	FloatBoost        float64
 }
 
 func neutralFishingSkillBonus() fishingSkillBonus {
@@ -28,14 +38,15 @@ func neutralFishingSkillBonus() fishingSkillBonus {
 
 // fishingSkillCatForRig 根据钓组类型返回对应技能大类；未知类型归入浮钓。
 func fishingSkillCatForRig(rigType int64) int64 {
+	// 海钓拟饵/沉底族也分别参与对应动作状态机，但熟练度仍统一归海钓大类。
+	if marineRigType(rigType) {
+		return 11
+	}
 	if bottomRigTypes[rigType] {
 		return 3
 	}
 	if rigTypeLureFamily[rigType] {
 		return 2
-	}
-	if rigType >= 50 && rigType <= 59 {
-		return 11
 	}
 	return 1
 }
@@ -45,6 +56,15 @@ const (
 	// 熟练度越高，命中增长的概率越低；100% 时直接返回 0。
 	fishingProficiencyChanceScale = 25.0
 	fishingProficiencyMaxChance   = 0.9
+
+	// 技能书（category 80）在 item_def.attrs_json 中用 ndnngghaelp 指定技能大类，
+	// fejmchnmimb 是 f32 位模式的目标熟练度（30%/40%），不是增量。
+	skillBookCategory    int64  = 80
+	skillBookMaxSkillCat uint64 = 11
+
+	// 174 = abadjfbfdjb.hpifaoeaeja，客户端映射到
+	// kOperationResult_SkillBookReadNoEffect（阅读技能书没有效果）。
+	operationResultSkillBookReadNoEffect = 174
 )
 
 // fishingProficiencyGainChance 返回一次钓获触发熟练度增长的概率。
@@ -157,6 +177,154 @@ func (s *Server) awardSkillProficiencyWithRolls(ctx context.Context, uid, cat in
 	return gain
 }
 
+// useSkillBook 处理 4/8 中 category 80 的技能书：按书目配置把对应大类熟练度
+// 提升到目标百分比，并在同一事务里消耗一本书。
+//
+// item_def.attrs_json 里 ndnngghaelp 是技能大类（1 浮钓 / 2 纺车 / 3 喂食器 /
+// 11 海钓），fejmchnmimb 是 f32 位模式的目标熟练度（30 或 40）。已达到目标时
+// 不消耗书，回操作结果码 174，由客户端显示 kOperationResult_SkillBookReadNoEffect；
+// 不能回普通 .NET 异常，否则客户端会退化成 kCommon_E_INTERNAL_WITHCODE 通用内部错误。
+// 非技能书交回 hItemUse 的通用分支。
+func (s *Server) useSkillBook(ctx *Ctx) ([]byte, bool) {
+	if !s.requireDB(ctx) {
+		return nil, false
+	}
+	storage, hasStorage := ctx.ArgInt(0)
+	if ctx.Tree == nil || ctx.Tree.Kind != proto.KindArgs || len(ctx.Tree.Items) != 2 {
+		return nil, false
+	}
+	arg := ctx.Tree.ArgItem(1)
+	if arg == nil || arg.Kind != proto.KindGuid || !validRigGUID(arg.Hex) {
+		return nil, false
+	}
+
+	var tx *sql.Tx
+	fail := func(message string) ([]byte, bool) {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+		ctx.ReplyFailure("System.InvalidOperationException", message)
+		return nil, true
+	}
+	failed := func(err error) ([]byte, bool) {
+		ctx.Log.Warn("阅读技能书未完成", "err", err)
+		return fail("阅读技能书未完成，请重试")
+	}
+	noEffect := func() ([]byte, bool) {
+		if tx != nil {
+			_ = tx.Rollback()
+		}
+		ctx.ReplyOperationResult(operationResultSkillBookReadNoEffect)
+		return nil, true
+	}
+
+	cctx, uid := ctx.Sess.pushCtx(), ctx.Sess.Userid
+	var err error
+	tx, err = beginEconomyTx(cctx, s.DB)
+	if err != nil {
+		return failed(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	row, err := getItemTx(cctx, tx, arg.Hex)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false
+	}
+	if err != nil {
+		return failed(err)
+	}
+	def, err := itemDefByNumericIDTx(cctx, tx, row.NumericID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false
+	}
+	if err != nil {
+		return failed(err)
+	}
+	if def.Category != skillBookCategory {
+		return nil, false
+	}
+	bookClass := categoryWireClass[skillBookCategory]
+	if ctx.Sess.Closed() {
+		return fail("会话已关闭，请重新连接")
+	}
+	if !hasStorage || storage != 0 || row.UID != uid || row.Container != "backpack" || row.RigGUID != "" {
+		return fail("只能阅读自己背包中的技能书")
+	}
+	if row.WireClass != bookClass.Class || row.TypeID != bookClass.TypeID {
+		return fail("技能书状态无效，请刷新背包")
+	}
+
+	catRaw, ok := defAttrU64(def, "ndnngghaelp")
+	if !ok || catRaw == 0 || catRaw > skillBookMaxSkillCat {
+		return fail("技能书缺少有效的技能类别")
+	}
+	cat := int64(catRaw)
+	bits, ok := defAttrF32(def, "fejmchnmimb")
+	if !ok {
+		return fail("技能书缺少目标熟练度")
+	}
+	target := float64(proto.F32FromBits(bits))
+	if target <= 0 {
+		return fail("技能书目标熟练度无效")
+	}
+	if target > profCap {
+		target = profCap
+	}
+	current, err := s.DB.GetSkillPointsTx(cctx, tx, uid, cat)
+	if err != nil {
+		return failed(err)
+	}
+	if current < 0 {
+		current = 0
+	}
+	if current > profCap {
+		current = profCap
+	}
+	if current+1e-6 >= target {
+		ctx.Log.Info("4/8 技能书阅读无效", "item", def.ItemID, "cat", cat,
+			"skill", fmt.Sprintf("%.1f>=%.1f", current, target))
+		return noEffect()
+	}
+	if err := s.DB.AddSkillPointsTx(cctx, tx, uid, cat, target-current); err != nil {
+		return failed(err)
+	}
+	if _, err := consumeItemQtyTx(cctx, tx, row, 1); err != nil {
+		return failed(err)
+	}
+
+	var updated []*proto.Value
+	var removed []string
+	if row.Qty == 0 {
+		removed = []string{row.GUID}
+	} else {
+		fields, err := FieldsFromJSON(row.FieldsJSON)
+		if err != nil {
+			return failed(err)
+		}
+		tree := proto.Obj(row.WireClass, uint32(row.TypeID), fields...)
+		stateFlagsZeroFill(row.WireClass, tree, def)
+		updated = []*proto.Value{tree}
+	}
+	body, err := proto.EncodeValue(buildRigSnapshot800(nil, updated, removed), ctx.Sess.Table())
+	if err != nil {
+		return failed(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return failed(err)
+	}
+	change := baitChange{Removed: removed}
+	if len(updated) > 0 {
+		change.Updated = []string{row.GUID}
+	}
+	ctx.AfterResponse(func() {
+		ctx.Sess.Push2_4SkillTree("阅读 " + def.ItemID)
+		ctx.Sess.pushBaitChange(change)
+	})
+	ctx.Log.Info("4/8 阅读技能书", "item", def.ItemID, "cat", cat,
+		"skill", fmt.Sprintf("%.1f->%.1f", current, target))
+	return body, true
+}
+
 // fishingBonus 按当前钓法合成永久与当前竿熟练度，不给未知节点补通用加成。
 func (s *Server) fishingBonus(ctx context.Context, uid, rigType int64, gears ...string) fishingSkillBonus {
 	b := neutralFishingSkillBonus()
@@ -175,7 +343,214 @@ func (s *Server) fishingBonus(ctx context.Context, uid, rigType int64, gears ...
 	}
 	b.TrophyLuck = effect / 10.0 * 0.012
 	b.FightTolerance = effect / 10.0 * 0.06
+	s.applyFishingNodeBonuses(ctx, cat, &b, effects, s.skillDefsOfCat(cat))
 	return b
+}
+
+type fishingSkillEffectDef struct {
+	NodeID    int64
+	EffectKey string
+	PerLevel  float64
+	Cap       float64
+}
+
+func (s *Server) ensureFishSkillEffects(ctx context.Context) (int, error) {
+	if s == nil || s.DB == nil {
+		return 0, nil
+	}
+	res, err := s.DB.SQL.ExecContext(ctx, `
+		INSERT INTO skill_fish_effect_def(
+			cat_id,node_id,effect_key,per_level,cap,source,confidence
+		)
+		SELECT cat_id,node_id,
+			CASE
+				WHEN cat_id=1 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'layer_accuracy' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'float_interest' WHEN 5 THEN 'worm_interest'
+					WHEN 6 THEN 'layer_accuracy' ELSE 'ecology_interest' END
+				WHEN cat_id=2 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'lure_tolerance' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'predator_interest' WHEN 5 THEN 'layer_accuracy'
+					WHEN 6 THEN 'lure_tolerance' ELSE 'ecology_interest' END
+				WHEN cat_id=3 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'layer_accuracy' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'benthic_interest' WHEN 5 THEN 'worm_interest'
+					WHEN 6 THEN 'layer_accuracy' ELSE 'ecology_interest' END
+				WHEN cat_id=11 THEN CASE ordinal%8
+					WHEN 0 THEN 'ecology_interest' WHEN 1 THEN 'rare_species'
+					WHEN 2 THEN 'lure_tolerance' WHEN 3 THEN 'weather_tolerance'
+					WHEN 4 THEN 'predator_interest' WHEN 5 THEN 'layer_accuracy'
+					WHEN 6 THEN 'lure_tolerance' ELSE 'ecology_interest' END
+			END,
+			MIN(0.035,0.18/(CASE WHEN max_level>0 THEN max_level ELSE 1 END)),
+			0.20,'local-sim',0.45
+		FROM skill_def
+		WHERE cat_id IN (1,2,3,11) AND max_level>0
+		ON CONFLICT(cat_id,node_id) DO NOTHING`)
+	if err != nil {
+		return 0, err
+	}
+	if err := s.normalizeFishSkillEffectGroups(ctx); err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
+}
+
+func (s *Server) normalizeFishSkillEffectGroups(ctx context.Context) error {
+	ident, err := s.DB.LoadSkillIdentity(ctx)
+	if err != nil {
+		return err
+	}
+	type effectRow struct {
+		catID, nodeID int64
+		key           string
+		perLevel, cap float64
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT cat_id,node_id,effect_key,per_level,cap
+		FROM skill_fish_effect_def ORDER BY node_id,cat_id`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byRoot := map[int64][]effectRow{}
+	for rows.Next() {
+		var row effectRow
+		if err := rows.Scan(&row.catID, &row.nodeID, &row.key, &row.perLevel, &row.cap); err != nil {
+			return err
+		}
+		group := ident.Group(row.nodeID)
+		root := row.nodeID
+		if len(group) > 0 {
+			root = group[0]
+		}
+		byRoot[root] = append(byRoot[root], row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	tx, err := s.DB.SQL.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, groupRows := range byRoot {
+		canonical := groupRows[0]
+		for _, row := range groupRows[1:] {
+			if row.nodeID < canonical.nodeID {
+				canonical = row
+			}
+		}
+		for _, row := range groupRows {
+			if row.key == canonical.key && row.perLevel == canonical.perLevel && row.cap == canonical.cap {
+				continue
+			}
+			if _, err := tx.ExecContext(ctx, `
+				UPDATE skill_fish_effect_def
+				SET effect_key=?,per_level=?,cap=?,source='local-sim:shared-group'
+				WHERE cat_id=? AND node_id=?`,
+				canonical.key, canonical.perLevel, canonical.cap, row.catID, row.nodeID); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+// applyFishingNodeBonuses 从可审计的效果表读取节点效果。表由迁移显式生成，
+// 可以在后台或后续版本按实机证据逐节点改写，不在业务代码里按 ID 猜语义。
+func (s *Server) applyFishingNodeBonuses(ctx context.Context, catID int64, b *fishingSkillBonus, effects effectiveFishingEffects, defs []skillNodeDef) {
+	if s == nil || s.DB == nil || b == nil {
+		return
+	}
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT node_id,effect_key,per_level,cap
+		FROM skill_fish_effect_def WHERE cat_id=? ORDER BY node_id`, catID)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+	var effectDefs []fishingSkillEffectDef
+	for rows.Next() {
+		var effect fishingSkillEffectDef
+		if rows.Scan(&effect.NodeID, &effect.EffectKey, &effect.PerLevel, &effect.Cap) == nil {
+			effectDefs = append(effectDefs, effect)
+		}
+	}
+	if rows.Err() != nil {
+		return
+	}
+	ident, err := s.DB.LoadSkillIdentity(ctx)
+	if err != nil {
+		return
+	}
+	learned := ident.Project(effects.Learned)
+	gear := ident.Project(effects.GearNodes)
+	defByID := make(map[int64]skillNodeDef, len(defs))
+	for _, def := range defs {
+		defByID[def.NodeID] = def
+	}
+	processedGroups := map[int64]bool{}
+	for _, effect := range effectDefs {
+		def, ok := defByID[effect.NodeID]
+		if !ok || def.MaxLevel <= 0 {
+			continue
+		}
+		group := ident.Group(effect.NodeID)
+		groupKey := effect.NodeID
+		if len(group) > 0 {
+			groupKey = group[0]
+		}
+		if processedGroups[groupKey] {
+			continue // 共享技能身份只结算一次
+		}
+		processedGroups[groupKey] = true
+		level := learned[effect.NodeID] + gear[effect.NodeID]
+		if level <= 0 {
+			continue
+		}
+		if level > def.MaxLevel {
+			level = def.MaxLevel
+		}
+		value := math.Min(effect.Cap, float64(level)*effect.PerLevel)
+		switch effect.EffectKey {
+		case "ecology_interest":
+			b.EcologyInterest += value
+		case "rare_species":
+			b.RareFish += value
+		case "lure_tolerance":
+			b.LureTolerance += value
+		case "weather_tolerance":
+			b.WeatherAdaptation += value
+		case "layer_accuracy":
+			b.LayerAccuracy += value
+		case "worm_interest":
+			b.WormBoost += value
+		case "predator_interest":
+			b.PredatorBoost += value
+		case "salmonid_interest":
+			b.SalmonidBoost += value
+		case "benthic_interest":
+			b.BottomBoost += value
+		case "float_interest":
+			b.FloatBoost += value
+		}
+	}
+	b.EcologyInterest = clampFloat(b.EcologyInterest, 0, .22)
+	b.RareFish = clampFloat(b.RareFish, 0, .18)
+	b.LureTolerance = clampFloat(b.LureTolerance, 0, .20)
+	b.WeatherAdaptation = clampFloat(b.WeatherAdaptation, 0, .20)
+	b.LayerAccuracy = clampFloat(b.LayerAccuracy, 0, .18)
+	b.WormBoost = clampFloat(b.WormBoost, 0, .18)
+	b.PredatorBoost = clampFloat(b.PredatorBoost, 0, .20)
+	b.SalmonidBoost = clampFloat(b.SalmonidBoost, 0, .18)
+	b.BottomBoost = clampFloat(b.BottomBoost, 0, .20)
+	b.FloatBoost = clampFloat(b.FloatBoost, 0, .18)
 }
 
 func init() {

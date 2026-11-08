@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"path/filepath"
@@ -39,6 +40,7 @@ func registerEconMarket(d *Dispatch) {
 	d.Register(17, 12, hRodSetDepth)
 	d.Register(17, 13, hRodSetClip)
 	d.Register(17, 14, hRodSetDrag)
+	d.Register(17, 15, hRodSetSpeed)
 }
 
 // ---------------------------------------------------------------------------
@@ -138,6 +140,7 @@ func marketRatePerG(species string, grade int64) float64 {
 // 无可用数据或倍率未登记时返回 0，调用方回退到基础速率。
 func marketSilverPerKgOverlay(mapKey, fishKey string, grade int64) float64 {
 	overlayOnce.Do(loadMarketOverlay)
+	mapKey = normalizeMarketMapKey(mapKey)
 	if marketPriceTable == nil || len(marketPriceTable) == 0 {
 		return 0
 	}
@@ -205,6 +208,34 @@ func loadMarketOverlay() {
 	}
 }
 
+// normalizeMarketMapKey 把客户端的鱼市场景键（如 level_004_fishmarket）归一到
+// 价格表中的地图键（level_004_torfyanoe_ozero），否则覆盖价查不到会回退基础速率。
+func normalizeMarketMapKey(mapKey string) string {
+	if _, ok := marketPctTable[mapKey]; ok {
+		return mapKey
+	}
+	// 形如 level_004_fishmarket：地图键在前，场景后缀在后。
+	if strings.HasSuffix(mapKey, "_fishmarket") {
+		base := strings.TrimSuffix(mapKey, "_fishmarket")
+		for m := range marketPctTable {
+			if m == base || strings.HasPrefix(m, base+"_") {
+				return m
+			}
+		}
+		return mapKey
+	}
+	// 形如 fishmarket_012：编号在前，映射到 level_012_* 的地图键。
+	if strings.HasPrefix(mapKey, "fishmarket_") {
+		num := strings.TrimPrefix(mapKey, "fishmarket_")
+		for m := range marketPctTable {
+			if strings.HasPrefix(m, "level_"+num+"_") {
+				return m
+			}
+		}
+	}
+	return mapKey
+}
+
 // marketMapPct 返回水域鱼市价格倍率；未登记时返回 0。
 func marketMapPct(mapKey string) float64 {
 	overlayOnce.Do(loadMarketOverlay)
@@ -213,6 +244,30 @@ func marketMapPct(mapKey string) float64 {
 
 // marketPriceCentsForMap 计算单条鱼的鱼市报价（银币分）。
 // 优先使用水域覆盖价，未命中时使用基础速率，两者都乘以新鲜度。
+// marketDayForced 允许用环境变量 RF4_MARKET_DAY 覆盖鱼市日期（yyyyMMdd），
+// 仅用于验证每日价格波动；空值时使用真实 UTC 日期。读取发生在包初始化，
+// 计价路径不做文件 I/O。
+var marketDayForced = os.Getenv("RF4_MARKET_DAY")
+
+func marketDay(now float64) string {
+	if marketDayForced != "" {
+		return marketDayForced
+	}
+	return time.Unix(int64(now), 0).UTC().Format("20060102")
+}
+
+// dailyMarketFactor 返回按 UTC 日期与鱼种确定的每日价格系数，范围 0.95–1.05。
+// 同一鱼种在同一天内稳定，跨天重新取值，用于模拟鱼市日价波动。
+func dailyMarketFactor(species string, now float64) float64 {
+	day := marketDay(now)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(day))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(species))
+	r := float64(h.Sum32()%10000) / 9999.0
+	return 0.95 + 0.10*r
+}
+
 func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) int64 {
 	w := e.WeightG
 	if w < 1 {
@@ -223,10 +278,11 @@ func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) i
 		grade = 1
 	}
 	fresh := freshnessFactor(e.TS, now)
+	factor := dailyMarketFactor(e.Species, now)
 	if perKg := marketSilverPerKgOverlay(mapKey, e.Species, grade); perKg > 0 {
-		return int64(math.Max(1, math.Round(perKg*(float64(w)/1000.0)*100*fresh)))
+		return int64(math.Max(1, math.Round(perKg*factor*(float64(w)/1000.0)*100*fresh)))
 	}
-	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*float64(w)*100*fresh)))
+	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*factor*float64(w)*100*fresh)))
 }
 
 // marketPriceCents 在未指定地图时计算报价，地图路径应使用 marketPriceCentsForMap。
@@ -268,6 +324,7 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 	uid := ctx.Sess.Userid
 	cctx := ctx.Sess.pushCtx()
 	now := float64(time.Now().Unix())
+	sellMapKey := srv.currentLevel(uid)
 	out := proto.Args(proto.S("111"))
 	rotten := 0
 	locked := srv.openMarketOfferFishSet(cctx, uid)
@@ -284,8 +341,8 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 			flag = 1
 			rotten++
 		}
-		mapKey := srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		price := marketPriceCentsForMap(e, now, mapKey)
+		// 鱼市按卖鱼时所在水域计价：同一批鱼在不同地图卖出，价格随该图倍率变化。
+		price := marketPriceCentsForMap(e, now, sellMapKey)
 		out.Items = append(out.Items, wiregen.MustMakeObj("jpmlmnfkbfn", map[int]*proto.Value{
 			0: proto.Guid(g),
 			1: proto.U64(uint64(price)),
@@ -317,12 +374,8 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 	guids := uniqueStrings(deepGUIDs(ctx.Tree))
 
 	// 地图解析使用连接池，必须在事务前完成；事务内只重读护网行并核价。
-	levels := map[string]string{}
-	if list, err := srv.DB.KeepnetList(cctx, uid); err == nil {
-		for _, e := range list {
-			levels[e.EchoGUID] = srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		}
-	}
+	// 鱼市按卖鱼时所在水域计价，与鱼的钓获地图无关。
+	sellMapKey := srv.currentLevel(uid)
 
 	type soldPair struct {
 		guid  string
@@ -365,10 +418,7 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 			ctx.Log.Warn("20/2 读取挂单锁失败", "guid", g, "err", err)
 			return []byte{0x0F}, true
 		}
-		mapKey := levels[g]
-		if mapKey == "" && e.KeepLevel != "" {
-			mapKey = e.KeepLevel
-		}
+		mapKey := sellMapKey
 		price := marketPriceCentsForMap(e, now, mapKey)
 		sold = append(sold, soldPair{guid: g, price: price})
 		total += price
@@ -1291,15 +1341,6 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 			continue
 		}
 		fields[idx].Val = child
-		// 齿轮决定母轮顶层显示/运算使用的传动比。子件换了而母轮 f0 不变，
-		// 客户端和服务端都会继续使用出厂参数。
-		if def.Category == 52 {
-			if ratio := itemDefF32(def, gearAttrRatio); ratio > 0 {
-				if pidx := fieldIdxByCS(row.WireClass, csStrength); pidx >= 0 {
-					setWireFloat(fields, row.WireClass, pidx, ratio*row.Workmanship)
-				}
-			}
-		}
 		ps, pg := srv.partPrice(cctx, o.SysID, def.Category)
 		silver += ps
 		gold += pg
@@ -1340,6 +1381,15 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 	fj, jerr := FieldsToJSON(fields)
 	if jerr != nil {
 		return nil, false
+	}
+	// Use the updated parts when normalizing the snapshot before persistence.
+	snapshot := *row
+	snapshot.FieldsJSON = fj
+	if row.WireClass == "dgjinoebdop" && srv.canonicalizeReelStrength(cctx, &snapshot, fields) {
+		fj, jerr = FieldsToJSON(fields)
+		if jerr != nil {
+			return nil, false
+		}
 	}
 	if err := srv.DB.UpdateItemFields(cctx, row.GUID, fj, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
 		return nil, false
@@ -1611,18 +1661,26 @@ func hRodSetDepth(ctx *Ctx) ([]byte, bool) {
 	if rodGUID == "" || depthCM <= 0 {
 		return nil, true
 	}
-	st := srv.stateFor(ctx.Sess.Userid)
+	var row *store.Item
+	if srv.DB != nil {
+		row = srv.ownedRodRow(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID)
+		if row == nil {
+			ctx.Log.Warn("17/12 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
+	}
+	st := srv.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	st.DepthCM = depthCM
 	st.mu.Unlock()
 	ctx.Log.Info("17/12 设置钓深", "竿", shortGUID(rodGUID), "深度cm", depthCM)
-	if srv.DB != nil && !srv.rodRigSetDepth(ctx.Sess.pushCtx(), rodGUID, depthCM) {
+	if row != nil && !srv.rodRigSetDepthRow(ctx.Sess.pushCtx(), row, depthCM) {
 		ctx.Log.Info("17/12 竿实例无钓组字段，仅记会话深度", "竿", shortGUID(rodGUID))
 	}
 	return nil, true
 }
 
-// hRodSetDrag 17/14（fire-and-forget）：渔轮摩擦/转速设定值上报。
+// hRodSetDrag 17/14（fire-and-forget）：渔轮摩擦档位上报。
 //
 // 报文形状与 17/13（轮管卡）相同：args(52) + 竿 guid + u32。客户端每次启动都回到默认值，
 // 是因为服务端没有把设定值记下来回填；这里按竿保存并写回钓组桩的第 6 个字段。
@@ -1632,21 +1690,65 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 	if rodGUID == "" {
 		return nil, true
 	}
-	ctx.Log.Info("17/14 设置摩擦/转速", "竿", shortGUID(rodGUID), "值", value)
-	if srv.DB != nil {
-		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelDragSettingKey,
-			strconv.FormatInt(value, 10))
-		srv.rodRigSetDrag(ctx.Sess.pushCtx(), rodGUID, value)
+	ctx.Log.Info("17/14 设置摩擦", "竿", shortGUID(rodGUID), "值", value)
+	if srv.DB != nil && !srv.setOwnedRodSetting(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+		rodGUID, reelDragSettingKey, value, 6) {
+		ctx.Log.Warn("17/14 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
 	}
 	return nil, true
 }
 
-// rodRigSetDrag 把摩擦/转速值写回竿实例钓组桩的第 6 个字段，保留其他钓组状态。
-func (s *Server) rodRigSetDrag(ctx context.Context, rodGUID string, value int64) bool {
+// hRodSetSpeed 17/15（fire-and-forget）：路亚族收线速度档上报。
+//
+// 2026-11-07 抓包确认：调“收线速度”发 17/15（f5.f7），调“摩擦”发 17/14（f5.f6）。
+// 服务端此前没有 17/15 handler，速度值被直接丢弃，重新登录后回到默认。
+func hRodSetSpeed(ctx *Ctx) ([]byte, bool) {
+	srv := ctx.Sess.Srv
+	rodGUID, value := parseRodGuidInt(ctx.Tree)
+	if rodGUID == "" {
+		return nil, true
+	}
+	ctx.Log.Info("17/15 设置收线速度", "竿", shortGUID(rodGUID), "值", value)
+	if srv.DB != nil {
+		if !srv.setOwnedRodSetting(ctx.Sess.pushCtx(), ctx.Sess.Userid,
+			rodGUID, reelSpeedSettingKey, value, 7) {
+			ctx.Log.Warn("17/15 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
+	}
+	st := srv.fishingStateForRequest(ctx)
+	st.mu.Lock()
+	st.ReelSetting = value
+	st.mu.Unlock()
+	return nil, true
+}
+
+// ownedRodRow 返回属于 uid 的竿实例行；竿不存在或归属不符时返回 nil。
+func (s *Server) ownedRodRow(ctx context.Context, uid int64, rodGUID string) *store.Item {
+	if s == nil || s.DB == nil {
+		return nil
+	}
 	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
+	if err != nil || row == nil || row.UID != uid {
+		return nil
+	}
+	return row
+}
+
+// setOwnedRodSetting 校验竿实例属于 uid 后，持久化竿设置并尽力回写 f5 的第 fieldIdx 个字段。
+// 返回 false 表示竿不存在或不属于该玩家，此时不产生任何写入。
+func (s *Server) setOwnedRodSetting(ctx context.Context, uid int64, rodGUID, key string, value int64, fieldIdx int) bool {
+	row := s.ownedRodRow(ctx, uid, rodGUID)
+	if row == nil {
 		return false
 	}
+	_ = s.DB.UpsertRodSetting(ctx, rodGUID, key, strconv.FormatInt(value, 10))
+	s.rodRigSetField(ctx, row, fieldIdx, value)
+	return true
+}
+
+// rodRigSetField 把值写回竿实例钓组桩的第 fieldIdx 个字段，保留其他钓组状态。
+func (s *Server) rodRigSetField(ctx context.Context, row *store.Item, fieldIdx int, value int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false
@@ -1656,15 +1758,15 @@ func (s *Server) rodRigSetDrag(ctx context.Context, rodGUID string, value int64)
 		return false
 	}
 	stored := fields[idx].Val
-	if stored == nil || stored.Kind != proto.KindObj || len(stored.Fields) <= 6 {
+	if stored == nil || stored.Kind != proto.KindObj || len(stored.Fields) <= fieldIdx {
 		return false
 	}
 	clone := *stored
 	clone.Fields = append([]proto.Field(nil), stored.Fields...)
-	if clone.Fields[6].Op != "VAL" {
-		clone.Fields[6].Op = "U32"
+	if clone.Fields[fieldIdx].Op != "VAL" {
+		clone.Fields[fieldIdx].Op = "U32"
 	}
-	clone.Fields[6].Num = ptrU64(uint64(value))
+	clone.Fields[fieldIdx].Num = ptrU64(uint64(value))
 	fields[idx].Op = "VAL"
 	fields[idx].Val = &clone
 	s.saveItemFields(ctx, row, fields)
@@ -1681,20 +1783,21 @@ func hRodSetClip(ctx *Ctx) ([]byte, bool) {
 	clipM = clampReelClipM(clipM)
 	ctx.Log.Info("17/13 设置轮管卡", "竿", shortGUID(rodGUID), "卡米", clipM)
 	if srv.DB != nil {
+		row := srv.ownedRodRow(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID)
+		if row == nil {
+			ctx.Log.Warn("17/13 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+			return nil, true
+		}
 		_ = srv.DB.UpsertRodSetting(ctx.Sess.pushCtx(), rodGUID, reelClipSettingKey, strconv.FormatInt(clipM, 10))
-		if !srv.rodRigSetClip(ctx.Sess.pushCtx(), rodGUID, clipM) {
+		if !srv.rodRigSetClipRow(ctx.Sess.pushCtx(), row, clipM) {
 			ctx.Log.Info("17/13 竿实例无钓组字段，仅记竿设置", "竿", shortGUID(rodGUID))
 		}
 	}
 	return nil, true
 }
 
-// rodRigSetClip 更新竿实例 153.f5 的轮管卡米数，保留其他钓组状态。
-func (s *Server) rodRigSetClip(ctx context.Context, rodGUID string, clipM int64) bool {
-	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
-		return false
-	}
+// rodRigSetClipRow 更新已校验归属的竿实例 153.f5 轮管卡米数，保留其他钓组状态。
+func (s *Server) rodRigSetClipRow(ctx context.Context, row *store.Item, clipM int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false
@@ -1752,13 +1855,9 @@ func parseSetDepth(tree *proto.Value) (rodGUID string, depthCM int64) {
 	return parseRodGuidInt(tree)
 }
 
-// rodRigSetDepth 设置竿实例 f5 的钓棚深度（厘米）并落库。
+// rodRigSetDepthRow 设置已校验归属的竿实例 f5 钓棚深度（厘米）并落库。
 // 组件表和钓组类型保持不变；f5 缺失时先按竿型派生默认钓组。
-func (s *Server) rodRigSetDepth(ctx context.Context, rodGUID string, depthCM int64) bool {
-	row, err := s.DB.GetItemByGUID(ctx, rodGUID)
-	if err != nil || row == nil {
-		return false
-	}
+func (s *Server) rodRigSetDepthRow(ctx context.Context, row *store.Item, depthCM int64) bool {
 	fields, err := FieldsFromJSON(row.FieldsJSON)
 	if err != nil {
 		return false

@@ -17,6 +17,18 @@ import (
 type baitChange struct {
 	Updated []string `json:"updated,omitempty"`
 	Removed []string `json:"removed,omitempty"`
+	// Groundbait 是本次入水被消耗的窝料/食笼/PVA 份数，用于把它们记进落点格子。
+	Groundbait []groundbaitUse `json:"groundbait,omitempty"`
+}
+
+// groundbaitUse 一次入水消耗掉的窝料明细。
+type groundbaitUse struct {
+	ItemID   string  `json:"item_id"`
+	Units    float64 `json:"units"`
+	Category int64   `json:"category"`
+	// GUID 是这份窝料的物品实例。自制窝料没有独立 item_id，能不能吸引对口的鱼
+	// 全看这个实例当初是用什么原料做的。
+	GUID string `json:"guid,omitempty"`
 }
 
 type baitedHookSet struct {
@@ -431,6 +443,12 @@ func (s *Server) consumeBaitEvent(ctx context.Context, uid int64, rod, event str
 		if _, err := consumeItemQtyTx(ctx, tx, row, 1); err != nil {
 			return out, err
 		}
+		if cast && (def.Category == 46 || def.Category == 30) {
+			// 挂在竿上的窝子（食笼/PVA 棒）入水即投放：这份料要进落点格子的窝料账本，
+			// 否则attraction 系统看不见它。
+			out.Groundbait = append(out.Groundbait, groundbaitUse{ItemID: def.ItemID, Units: 1,
+				Category: def.Category, GUID: row.GUID})
+		}
 		if row.Qty > 0 {
 			out.Updated = append(out.Updated, guid)
 			continue
@@ -513,22 +531,7 @@ func (s *Session) pushBaitChange(change baitChange) {
 	if len(change.Removed) > 0 {
 		s.Push4_21(change.Removed)
 	}
-	var trees []*proto.Value
-	seen := map[string]bool{}
-	for _, guid := range change.Updated {
-		if seen[guid] {
-			continue
-		}
-		seen[guid] = true
-		if row, err := s.Srv.DB.GetItemByGUID(s.pushCtx(), guid); err == nil && row != nil {
-			if tree, err := s.Srv.itemTree(s.pushCtx(), row); err == nil {
-				trees = append(trees, tree)
-			}
-		}
-	}
-	if len(trees) > 0 {
-		s.Push(4, 22, proto.Args(proto.S("61"), trees...))
-	}
+	s.Push4_22ItemGUIDs(change.Updated)
 }
 
 func (s *Server) pushBaitedFish(sess *Session, f *RolledFish, rod string) bool {
@@ -585,6 +588,7 @@ func (s *Server) consumeCastBait(sess *Session, st *FishState) error {
 	change, err := s.consumeBaitEvent(sess.pushCtx(), sess.Userid, rod, fmt.Sprintf("%s:%d", rod, cast.UnixNano()), ids, true)
 	if err == nil {
 		sess.pushBaitChange(change)
+		s.depositCastGroundbait(sess, st, change, fmt.Sprintf("%s:%d", rod, cast.UnixNano()))
 	}
 	return err
 }
@@ -626,13 +630,26 @@ func (s *Server) reloadBaitForCast(ctx context.Context, uid int64, rod string) (
 		comps := s.storedRigComponents(ctx, rod)
 		occupied := false
 		mountOrdinal := ordinal
-		if multi && request.HookGUID != "" {
-			if _, _, present := rigCompKeyForGUID(comps, request.HookGUID); !present {
+		// 钩已随断线、断竿或拆卸离开钓组时，这条补饵请求作废：不能再把饵挂到
+		// 没有钩的钓组上。旧格式记录没有 hook 字段：单钩钓组可推断唯一钩；
+		// 多钩钓组无法确定挂哪只钩，按无法安全补饵处理。
+		if request.HookGUID == "" {
+			hooks := rigCompKeysOfCategory(comps, catHook)
+			if multi || len(hooks) != 1 {
 				if _, err := s.DB.SQL.ExecContext(ctx, `DELETE FROM rod_setting WHERE guid=? AND key=?`, rod, key); err != nil {
 					return out, err
 				}
 				continue
 			}
+			request.HookGUID = comps[hooks[0]].GUID
+		}
+		if _, _, present := rigCompKeyForGUID(comps, request.HookGUID); !present {
+			if _, err := s.DB.SQL.ExecContext(ctx, `DELETE FROM rod_setting WHERE guid=? AND key=?`, rod, key); err != nil {
+				return out, err
+			}
+			continue
+		}
+		if multi && request.HookGUID != "" {
 			assignments, err := s.baitHookAssignments(ctx, rod, comps, false)
 			if err != nil {
 				return out, err

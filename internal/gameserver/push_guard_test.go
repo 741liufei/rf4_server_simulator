@@ -44,3 +44,21 @@ func TestPushContractPatternsAreKnown(t *testing.T) {
 		}
 	}
 }
+
+// 4/22 物品推送必须放行全部物品 wire tid：铃铛 700、竿架 11500 属合法物品
+// （items.go categoryWireClasses），曾因合同收窄 100..199 被拒发导致钓鱼游
+// 装备包在背包缺件（2026-11-05 日志实锤）。
+func TestPush422AllowsAllItemWireTypeIDs(t *testing.T) {
+	for _, tid := range []uint32{140, 147, 700, 1470, 3200, 11500, 13301} {
+		tree := proto.Obj("ohciikgjghe", tid)
+		body := proto.Args(proto.S("61"), tree)
+		if reason := checkPushArgsStrict(4, 22, body); reason != "" {
+			t.Fatalf("4/22 物品 tid=%d 被拒发: %s", tid, reason)
+		}
+	}
+	// 下限防呆保留：tid<100 的系统对象仍应拒绝。
+	low := proto.Args(proto.S("61"), proto.Obj("ohciikgjghe", 99))
+	if reason := checkPushArgsStrict(4, 22, low); reason == "" {
+		t.Fatal("4/22 tid<100 系统对象未被拒绝")
+	}
+}

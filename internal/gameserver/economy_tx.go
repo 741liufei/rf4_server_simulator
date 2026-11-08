@@ -159,10 +159,8 @@ func stackCountTx(ctx context.Context, tx *sql.Tx, it *store.Item) int64 {
 	}
 	fields, err := FieldsFromJSON(it.FieldsJSON)
 	if err == nil {
-		if q := fieldIdxByCS(it.WireClass, csQty); q >= 0 && q < len(fields) && fields[q].Num != nil {
-			if n := int64(u64Of(fields[q].Num)); n > 0 {
-				return n
-			}
+		if n, ok := itemQtyValue(it.WireClass, fields); ok && n > 0 {
+			return int64(n)
 		}
 	}
 	if def, derr := itemDefByNumericIDTx(ctx, tx, it.NumericID); derr == nil && def != nil {
@@ -203,7 +201,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 	if err != nil || def == nil {
 		return nil, fmt.Errorf("物品定义不存在: %s", itemID)
 	}
-	cls, ok := categoryWireClass[def.Category]
+	cls, ok := resolveWireClass(def)
 	if !ok {
 		cls = wireClassEntry{fallbackWireClass, fallbackTypeID}
 	}
@@ -230,7 +228,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 	setNum(csNumericID, uint64(def.NumericID))
 	rowQty := int64(1)
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
+		if idx := itemQtyFieldIdx(cls.Class); idx >= 0 {
 			defQty := u64Of(obj.Fields[idx].Num)
 			if defQty == 0 {
 				defQty = 1
@@ -239,7 +237,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 				units = 1
 			}
 			fieldQty := defQty * uint64(units)
-			obj.Fields[idx].Num = ptrU64(fieldQty)
+			writeItemQty(cls.Class, obj, fieldQty)
 			rowQty = int64(fieldQty)
 		}
 	}
@@ -263,7 +261,7 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 	}
 	it := &store.Item{
 		GUID: guid, UID: uid, ItemID: def.ItemID, NumericID: def.NumericID,
-		WireClass: cls.Class, TypeID: cls.TypeID, Container: container, Qty: rowQty,
+		WireClass: cls.Class, TypeID: cls.TypeID, Container: tradingItemContainer(cls.Class, container), Qty: rowQty,
 		Durability: 1, Workmanship: 1, CreatedTS: float64(time.Now().Unix()),
 	}
 	if cls.Class == "cnolibojkao" {
@@ -272,6 +270,9 @@ func (s *Server) prepareNewItem(ctx context.Context, uid int64, itemID, containe
 		}
 	}
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return nil, err
+	}
 	fj, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return nil, err
@@ -301,9 +302,11 @@ func grantPreparedItemTx(ctx context.Context, tx *sql.Tx, prepared *store.Item, 
 			if add < 1 {
 				add = 1
 			}
-			if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
-				fields[q].Num = ptrU64(uint64(cur + add))
+			limit := bundleQuantityLimit(row.WireClass)
+			if cur < 0 || add > limit || cur > limit-add {
+				return nil, false, fmt.Errorf("堆叠物品数量溢出: %s", prepared.ItemID)
 			}
+			setItemQty(row.WireClass, fields, uint64(cur+add))
 			bumpCreatedTicks(fields, row.WireClass)
 			fj, ferr := FieldsToJSON(fields)
 			if ferr != nil {
@@ -365,9 +368,7 @@ func consumeItemQtyTx(ctx context.Context, tx *sql.Tx, row *store.Item, n int64)
 			return 0, err
 		}
 	} else {
-		if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
-			fields[q].Num = ptrU64(uint64(left))
-		}
+		setItemQty(row.WireClass, fields, uint64(left))
 		bumpCreatedTicks(fields, row.WireClass)
 		fj, ferr := FieldsToJSON(fields)
 		if ferr != nil {

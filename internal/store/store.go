@@ -57,11 +57,21 @@ func (d *DB) Migrate() error {
 		               'migrations/00025_bait_consumption.sql')`); err != nil {
 		return fmt.Errorf("兼容旧分支迁移编号: %w", err)
 	}
+	// 钓鱼游分支曾以 00036 登记 trip_grant，上游 00036 现为 fish_ecology：
+	// 按文件名把旧分支行重映射到 00039，让主线 00036 能正常补齐。
+	if _, err := d.SQL.Exec(`UPDATE schema_migrations
+		SET version=39, name='migrations/00039_trip_grant.sql'
+		WHERE name='migrations/00036_trip_grant.sql'`); err != nil {
+		return fmt.Errorf("兼容钓鱼游分支迁移编号: %w", err)
+	}
 	entries, err := fs.Glob(migrationsFS, "migrations/*.sql")
 	if err != nil {
 		return err
 	}
 	sort.Strings(entries)
+	if err := retireStaleMigrationRows(d.SQL, entries); err != nil {
+		return err
+	}
 	for _, name := range entries {
 		var applied int
 		if err := d.SQL.QueryRow(
@@ -180,6 +190,58 @@ func (d *DB) ensureLegacyPlayerColumns() error {
 }
 
 // migrationVersion 从文件名取序号（00001_xxx.sql → 1）。
+// staleMigrationVersionBase 是退役登记行的编号段。远高于真实迁移编号，
+// 只为让出原编号并保留可追溯的名字，不会被任何主线迁移占用。
+const staleMigrationVersionBase = 9_000_000
+
+// retireStaleMigrationRows 让出被"分支自带、后来已从迁移目录删掉"的登记行占住的编号。
+//
+// 迁移是否应用按文件名判断，登记行却以编号为主键。分支库用某个编号登记过自己的
+// 迁移、该文件后来没有并入主线时，主线同号迁移第一次登记就会撞 schema_migrations.version
+// 的 UNIQUE 约束，整个服务直接起不来（实测：00035_reel_component_wear 挡住 00035_trip_state）。
+// 这里只把旧登记行改名挪到退役编号段，表结构和数据都不动。
+func retireStaleMigrationRows(sql *sql.DB, entries []string) error {
+	known := make(map[string]bool, len(entries))
+	wanted := make(map[int64]bool, len(entries))
+	for _, name := range entries {
+		known[name] = true
+		wanted[migrationVersion(name)] = true
+	}
+	rows, err := sql.Query(`SELECT version, name FROM schema_migrations ORDER BY version`)
+	if err != nil {
+		return fmt.Errorf("读取迁移登记: %w", err)
+	}
+	type staleRow struct {
+		version int64
+		name    string
+	}
+	var stale []staleRow
+	for rows.Next() {
+		var s staleRow
+		if err := rows.Scan(&s.version, &s.name); err != nil {
+			rows.Close()
+			return fmt.Errorf("读取迁移登记行: %w", err)
+		}
+		if known[s.name] || !wanted[s.version] {
+			continue
+		}
+		stale = append(stale, s)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("遍历迁移登记: %w", err)
+	}
+	rows.Close()
+
+	for _, s := range stale {
+		if _, err := sql.Exec(`UPDATE schema_migrations SET version=?, name=? WHERE version=? AND name=?`,
+			staleMigrationVersionBase+s.version, "retired/"+s.name, s.version, s.name); err != nil {
+			return fmt.Errorf("退役旧分支迁移登记 %s: %w", s.name, err)
+		}
+	}
+	return nil
+}
+
 func migrationVersion(name string) int64 {
 	base := strings.TrimSuffix(strings.TrimPrefix(name, "migrations/"), ".sql")
 	var v int64

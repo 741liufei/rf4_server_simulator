@@ -2,6 +2,7 @@ package gameserver
 
 import (
 	"log/slog"
+	"strconv"
 	"sync"
 
 	"rf4server/internal/proto"
@@ -81,6 +82,17 @@ func (c *Ctx) ReplyFailure(errorType, message string) {
 	c.Sess.SendEnvelope(envelope)
 }
 
+// ReplyOperationResult 用业务操作结果码回复失败。
+//
+// -3 信封的 f1 必须是 "RF4.API.APIError"、f2 必须是数字字符串：客户端
+// fjjhcjoonmi.hopgomnfdli 才会把 f2 解析成 abadjfbfdjb 并由
+// dchjlkidjdc.lapcaibjebj 显示对应的 kOperationResult_* 文案。用
+// "System.InvalidOperationException" 等普通异常名会被客户端落到
+// kCommon_E_INTERNAL_WITHCODE，显示成通用内部错误。
+func (c *Ctx) ReplyOperationResult(code int) {
+	c.ReplyFailure("RF4.API.APIError", strconv.Itoa(code))
+}
+
 // ReplyValue 编码 payload 值并回包。
 func (c *Ctx) ReplyValue(v *proto.Value) error {
 	body, err := proto.EncodeValue(v, c.Sess.Table())
@@ -144,7 +156,14 @@ func (d *Dispatch) lookup(main, sub uint8) Handler {
 func (s *Server) handleEnvelopePayload(sess *Session, payload []byte) {
 	env, ok := proto.ParseEnvelope(payload)
 	if !ok {
-		sess.log.Warn("信封解析失败", "len", len(payload))
+		// 解析不了就把原字节带上：客户端的切换窝料等动作会落在这里，
+		// 只有 hex 才能判断是没注册的新命令还是信封版本不同。
+		magic := byte(0)
+		if len(payload) > 0 {
+			magic = payload[0]
+		}
+		sess.log.Warn("信封解析失败", "len", len(payload), "magic", magic,
+			"hex", traceHexHead(payload, traceHexMax))
 		return
 	}
 	if env.Marker != -1 {

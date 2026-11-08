@@ -21,6 +21,7 @@ type catchReceipt struct {
 	IsRecord                                         bool
 	SkillID                                          int64
 	CaughtAt                                         float64
+	DroppedCardGUID                                  string `json:",omitempty"`
 }
 
 func (r catchReceipt) result(replayed bool) *settleXpResult {
@@ -30,7 +31,7 @@ func (r catchReceipt) result(replayed bool) *settleXpResult {
 	}
 	return &settleXpResult{baseXP: r.BaseXP, totalXP: r.TotalXP, premiumXP: r.PremiumXP, bonuses: r.Bonuses, skillGain: gain, silver: r.Silver,
 		prevBest: r.PreviousBest, newLevel: r.Level, totalXp: r.AccumulatedXP,
-		levelsGained: r.LevelsGained, isRecord: r.IsRecord, skillID: r.SkillID, replayed: replayed}
+		levelsGained: r.LevelsGained, isRecord: r.IsRecord, skillID: r.SkillID, replayed: replayed, droppedCardGUID: r.DroppedCardGUID}
 }
 
 type catchWear struct {
@@ -132,7 +133,7 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	if xp < 1 {
 		xp = 1
 	}
-	state := s.stateFor(uid)
+	state := s.fishingStateForFish(uid, f)
 	state.mu.Lock()
 	gear := state.GearGuid
 	if !f.HappyHourKnown {
@@ -142,6 +143,7 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 		f.HappyHourKnown = true
 	}
 	happy := f.HappyHour
+	bait := state.Bait
 	state.mu.Unlock()
 	bonuses, err := s.rodXPBonuses(ctx, uid, gear, xp)
 	if err != nil {
@@ -156,6 +158,10 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	}
 	if happy {
 		bonuses = append(bonuses, catchXPBonus{Kind: 56, GUID: zeroGUID, Multiplier: .5, XP: int64(math.Round(float64(xp) * .5))})
+	}
+	card, err := s.prepareCatchCard(ctx, uid, f, bait)
+	if err != nil {
+		return nil, err
 	}
 	tx, err := s.DB.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -252,6 +258,12 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 			return nil, err
 		}
 	}
+	if card != nil {
+		if err := insertItemTx(ctx, tx, card); err != nil {
+			return nil, err
+		}
+		r.DroppedCardGUID = card.GUID
+	}
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
@@ -261,6 +273,16 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
+	}
+	// 官方升级礼物：真实升级（非重放）后逐级直发背包，内部按等级幂等；
+	// 钓法大类取本尾鱼（11 级分套依据）。礼物行随结果返回，由 14/4 处理器
+	// 挂结算奖励列表（801 f8）并在响应后推 4/22；聊天播报在发放函数内完成。
+	if r.LevelsGained > 0 {
+		res := r.result(false)
+		for _, g := range s.grantLevelUpGifts(ctx, uid, oldLevel, level, r.SkillID) {
+			res.giftItems = append(res.giftItems, g.Items...)
+		}
+		return res, nil
 	}
 	return r.result(false), nil
 }

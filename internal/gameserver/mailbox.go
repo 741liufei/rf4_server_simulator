@@ -196,9 +196,7 @@ func setTreeQty(tree *proto.Value, qty int64) {
 	if tree == nil || tree.Kind != proto.KindObj {
 		return
 	}
-	if q := fieldIdxByCS(tree.Class, csQty); q >= 0 && q < len(tree.Fields) {
-		tree.Fields[q].Num = ptrU64(uint64(qty))
-	}
+	setItemQty(tree.Class, tree.Fields, uint64(qty))
 }
 
 const mailItemSnapshotVersion int64 = 1
@@ -223,8 +221,7 @@ func mailItemSnapshotFromRow(row *store.Item, qty int64, countable bool) (store.
 		if err != nil {
 			return store.MailItem{}, err
 		}
-		if q := fieldIdxByCS(row.WireClass, csQty); q >= 0 && q < len(fields) {
-			fields[q].Num = ptrU64(uint64(qty))
+		if setItemQty(row.WireClass, fields, uint64(qty)) {
 			fieldsJSON, err = FieldsToJSON(fields)
 			if err != nil {
 				return store.MailItem{}, err
@@ -292,9 +289,7 @@ func (s *Server) prepareMailSnapshotItem(ctx context.Context, uid int64, att sto
 		qty = 1
 	}
 	if countable {
-		if q := fieldIdxByCS(att.WireClass, csQty); q >= 0 && q < len(fields) {
-			fields[q].Num = ptrU64(uint64(qty))
-		}
+		setItemQty(att.WireClass, fields, uint64(qty))
 	}
 	fieldsJSON, err := FieldsToJSON(fields)
 	if err != nil {
@@ -485,12 +480,53 @@ func (s *Server) acceptMails(ctx *Ctx, ids []int64) (int, []*store.Item) {
 				return 0, nil
 			}
 			for _, att := range attachments {
-				var it *store.Item
-				if m.AttachmentSnapshotVersion > 0 {
-					if !att.HasItemSnapshot() {
-						ctx.Log.Warn("19/3 附件快照不完整", "mail", id, "item", att.ItemID)
+				if m.AttachmentSnapshotVersion > 0 && !att.HasItemSnapshot() {
+					ctx.Log.Warn("19/3 附件快照不完整", "mail", id, "item", att.ItemID)
+					return 0, nil
+				}
+				def, derr := s.DB.GetItemDefByItemID(cctx, att.ItemID)
+				if derr != nil || def == nil {
+					ctx.Log.Warn("19/3 附件定义不存在", "mail", id, "item", att.ItemID, "err", derr)
+					return 0, nil
+				}
+				if def.Category == bundleCategory {
+					openable := bundleOpenable(def)
+					if att.BuyPrice != 0 && !openable {
+						ctx.Log.Warn("19/3 组合包有购买价值，需人工处理", "mail", id, "item", att.ItemID)
 						return 0, nil
 					}
+					if openable {
+						// 礼盒附件以本体发放，一包一件（非计件）；玩家 4/8
+						// 使用时拆开。饵料盒维持展开发放。
+						packs := att.Qty
+						if packs < 1 {
+							packs = 1
+						}
+						if packs > maxBundlePreparedItems {
+							ctx.Log.Warn("19/3 礼盒附件数量超过上限", "mail", id,
+								"item", att.ItemID, "qty", packs, "limit", maxBundlePreparedItems)
+							return 0, nil
+						}
+						for i := int64(0); i < packs; i++ {
+							it, berr := s.prepareNewItem(cctx, uid, att.ItemID, "backpack", 1, "")
+							if berr != nil {
+								ctx.Log.Warn("19/3 礼盒附件构造失败", "mail", id, "item", att.ItemID, "err", berr)
+								return 0, nil
+							}
+							plan.prepared = append(plan.prepared, it)
+						}
+						continue
+					}
+					items, berr := s.prepareBundleItems(cctx, uid, att.ItemID, "backpack", att.Qty)
+					if berr != nil {
+						ctx.Log.Warn("19/3 组合包展开失败", "mail", id, "item", att.ItemID, "err", berr)
+						return 0, nil
+					}
+					plan.prepared = append(plan.prepared, items...)
+					continue
+				}
+				var it *store.Item
+				if m.AttachmentSnapshotVersion > 0 {
 					it, err = s.prepareMailSnapshotItem(cctx, uid, att)
 					if err != nil {
 						ctx.Log.Warn("19/3 附件快照重建失败", "mail", id, "item", att.ItemID, "err", err)
@@ -501,11 +537,6 @@ func (s *Server) acceptMails(ctx *Ctx, ids []int64) (int, []*store.Item) {
 					qty := att.Qty
 					if qty < 1 {
 						qty = 1
-					}
-					def, derr := s.DB.GetItemDefByItemID(cctx, att.ItemID)
-					if derr != nil || def == nil {
-						ctx.Log.Warn("19/3 附件定义不存在", "mail", id, "item", att.ItemID, "err", derr)
-						return 0, nil
 					}
 					guid := ""
 					if !countableCategories[def.Category] && isHex32(att.GUID) {
@@ -518,12 +549,9 @@ func (s *Server) acceptMails(ctx *Ctx, ids []int64) (int, []*store.Item) {
 					}
 					if countableCategories[def.Category] {
 						it.Qty = qty
-						if fields, ferr := FieldsFromJSON(it.FieldsJSON); ferr == nil {
-							if q := fieldIdxByCS(it.WireClass, csQty); q >= 0 && q < len(fields) {
-								fields[q].Num = ptrU64(uint64(qty))
-								if fj, jerr := FieldsToJSON(fields); jerr == nil {
-									it.FieldsJSON = fj
-								}
+						if fields, ferr := FieldsFromJSON(it.FieldsJSON); ferr == nil && setItemQty(it.WireClass, fields, uint64(qty)) {
+							if fj, jerr := FieldsToJSON(fields); jerr == nil {
+								it.FieldsJSON = fj
 							}
 						}
 					}
@@ -693,12 +721,14 @@ type AdminCommand struct {
 	GUIDs        []string            `json:"guids,omitempty"`
 	Keepnet      *store.KeepnetEntry `json:"keepnet,omitempty"`
 	KeepnetGUIDs []string            `json:"keepnet_guids,omitempty"`
-	Species      string              `json:"species,omitempty"`  // arm_fish：鱼种（空=默认池随机）
-	WeightG      int64               `json:"weight_g,omitempty"` // arm_fish：克重（空=默认池范围内）
-	Grade        int64               `json:"grade,omitempty"`    // 兼容旧指令；实际档位按结算尺和重量计算。
-	Channel      int64               `json:"channel,omitempty"`  // fish_tv_test：聊天推送通道 24..31
-	Kind         int64               `json:"kind,omitempty"`     // fish_tv_test：401.f0 消息类型；负值为参数位探测
-	KVShape      int64               `json:"kv_shape,omitempty"` // fish_tv_test：401.f4 模板 KV 形状或外层参数探测编号
+	Species      string              `json:"species,omitempty"`     // arm_fish：鱼种（空=默认池随机）
+	WeightG      int64               `json:"weight_g,omitempty"`    // arm_fish：克重（空=默认池范围内）
+	Grade        int64               `json:"grade,omitempty"`       // 兼容旧指令；实际档位按结算尺和重量计算。
+	Channel      int64               `json:"channel,omitempty"`     // fish_tv_test：聊天推送通道 24..31
+	Kind         int64               `json:"kind,omitempty"`        // fish_tv_test：401.f0 消息类型；负值为参数位探测
+	KVShape      int64               `json:"kv_shape,omitempty"`    // fish_tv_test：401.f4 模板 KV 形状或外层参数探测编号
+	AchID        int64               `json:"ach_id,omitempty"`      // achievement_push_test：成就 id
+	NotifyType   int64               `json:"notify_type,omitempty"` // achievement_push_test：2/9 的 306.f0 取值
 }
 
 // StartAdminSubscriber 轮询共享 SQLite 队列，每 2 秒处理一批管理指令。
@@ -795,8 +825,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		if entry.LengthM <= 0 && entry.WeightG > 0 {
 			lp := lengthSeed[entry.Species]
 			if lp[0] == 0 {
-				lp = [2]float64{0.0355, 1.0 / 3.0}
+				lp = [2]float64{defaultSpeciesLengthK, defaultSpeciesLengthP}
 			}
+			lp[0], lp[1] = calibratedLengthKP(entry.Species, lp[0], lp[1])
 			entry.LengthM = math.Round(lp[0]*math.Pow(float64(entry.WeightG), lp[1])*100000) / 100000
 		}
 		if err := s.DB.KeepnetInsert(ctx, &entry); err != nil {
@@ -838,8 +869,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		if f.LengthM == 0 {
 			lp := lengthSeed[f.Species]
 			if lp[0] == 0 {
-				lp = [2]float64{0.0355, 1.0 / 3.0}
+				lp = [2]float64{defaultSpeciesLengthK, defaultSpeciesLengthP}
 			}
+			lp[0], lp[1] = calibratedLengthKP(f.Species, lp[0], lp[1])
 			f.LengthM = math.Round(lp[0]*math.Pow(float64(f.WeightG), lp[1])*100000) / 100000
 		}
 		st.mu.Lock()
@@ -852,6 +884,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		s.tunMu.Lock()
 		s.tunCache = nil // 强制下次读取刷新
 		s.tunMu.Unlock()
+		if err := s.reloadFishEcologyCache(s.dbCtx()); err != nil {
+			s.log.Warn("鱼种生态缓存刷新失败", "err", err)
+		}
 		s.log.Info("管理指令：运行参数已刷新")
 	case "fish_tv_test":
 		// 鱼汛通道探测：向指定玩家（0=全部在线会话）推送一条测试消息。
@@ -887,6 +922,36 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		}
 		s.log.Info("管理指令：鱼汛通道测试", "uid", cmd.UID,
 			"channel", cmd.Channel, "kind", cmd.Kind, "kv_shape", cmd.KVShape, "targets", len(targets))
+	case "achievement_push_test":
+		// 成就解锁弹窗探测：向指定玩家（0=全部在线）发一种候选推送。
+		variant := cmd.Text
+		if variant == "" {
+			variant = "3_3"
+		}
+		achID := cmd.AchID
+		if achID == 0 {
+			achID = 101
+		}
+		var targets []*Session
+		if cmd.UID != 0 {
+			targets = s.sessionsForUID(cmd.UID)
+		} else {
+			s.mu.Lock()
+			for _, sess := range s.sessions {
+				if sess != nil && !sess.Closed() {
+					targets = append(targets, sess)
+				}
+			}
+			s.mu.Unlock()
+		}
+		sent := 0
+		for _, sess := range targets {
+			if sess.pushAchievementProbe(variant, achID, cmd.NotifyType) {
+				sent++
+			}
+		}
+		s.log.Info("管理指令：成就推送探针", "uid", cmd.UID, "variant", variant,
+			"ach_id", achID, "notify_type", cmd.NotifyType, "targets", len(targets), "sent", sent)
 	case "refresh_player":
 		for _, sess := range s.sessionsForUID(cmd.UID) {
 			sess.Push2_1()

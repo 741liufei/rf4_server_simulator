@@ -70,12 +70,70 @@ var categoryWireClass = map[int64]wireClassEntry{
 	59: {"iknkgeomkip", 3200},  // Cobra 打窝器
 	60: {"ifnaghdaolg", 3201},  // Slingshot 弹弓
 	79: {"abmokghdbhf", 11500}, // 竿架（rod pod），客户端模型 pphmpibfgea
+	// 提取物/蘸饵（dip）与竿架同属 UI 家族 dfignppokoh，但走 nledogicnfe 变体：
+	// 鱼饵类条目在背包列表排序比较器里被强转成 nledogicnfe（hook 栈实证
+	// InvalidCastException 'pphmpibfgea'->'nledogicnfe'，鱼饵筛选必现、
+	// 背包里有两份小药时普通 I 必现），小药 UI 是家族的
+	// iaphgclhemo<nledogicnfe,...> 实例化（挂 lillemolakn 的 dip 探针两轮零命中）。
+	// 早期落成钓线类会卡死整个背包（Player.log 456 次 cast to pphmpibfgea 实证）。
+	// nledogicnfe 比 pphmpibfgea 多 f0 hmfmpbemjkg（父实例 guid，发空），
+	// wire 类 bpmmimcmpof/721，其余 14 个字段与 abmokghdbhf 同名同 op。
+	58: {"bpmmimcmpof", 721},
+	// 香精（fplt_*、feedadds_*，cat 19）：实例类 deckldefiap/125（DTO
+	// ifgjaajoofo : aklijhgdgbh<bmalnngjeho>，饵料 UI 家族 dfignppokoh 的
+	// camnheeojef 变体），扁平 16 字段（名称 f0、颜色 f1、总数 f2
+	// ljnnpokapig、guid f3、父容器 f4、容器枚举 f5、数字 id f6、工艺 f7、
+	// 耐久 f8、创建 f9、更新 f10、状态位 f11、时效 f12、促销 f13、
+	// 剩余数量 f14 dnmfciolgep、掩码 f15）。2026-11-05 逐一隔离实证：cat 19
+	// 落窝料类 cilmgoaoofg 毒死鱼饵页，落 deckldefiap 不转圈。def 的
+	// ninlajclahd（香味强度）/hkgndoipdlc（剂量）不上 wire，客户端从 def
+	// 模板读。注意 46 成品窝料仍走 cilmgoaoofg（未实测，买时需验证）。
+	19: {"deckldefiap", 125},
+	// 添加剂（aroma_*/cb_*/op_*，cat 20）与香精是两个 wire 类：客户端
+	// danefpkhooj.mcjpaeakaep 按品类枚举 oinpmjophkh 分发（case=cat-2），
+	// case 18 对 cat 20 整袋 Cast<kgjoemjjadb>，cat 19 的 ifgjaajoofo 一进
+	// 袋就炸（2026-11-05 扫货 aroma/cb_attr/op_attr 后鱼饵页复现转圈；
+	// 同日 Player.log 同源异常 nledogicnfe->bebejlknhka 实证该分发表）。
+	// 126=dpghngjmnap，DTO kgjoemjjadb : aklijhgdgbh<aljlmaepbih>，14 字段
+	// 无名称串，权威数量槽 f12 dnmfciolgep、UI 镜像 f0 ljnnpokapig。
+	20: {"dpghngjmnap", 126},
+	// PVA 材料/线（cat 45）：同表 case 43 期望 bebejlknhka
+	// （aklijhgdgbh<nmebhablank>），wire 类 pcngolccead/144，字段布局与 126
+	// 相同。此前按 def 画像推断落 bpmmimcmpof/721（nledogicnfe 实为 cat 58
+	// 提取物的类），商店渲染 box_hvz_pva_* 礼盒内容袋时 Cast<bebejlknhka>
+	// 必炸（Player.log 22:51–23:01 共 14 次 InvalidCastException 实证）。
+	45: {"pcngolccead", 144},
+	// 以下映射取自 mcjpaeakaep 分发表的 cat→DTO 配对（每类 DTO 在 tables.go
+	// 唯一对应一个 wire 类），取代兜底类；均未实测，购买后按鱼饵页/背包渲染验证。
+	2:  {"ecknbkpeeji", 25},    // 鱼护（case 0 lmeocpochih）
+	30: {"fgbnhjmpdmd", 145},   // 干饵/重量饵（case 28 fadkdmoigli）
+	33: {"oplokpidmdi", 129},   // 水晶珠（case 31 aiecmhcnioo）
+	38: {"nikamphcfoe", 127},   // spod 炸弹（case 36 chffnbpekig）
+	55: {"coacllgmnml", 3100},  // 礼包（case 53 niodmhfbkag）
+	61: {"cddbbllbjim", 3103},  // case 59 mdagojpmfba
+	62: {"omkmkofjhcf", 12600}, // case 60 kmlgiiefbmh
+	63: {"dbjjakbbbfc", 12601}, // case 61 bepeekbhdck
+	69: {"hmojlejoofg", 12702}, // case 67 hfjfcadnmjh
+	70: {"lligmmmgllg", 12703}, // case 68 ddhcineacka
+	71: {"focdogajjcc", 13001}, // case 69 lcadlijehco
+	72: {"enikeammfen", 2015},  // case 70 iidloljandl
+	76: {"fdnngkgnmon", 13041}, // case 74 ghikepgmojg
+	78: {"dapkdcghfmg", 11301}, // case 76 ipdpoaiekem
+	82: {"ckfmndabaei", 11304}, // imdcjllgdcn 卡册
 	80: {"ipdakkbfoja", 13301}, // 技能书（客户端按 wrapper 承载书目配置）
 	81: {"kbpmmclfipg", 1470},  // 渔轮电机（装在轮 f14 扩展槽，DTO odlknjlbooh）
 }
 
 const fallbackWireClass = "ohciikgjghe"
 const fallbackTypeID = 140
+
+// resolveWireClass 实例类解析的统一入口（当前=categoryWireClass 直查；
+// 曾在此按 def 剂量 hkgndoipdlc 给香精分流到窝料类，已被隔离实验证伪——
+// 剂量与所属实例族无关，保留函数作为将来按 def 细分时的扩展点）。
+func resolveWireClass(def *store.ItemDef) (wireClassEntry, bool) {
+	cls, ok := categoryWireClass[def.Category]
+	return cls, ok
+}
 
 // 客户端计件类别（可堆叠合并）；钓线(11)/前导(15) 同名字段是长度 m；浮漂(28) 显式非计件。
 var countableCategories = map[int64]bool{
@@ -101,6 +159,70 @@ func fieldOpAt(class string, idx int) string {
 		return ""
 	}
 	return ops[idx]
+}
+
+// metaQtyFamily 数量语义相同的实例类：权威槽都是 meta 基类的剩余数量槽
+// dnmfciolgep，ljnnpokapig 只是总数/UI 计数镜像。dfignppokoh 家族的竿架
+// abmokghdbhf/pphmpibfgea、提取物 bpmmimcmpof/nledogicnfe；aklijhgdgbh
+// 家族的香精 deckldefiap/ifgjaajoofo、添加剂 dpghngjmnap/kgjoemjjadb、
+// PVA pcngolccead/bebejlknhka。
+func metaQtyFamily(class string) bool {
+	return class == "abmokghdbhf" || class == "bpmmimcmpof" || class == "deckldefiap" ||
+		class == "dpghngjmnap" || class == "pcngolccead"
+}
+
+// itemQtyFieldIdx 可堆叠数量槽 idx。多数实例类的数量字段就叫 ljnnpokapig；
+// metaQtyFamily 各类（竿架/提取物/香精/添加剂/PVA）的权威槽是 meta 基类
+// dnmfciolgep —— bpmmimcmpof/deckldefiap/dpghngjmnap/pcngolccead 虽然也有
+// ljnnpokapig，但那只是总数/UI 计数镜像。
+func itemQtyFieldIdx(class string) int {
+	if metaQtyFamily(class) {
+		return fieldIdxByCS(class, "dnmfciolgep")
+	}
+	return fieldIdxByCS(class, csQty)
+}
+
+// qtyMirrorIdx 家族类的 UI 计数镜像槽：abmokghdbhf=f0 miecmmbpolk
+// （lillemolakn.medpgjlibog 读），bpmmimcmpof=f1 ljnnpokapig（总数槽），
+// deckldefiap=f2 ljnnpokapig（总数槽），dpghngjmnap/pcngolccead=f0
+// ljnnpokapig（14 字段布局，无名称串）。
+func qtyMirrorIdx(class string) int {
+	switch class {
+	case "abmokghdbhf":
+		return fieldIdxByCS(class, "miecmmbpolk")
+	case "bpmmimcmpof", "deckldefiap", "dpghngjmnap", "pcngolccead":
+		return fieldIdxByCS(class, csQty)
+	}
+	return -1
+}
+
+// itemQtyValue 读取实例数量槽；没有数量字段时返回 false。
+func itemQtyValue(class string, fields []proto.Field) (uint64, bool) {
+	idx := itemQtyFieldIdx(class)
+	if idx < 0 || idx >= len(fields) || fields[idx].Num == nil {
+		return 0, false
+	}
+	return u64Of(fields[idx].Num), true
+}
+
+// setItemQty 写入实例数量槽；metaQtyFamily 家族的 UI 计数镜像槽
+// （qtyMirrorIdx：abmokghdbhf=f0 miecmmbpolk——lillemolakn.medpgjlibog 读，
+// bpmmimcmpof/deckldefiap/dpghngjmnap/pcngolccead=f ljnnpokapig）两处一起写。
+func setItemQty(class string, fields []proto.Field, qty uint64) bool {
+	idx := itemQtyFieldIdx(class)
+	if idx < 0 || idx >= len(fields) {
+		return false
+	}
+	fields[idx].Num = ptrU64(qty)
+	if m := qtyMirrorIdx(class); m >= 0 && m < len(fields) {
+		fields[m].Num = ptrU64(qty)
+	}
+	return true
+}
+
+// writeItemQty 写入新构造实例的数量字段。
+func writeItemQty(class string, obj *proto.Value, qty uint64) {
+	_ = setItemQty(class, obj.Fields, qty)
 }
 
 // fieldIsFloat 该位置的 op 是否浮点。
@@ -184,6 +306,13 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 	obj := proto.Obj(it.WireClass, uint32(it.TypeID), fields...)
 
 	class := it.WireClass
+	if class == deckClass {
+		cards, err := cardsInDeck(it)
+		if err != nil {
+			return nil, err
+		}
+		obj.Fields[0].Val = tradingCardList(cards...)
+	}
 
 	// 状态位零值兜底（存量行为 0 → 客户端当未初始化）
 	def, derr := s.DB.GetItemDef(ctx, it.NumericID)
@@ -196,6 +325,9 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 		// 强度、曳力、成色、容器枚举都由权威数据推导，保证发给客户端的树一致。
 		s.materializeInto(ctx, class, def, obj, it.GUID, it.Workmanship, it.Durability)
 		s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+		if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+			return nil, err
+		}
 	}
 	// 鱼竿动态接管（竿上组件/钓组/挂线挂轮必须现算，快照过期会让插槽列表失真）
 	if class == "cnolibojkao" {
@@ -209,7 +341,7 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 	return obj, nil
 }
 
-// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f2、拟饵 f0 出厂钩。
+// materializeInto 物化嵌套子配置：渔轮 f2..f14、前导 f1..f3、拟饵 f0 出厂钩。
 // 只填充空槽，已有子对象的槽保持不变。
 func (s *Server) materializeInto(ctx context.Context, class string, def *store.ItemDef, obj *proto.Value, guid string, workmanship, durability float64) {
 	attrs := defAttrs(def)
@@ -232,7 +364,7 @@ func (s *Server) materializeInto(ctx context.Context, class string, def *store.I
 	switch class {
 	case "dgjinoebdop": // 渔轮 f2..f14
 		fill(reelPartKeys, false)
-	case "oldfpclaabo": // 前导 f1/f2（f3 线槽 def 无配置恒 null）
+	case "oldfpclaabo": // 前导 f1 前导线、f2 连接件、f3 普通主线
 		fill(leaderPartKeys, false)
 		if idx := fieldIdxByCS(class, gearAttrLeaderIn); idx >= 0 && idx < len(obj.Fields) {
 			if normalized, changed := normalizeLeaderInnerWire(obj.Fields[idx].Val); changed {
@@ -311,11 +443,17 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 		}
 	}
 	if idx := fieldIdxByCS(class, csSlotEnum); idx >= 0 && fieldOpAt(class, idx) == "BYTE" {
-		// 根物品即使已装配，wire 容器枚举仍为 0。
+		// 卡片属于专用收藏库存；背包/装备中的根物品 wire 容器枚举为 0，
+		// 存入房屋的物品为 10——客户端物品管理器（eegjkjenhoe）按该枚举
+		// 把物品挂进对应容器字典，恒 0 会让房屋仓库永远收不到物品。
 		// container='rig' 是服务端归属，不是物品对象的 lmmhdlhogdc；
 		// 只有母物品内部的嵌套子实例使用 rig(4)。
-		if u64Of(fields[idx].Num) != 0 {
-			fields[idx].Num = ptrU64(0)
+		kind := rootItemStorageKind(class)
+		if it.Container == "house" {
+			kind = 10
+		}
+		if u64Of(fields[idx].Num) != kind {
+			fields[idx].Num = ptrU64(kind)
 			changed = true
 		}
 	}
@@ -324,29 +462,19 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 	if err != nil || def == nil {
 		return changed
 	}
-	// 渔轮顶部 f0 表示当前齿轮传动比。必须先读已安装齿轮，只有找不到
-	// 零件时才回退到母轮出厂定义；否则每次上线都会重置收线速度。
-	reelGearApplied := false
+	// 渔轮顶部 f0 是客户端的受力/力度上限，不是传动比。优先使用当前
+	// 安装的摩擦片制动力，缺失时才回退到出厂摩擦片；传动比只在齿轮
+	// 子件自己的强度字段里出现，不能污染母轮上限。
 	if class == "dgjinoebdop" {
-		if _, gearDef, _, ok := s.selectedReelPart(ctx, fields, 52); ok {
-			if ratio := itemDefF32(gearDef, gearAttrRatio); ratio > 0 {
-				idx := fieldIdxByCS(class, csStrength)
-				if setWireFloat(fields, class, idx, ratio*it.Workmanship) {
-					changed = true
-				}
-				reelGearApplied = true
-			}
+		if s.canonicalizeReelStrength(ctx, it, fields) {
+			changed = true
+		}
+	} else if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		idx := fieldIdxByCS(class, csStrength)
+		if setWireFloat(fields, class, idx, strength) {
+			changed = true
 		}
 	}
-	if !reelGearApplied {
-		if strength, ok := strengthBitsFor(def, it.Durability); ok {
-			idx := fieldIdxByCS(class, csStrength)
-			if setWireFloat(fields, class, idx, strength) {
-				changed = true
-			}
-		}
-	}
-
 	// 渔轮刹车片子是嵌套实例，客户端使用它自己的 f0。其值必须来自当前
 	// 安装摩擦片的定义，而不是母轮出厂摩擦片，否则重登后摩擦力会归位。
 	if class == "dgjinoebdop" {
@@ -368,10 +496,14 @@ func (s *Server) canonicalizeItemPhysicalFields(ctx context.Context, it *store.I
 					changed = true
 				}
 			}
-			force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
-			si := fieldIdxByCS(sub.Class, csDragForce)
-			if setWireFloat(sub.Fields, sub.Class, si, force) {
-				changed = true
+			// csDragForce 是持久化的磨损状态：字段已存在（含 0=已磨穿）必须原样
+			// 下发，只在字段缺失（新物品/历史档）时用零件定义值初始化。旧实现
+			// 每次下发都重算，会把磨损悄悄刷回满值并随启动修复写回数据库。
+			if _, present, si := frictionWasherDrag(sub); !present && si >= 0 && si < len(sub.Fields) {
+				force := itemDefF32(dragDef, gearAttrDragMax) * it.Workmanship
+				if force > 0 && setWireFloat(sub.Fields, sub.Class, si, force) {
+					changed = true
+				}
 			}
 		}
 	}
@@ -488,6 +620,29 @@ func canonicalizeNestedItemContainers(class string, fields []proto.Field) bool {
 	return changed
 }
 
+// canonicalizeReelStrength updates only the reel root scale, leaving installed
+// parts untouched. FieldsJSON must describe the currently selected parts.
+func (s *Server) canonicalizeReelStrength(ctx context.Context, it *store.Item, fields []proto.Field) bool {
+	if it == nil || it.WireClass != "dgjinoebdop" {
+		return false
+	}
+	if strength, present := s.reelInstalledDragFieldFromRow(ctx, it); present {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	strength := s.reelBaseDragFromRow(ctx, it)
+	if strength > 0 {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	def, err := s.itemDefForRow(ctx, it)
+	if err != nil || def == nil {
+		return false
+	}
+	if strength, ok := strengthBitsFor(def, it.Durability); ok {
+		return setWireFloat(fields, it.WireClass, fieldIdxByCS(it.WireClass, csStrength), strength)
+	}
+	return false
+}
+
 // setWireFloat 写入 wire 浮点字段；兼容 FLOAT/DOUBLE 与 U32 承载 IEEE754 的
 // registry 布局。返回是否真的改变，供一次性数据修复决定是否落库。
 func setWireFloat(fields []proto.Field, class string, idx int, v float64) bool {
@@ -551,15 +706,19 @@ func (s *Server) rebuildRod(ctx context.Context, it *store.Item, obj *proto.Valu
 	// f5 钓组对象（153）——绝不能 null
 	if obj.Fields[5].Val == nil || obj.Fields[5].Val.Kind == proto.KindNull {
 		obj.Fields[5].Val = s.defaultRig153(ctx, it)
+	} else {
+		// 渲染级联动：存量竿的快照里可能还存着旧版下发的全开掩码 f9，
+		// 原样回放会让登录后的安装弹窗仍列出全部挂法（弹窗由 153 直接
+		// 驱动，14/2、4/22 走 liveRig153 已重算，这里兜住 4/5 存量回放）。
+		applyRigBaitMountRender(obj.Fields[5].Val)
 	}
 	// 出厂部件必须同时出现在 f5 的零件列表里：客户端的工作坊/装配界面
 	// 都按 f5 的 gcfcdnfmnbh 逐行渲染，缺了它们零件行就是空的。
 	s.appendFactoryPartsToRig(ctx, obj)
 
-	// f16 Ticks now / f18 状态位 = 定义 | 2048
-	if idx := fieldIdxByCS("cnolibojkao", csCreated); idx >= 0 {
-		obj.Fields[idx].Num = ptrU64(uint64(netTicksNow()))
-	}
+	// 版本戳由实际装配/耐久修改推进。读取时变更版本会使客户端把未改动的
+	// 水中鱼竿也当作新快照重建，切竿或同步背包不应改变搏鱼实体。
+	// f18 状态位 = 定义 | 2048
 	if idx := fieldIdxByCS("cnolibojkao", "hgaijieklek"); idx >= 0 {
 		st := u64Of(obj.Fields[idx].Num)
 		if defBits, ok := defAttrU64(def, "hgaijieklek"); ok {
@@ -741,15 +900,46 @@ func (s *Server) defaultRig153(ctx context.Context, it *store.Item) *proto.Value
 		}
 	}
 	clipM, _ := s.savedReelClipM(ctx, it.GUID)
+	drag := defaultReelDragSetting
+	if saved, ok := s.rodReelDragSetting(ctx, it.GUID); ok {
+		drag = saved
+	}
+	speed := defaultReelSpeed
+	if saved, ok := s.rodReelSpeedSetting(ctx, it.GUID); ok {
+		speed = saved
+	}
 	return wiregen.MustMakeObj("gbbhdkefnkn", map[int]*proto.Value{
 		0: proto.StrVal(name),
 		1: proto.U32(uint32(rigType)),
 		2: components,
 		4: proto.U32(uint32(depth)),
 		5: proto.U32(uint32(clipM)),
-		6: proto.U32(15),
-		7: proto.U32(15),
+		6: proto.U32(uint32(drag)),
+		7: proto.U32(uint32(speed)),
 	})
+}
+
+// fillFeedUnitWeight 把单件克重写进窝料实例的重量字段（U32 槽承载 IEEE754 位模式，
+// FLOAT 槽直接写浮点）。已有非零值不覆盖，返回是否发生变化。
+// 用途：老库存实例是在「照抄定义」的年代生成的，重量恒为 0。
+func fillFeedUnitWeight(wireClass string, fields []proto.Field, itemID string) bool {
+	idx := fieldIdxByCS(wireClass, castAttrWaterWeight)
+	if idx < 0 || idx >= len(fields) {
+		return false
+	}
+	grams := groundbaitUnitGrams(itemID)
+	if fieldIsFloat(wireClass, idx) {
+		if fields[idx].Float != 0 {
+			return false
+		}
+		fields[idx].Float = grams
+		return true
+	}
+	if u64Of(fields[idx].Num) != 0 {
+		return false
+	}
+	fields[idx].Num = ptrU64(uint64(math.Float32bits(float32(grams))))
+	return true
 }
 
 // applyDefAttrs 将 item_def.attrs_json 回填到对象；浮点值使用 IEEE754 位模式。
@@ -774,6 +964,25 @@ func (s *Server) applyDefAttrs(def *store.ItemDef, class string, obj *proto.Valu
 			if _, exists := attrs["mbbdpnidheg"]; !exists {
 				attrs["mbbdpnidheg"] = v
 			}
+		}
+	}
+	// metaQtyFamily 族（竿架/提取物/香精/添加剂/PVA）的数量在定义里叫
+	// ljnnpokapig，实例字段是 meta 基类的剩余数量槽 dnmfciolgep，按别名映射；
+	// 家族 UI 计数槽（abmokghdbhf=f0 miecmmbpolk，bpmmimcmpof=f1、
+	// deckldefiap=f2、dpghngjmnap/pcngolccead=f0 ljnnpokapig）由 writeItemQty 镜像。
+	if metaQtyFamily(class) {
+		if v, ok := attrs[csQty]; ok {
+			if _, exists := attrs["dnmfciolgep"]; !exists {
+				attrs["dnmfciolgep"] = v
+			}
+		}
+	}
+	// 品类 46（成品窝料）的原生定义不带克重，实例照抄定义就永远是「质量 0 克」。
+	// 客户端「质量」那一行读的是实例重量字段（cilmgoaoofg f7 ijbjficbhog）的
+	// IEEE754 位模式、单位克；真实服务端按实例下发，这里按窝料档案补上。
+	if def.Category == 46 {
+		if w, ok := attrs[castAttrWaterWeight].(float64); !ok || w == 0 {
+			attrs[castAttrWaterWeight] = float64(math.Float32bits(float32(groundbaitUnitGrams(def.ItemID))))
 		}
 	}
 	for cs, val := range attrs {
@@ -921,17 +1130,31 @@ func netTicksNow() int64 {
 // reclassifyCategories 限定允许改写的类别：这些类别的实例在客户端是独立 DTO，
 // 早期没有映射时被创建成钓线类 ohciikgjghe，必须换类才能正常渲染。
 // 新增映射时可把类别加进来，启动修复会对存量物品重写一次。
-var reclassifyCategories = map[int64]bool{41: true, 42: true, 47: true, 57: true}
+var reclassifyCategories = map[int64]bool{
+	2: true, 19: true, 20: true, 30: true, 33: true, 38: true, 41: true,
+	42: true, 45: true, 47: true, 55: true, 57: true, 58: true, 61: true,
+	62: true, 63: true, 69: true, 70: true, 71: true, 72: true, 76: true,
+	78: true, 79: true, 82: true,
+}
 
 func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *store.ItemDef) (bool, error) {
 	if it == nil || def == nil || !reclassifyCategories[def.Category] {
 		return false, nil
 	}
-	cls, ok := categoryWireClass[def.Category]
+	cls, ok := resolveWireClass(def)
 	if !ok || (it.WireClass == cls.Class && it.TypeID == cls.TypeID) {
 		return false, nil
 	}
-	if it.WireClass != "" && it.WireClass != fallbackWireClass {
+	// 只改写「已知来源」的行：钓线兜底类、窝料类（香精误落 cilmgoaoofg，
+	// 2026-11-05 北黑莓/黑加仑毒行，按 I 必挂），dfignppokoh 家族另一变体
+	// （58 的映射从 abmokghdbhf/11500 修正为 bpmmimcmpof/721，存量需迁移），
+	// 以及 aklijhgdgbh 家族错类（cat 20 添加剂误落 deckldefiap/125、cat 45
+	// PVA 误落 bpmmimcmpof/721——2026-11-05 客户端分发表实证后修正，存量迁移）。
+	legacyClassOK := it.WireClass == fallbackWireClass ||
+		it.WireClass == "cilmgoaoofg" ||
+		(metaQtyFamily(it.WireClass) &&
+			(def.Category == 58 || def.Category == 20 || def.Category == 45))
+	if it.WireClass != "" && !legacyClassOK {
 		return false, nil
 	}
 	obj, err := wiregen.MakeObj(cls.Class, nil)
@@ -966,9 +1189,7 @@ func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *
 	setNum(csNumericID, uint64(def.NumericID))
 	rowQty := it.Qty
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
-			obj.Fields[idx].Num = ptrU64(uint64(rowQty))
-		}
+		writeItemQty(cls.Class, obj, uint64(rowQty))
 	}
 	workmanship := it.Workmanship
 	durability := it.Durability
@@ -992,6 +1213,9 @@ func (s *Server) reclassifyStoredItem(ctx context.Context, it *store.Item, def *
 	it.Workmanship = workmanship
 	it.Durability = durability
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return false, err
+	}
 	fieldsJSON, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return false, err
@@ -1010,7 +1234,7 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 	if err != nil || def == nil {
 		return nil, fmt.Errorf("物品定义不存在: %s", itemID)
 	}
-	cls, ok := categoryWireClass[def.Category]
+	cls, ok := resolveWireClass(def)
 	if !ok {
 		cls = wireClassEntry{fallbackWireClass, fallbackTypeID}
 	}
@@ -1035,16 +1259,17 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 	setHex(csGUID, guid) // guid
 	setNum(csNumericID, uint64(def.NumericID))
 	rowQty := int64(1)
-	// 数量 ljnnpokapig：计件 = 定义单位量×units，item.qty 必须与字段同值；
+	// 数量槽：计件 = 定义单位量×units，item.qty 必须与字段同值；
+	// metaQtyFamily（竿架/提取物/香精）写权威槽 dnmfciolgep 并镜像总数槽，
 	// 线(11)/前导(15) 是长度，不在此分支。
 	if countableCategories[def.Category] {
-		if idx := fieldIdxByCS(cls.Class, csQty); idx >= 0 {
+		if idx := itemQtyFieldIdx(cls.Class); idx >= 0 {
 			defQty := u64Of(obj.Fields[idx].Num)
 			if defQty == 0 {
 				defQty = 1
 			}
 			fieldQty := defQty * uint64(units)
-			obj.Fields[idx].Num = ptrU64(fieldQty)
+			writeItemQty(cls.Class, obj, fieldQty)
 			rowQty = int64(fieldQty)
 		}
 	}
@@ -1072,7 +1297,7 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 
 	it := &store.Item{
 		GUID: guid, UID: uid, ItemID: def.ItemID, NumericID: def.NumericID,
-		WireClass: cls.Class, TypeID: cls.TypeID, Container: container, Slot: 0,
+		WireClass: cls.Class, TypeID: cls.TypeID, Container: tradingItemContainer(cls.Class, container), Slot: 0,
 		Qty: rowQty, Durability: 1.0, Workmanship: 1.0,
 		CreatedTS: float64(time.Now().Unix()),
 	}
@@ -1083,6 +1308,9 @@ func (s *Server) CreateItem(ctx context.Context, uid int64, itemID, container st
 		}
 	}
 	s.canonicalizeItemPhysicalFields(ctx, it, obj.Fields)
+	if err := s.initializeTradingItem(ctx, def, obj); err != nil {
+		return nil, err
+	}
 	fieldsJSON, err := FieldsToJSON(obj.Fields)
 	if err != nil {
 		return nil, err
@@ -1109,8 +1337,7 @@ func (s *Server) prepareNewItemWithCount(ctx context.Context, uid int64, itemID,
 	if err != nil {
 		return nil, err
 	}
-	if idx := fieldIdxByCS(it.WireClass, csQty); idx >= 0 && idx < len(fields) {
-		fields[idx].Num = ptrU64(uint64(count))
+	if setItemQty(it.WireClass, fields, uint64(count)) {
 		fj, ferr := FieldsToJSON(fields)
 		if ferr != nil {
 			return nil, ferr
@@ -1131,8 +1358,9 @@ func (s *Server) AddToStack(ctx context.Context, uid int64, itemID, container st
 		it, err := s.CreateItem(ctx, uid, itemID, container, units)
 		return it, false, err
 	}
-	cls := wireClassOf(def.Category)
-	qtyIdx := fieldIdxByCS(cls, "ljnnpokapig")
+	// 合并写入走 row.WireClass 驱动的 setItemQty（家族镜像在函数内处理），
+	// 无需在此预先解析实例类。
+
 	defQty := int64(1)
 	if v, ok := defAttrU64(def, csQty); ok && v > 0 {
 		defQty = int64(v)
@@ -1146,13 +1374,12 @@ func (s *Server) AddToStack(ctx context.Context, uid int64, itemID, container st
 			continue
 		}
 		fields, _ := FieldsFromJSON(row.FieldsJSON)
-		if qtyIdx >= 0 && qtyIdx < len(fields) {
+		if cur, ok := itemQtyValue(row.WireClass, fields); ok {
 			// 若 row.qty 与字段值不一致，以字段值为基准修正后再累加。
-			cur := int64(u64Of(fields[qtyIdx].Num))
 			if cur > 0 {
-				row.Qty = cur
+				row.Qty = int64(cur)
 			}
-			fields[qtyIdx].Num = ptrU64(uint64(cur + addQty))
+			setItemQty(row.WireClass, fields, cur+uint64(addQty))
 		}
 		fj, _ := FieldsToJSON(fields)
 		newQty := row.Qty + addQty

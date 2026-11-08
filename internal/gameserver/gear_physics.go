@@ -3,7 +3,9 @@ package gameserver
 import (
 	"context"
 	"math"
+	"strconv"
 	"strings"
+	"sync"
 
 	"rf4server/internal/store"
 )
@@ -18,6 +20,7 @@ const (
 	gearCatLine       = int64(11)
 	gearCatLeader     = int64(13)
 	gearCatLeaderWire = int64(15)
+	gearCatLeadcore   = int64(57)
 
 	gearAttrMaxLoad  = "kngaaefkpka"
 	gearAttrDiameter = "ciichedlnjh"
@@ -25,53 +28,77 @@ const (
 	gearAttrWeight   = "dhlkahnodoo"
 	gearAttrTestMin  = "dakogfmkclb"
 	gearAttrTestMax  = "jfebacgmlmb"
-	gearAttrTaper    = "ddebfbbjppk"
-	gearAttrStretch  = "aomkdnjcgji"
-	gearAttrDensity  = "lgjeahdobch"
-	gearAttrLineLen  = "ljnnpokapig"
-	gearAttrDrag     = "mlfjkaoicdn"
-	gearAttrGear     = "oiaplokhcii"
-	gearAttrDragMax  = "omghfmdfjpc"
-	gearAttrRatio    = "dpgbopbanal"
-	gearAttrLeaderIn = "mbnambppbom"
-	gearAttrHookSize = "gkfbafmbpam"
-	gearAttrHookLen  = "najajfakhdo"
 
-	// hookWeightVolumeFactor 把钩体长度(mm)换算成可入口鱼重上限(g)：
-	// cap = factor * length^3。立方关系对应鱼体长度/嘴口径的比例关系，
-	// 实际仍有竿线强度和 fight_tolerance 共同限制。
+	// gearAttrRodAction 是鱼竿调性：1=Slow 2=Moderate 3=Fast 4=ExtraFast。
+	gearAttrRodAction = "bmmpdijcjdf"
+	// gearAttrRodStiffness 是鱼竿硬度档：0=未登记/任意，1..10 依次变硬（8..10
+	// 多为船竿）。item_def 里 cat3 的实际分布是 0:217 1:54 2:72 3:63 4:171
+	// 5:152 6:170 7:91 8:18 9:21 10:14，共 53 根落在 8..10，不能按 1..7 截断。
+	gearAttrRodStiffness = "ndpfblpkagj"
+	// gearAttrRodRigidity 是竿身刚度（0..1），本体侧用于弯曲手感，服务端只记录。
+	gearAttrRodRigidity = "lpgpehmjnjc"
+	// gearAttrSensitivity 是鱼竿灵敏度（0..1），本体侧用于咬口反馈，服务端只记录。
+	gearAttrSensitivity = "ddebfbbjppk"
+
+	gearAttrStretch    = "aomkdnjcgji"
+	gearAttrDensity    = "lgjeahdobch"
+	gearAttrLineLen    = "ljnnpokapig"
+	gearAttrDrag       = "mlfjkaoicdn"
+	gearAttrGear       = "oiaplokhcii"
+	gearAttrDragMax    = "omghfmdfjpc"
+	gearAttrRatio      = "dpgbopbanal"
+	gearAttrLeaderIn   = "mbnambppbom"
+	gearAttrLeaderLock = "lbadjgllglo"
+	gearAttrHookSize   = "gkfbafmbpam"
+	gearAttrHookLen    = "najajfakhdo"
+	// gearAttrMaterial 是前导线材质（cat15）；主线材质走 fopbhlmkcpe。
+	gearAttrMaterial = "ocmbfkebgpp"
+
+	// hookWeightVolumeFactor 把钩体长度(mm)换算成"能入口"的鱼重上限(g)：
+	// cap = factor * length^3。这是假想模型，本体没有对应判定，
+	// 只在 hook_entry_cap=1 时用于对照调试（默认关闭）。
 	hookWeightVolumeFactor = 8.0
-	// gearOverloadFactor 允许鱼略超最弱承力件。客户端仍会按真实张力
-	// 触发 17/9；这个系数只决定派鱼重量窗口，不代表能无限超载。
+	// gearOverloadFactor 只在管理员打开派鱼截断调试时使用：旧承力口径和
+	// 钩入口口径都乘这个系数，给玩家 35% 控鱼余量。17/9 断件由客户端上报，
+	// 服务端据此持久化断件，不在这里重新判定承力。
 	gearOverloadFactor = 1.35
 )
 
 // rigGearIDs 返回当前钓组用于物理判定的 systemID。
 // 空字符串表示数据缺失，该部件不参与最弱环计算。
 type rigGearIDs struct {
-	Rod              string
-	Reel             string
-	ReelGUID         string
-	Line             string
-	Leader           string
-	RodDurability    float64
-	ReelDurability   float64
-	LineDurability   float64
-	LeaderDurability float64
+	Rod                 string
+	Reel                string
+	ReelGUID            string
+	Line                string
+	Leader              string
+	Leadcore            string
+	LeadcoreGUID        string
+	Connector           string
+	ConnectorGUID       string
+	RodDurability       float64
+	ReelDurability      float64
+	LineDurability      float64
+	LeaderDurability    float64
+	LeadcoreDurability  float64
+	ConnectorDurability float64
 }
 
 // gearPhysicsSpec 是 item_def 解码后的物理量快照（kg/mm/m/比例）。
 type gearPhysicsSpec struct {
-	RodPowerKg       float64
-	LineStrengthKg   float64
-	LeaderStrengthKg float64
-	ReelPresent      bool
-	ReelDragKg       float64 // 当前耐久阶段下的锁轮承力
-	LineStretch      float64
-	HookPresent      bool
-	HookStrengthKg   float64
-	HookLengthMM     float64
-	HookSize         int64
+	RodPowerKg          float64
+	LineStrengthKg      float64
+	LeaderStrengthKg    float64 // 前导/子线：取内嵌线与连接件较小值
+	LeadcoreStrengthKg  float64 // 铅芯前导（cat57）自身拉力
+	ConnectorStrengthKg float64 // 独立连接件（cat14）自身拉力
+	ReelPresent         bool
+	ReelDragKg          float64 // 当前耐久阶段下的锁轮承力
+	ReelCurrentDragKg   float64 // 当前摩擦档位下的制动力，线上 29（UI 30）锁轮时等于锁轮承力
+	LineStretch         float64
+	HookPresent         bool
+	HookStrengthKg      float64
+	HookLengthMM        float64
+	HookSize            int64
 }
 
 // decodeU32F32 把 attrs_json 中的 U32 数值按 IEEE-754 F32 位型还原。
@@ -168,6 +195,33 @@ func nestedF32(m map[string]any, key string) float64 {
 
 func rodPowerKg(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrMaxLoad) }
 func rodLengthM(def *store.ItemDef) float64     { return itemDefF32(def, gearAttrLength) }
+func rodAction(def *store.ItemDef) int64        { return itemDefInt(def, gearAttrRodAction) }
+func rodStiffness(def *store.ItemDef) int64     { return itemDefInt(def, gearAttrRodStiffness) }
+func rodRigidity(def *store.ItemDef) float64    { return itemDefF32(def, gearAttrRodRigidity) }
+func rodSensitivity(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrSensitivity) }
+
+// missingRodDataLogged 记录已经告警过"缺物理字段"的竿 itemID，每个竿只告警一次，
+// 避免每次抛竿/断件都刷日志。
+var missingRodDataLogged sync.Map
+
+// logMissingRodPhysics 竿有定义但缺 MaxLoad 或长度时告警一次。
+// 只观察、不改判定：缺 MaxLoad 的竿在 gearBreakLimitKg 里被静默跳过，
+// 等于这根竿永远不会成为最弱环（不会断）；缺长度则抛投距离拿不到竿长修正。
+func (s *Server) logMissingRodPhysics(rodItemID string, def *store.ItemDef) {
+	if s == nil || s.log == nil || strings.TrimSpace(rodItemID) == "" || def == nil {
+		return
+	}
+	power := rodPowerKg(def)
+	length := rodLengthM(def)
+	if power > 0 && length > 0 {
+		return
+	}
+	if _, dup := missingRodDataLogged.LoadOrStore(rodItemID, true); dup {
+		return
+	}
+	s.log.Warn("竿缺少物理字段，最弱环/抛投将静默跳过", "rod", rodItemID,
+		"max_load_kg", power, "length_m", length)
+}
 func lineStrengthKg(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrMaxLoad) }
 func lineDiameterMM(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrDiameter) }
 func lineLengthM(def *store.ItemDef) int64      { return itemDefInt(def, gearAttrLineLen) }
@@ -180,6 +234,10 @@ func leaderStrengthKg(def *store.ItemDef) float64 {
 	}
 	if inner := itemDefNested(def, gearAttrLeaderIn); inner != nil {
 		if f := nestedF32(inner, gearAttrMaxLoad); f > 0 {
+			// 成品前导 = 内嵌线 + 连接件，承力取两者较小值（连接件是短链短板）。
+			if lock := nestedF32(itemDefNested(def, gearAttrLeaderLock), gearAttrMaxLoad); lock > 0 && lock < f {
+				return lock
+			}
 			return f
 		}
 	}
@@ -200,18 +258,87 @@ func reelGearRatio(def *store.ItemDef) float64 {
 	return nestedF32(itemDefNested(def, gearAttrGear), gearAttrRatio)
 }
 
+// 渔轮摩擦档位：17/14 线上值从 0 开始，客户端 UI 显示值 = 线上值 + 1。
+// 线上 0~28（UI 1~29）是制动力刻度，线上 29（UI 30）是锁轮。
+const (
+	fullReelDragStop = 29 // UI 1~29 的满刻度
+	maxReelDragStop  = 29 // 线上 29 = UI 30 = 锁轮
+	// 每根竿的默认摩擦档位：线上 15 = UI 16。客户端未上报过 17/14
+	// 时按这个值下发和计算，不能把“没有记录”当成锁轮。
+	defaultReelDragSetting = int64(15)
+)
+
+// reelDragAtSetting 按摩擦档位给出实际作用在线上的制动力。
+// 线上 0~28 超过该值时渔轮打滑放线，竿与线不会承受高于它的张力；
+// 线上 29 锁轮后不再打滑，张力上限换成锁轮承力。
+func reelDragAtSetting(perf *store.ReelPerformance, setting int64) float64 {
+	if setting >= maxReelDragStop {
+		return perf.LockedDragKg
+	}
+	if setting < 0 {
+		return 0
+	}
+	return perf.BaseDragKg * float64(setting+1) / float64(fullReelDragStop) * perf.BearingFactor
+}
+
+// rodReelDragSetting 读取客户端 17/14 保存的摩擦档位；没有记录时使用默认
+// 线上 15（UI 16），不能回退到锁轮。
+func (s *Server) rodReelDragSetting(ctx context.Context, rodGUID string) (int64, bool) {
+	if s == nil || s.DB == nil || strings.TrimSpace(rodGUID) == "" {
+		return defaultReelDragSetting, true
+	}
+	raw, err := s.DB.GetRodSetting(ctx, rodGUID, reelDragSettingKey)
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return defaultReelDragSetting, true
+	}
+	setting, cerr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if cerr != nil {
+		return defaultReelDragSetting, true
+	}
+	// 线上 0 是有效的最小泄力档（UI 1），不能按“没有设置”处理。
+	if setting < 0 {
+		setting = 0
+	}
+	if setting > maxReelDragStop {
+		setting = maxReelDragStop
+	}
+	return setting, true
+}
+
+// rodReelSpeedSetting 读取客户端 17/15 保存的收线速度；没有记录时返回 false。
+// 收线速度不是摩擦档位，不能按 maxReelDragStop 截断（抓包实测值 41）。
+func (s *Server) rodReelSpeedSetting(ctx context.Context, rodGUID string) (int64, bool) {
+	if s == nil || s.DB == nil || strings.TrimSpace(rodGUID) == "" {
+		return 0, false
+	}
+	raw, err := s.DB.GetRodSetting(ctx, rodGUID, reelSpeedSettingKey)
+	if err != nil {
+		return 0, false
+	}
+	setting, cerr := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if cerr != nil || setting < 0 {
+		return 0, false
+	}
+	return setting, true
+}
+
 func rodTestG(def *store.ItemDef) (float64, float64) {
 	return itemDefF32(def, gearAttrTestMin), itemDefF32(def, gearAttrTestMax)
 }
 
-func rodTaper(def *store.ItemDef) float64 { return itemDefF32(def, gearAttrTaper) }
-
 // gearBreakLimitKg 返回整副钓组最弱一环的拉力；0 表示没有可信物理数据。
-// 手竿没有轮子，只比较竿/主线/子线；带轮竿额外比较锁轮承力。
+// 承力件 = 竿 / 主线 / 前导(子线) / 铅芯前导 / 连接件 / 钩，带轮竿额外比较锁轮承力。
+// 渔轮本身是泄力装置、靠打滑化解鱼力，不算"会断"的承力件，但锁轮承力是张力上限。
 func gearBreakLimitKg(spec gearPhysicsSpec) float64 {
-	parts := []float64{spec.RodPowerKg, spec.LineStrengthKg, spec.LeaderStrengthKg}
+	parts := []float64{
+		spec.RodPowerKg, spec.LineStrengthKg, spec.LeaderStrengthKg,
+		spec.LeadcoreStrengthKg, spec.ConnectorStrengthKg,
+	}
 	if spec.ReelPresent {
 		parts = append(parts, spec.ReelDragKg)
+	}
+	if spec.HookPresent {
+		parts = append(parts, spec.HookStrengthKg)
 	}
 	limit := 0.0
 	for _, p := range parts {
@@ -223,6 +350,69 @@ func gearBreakLimitKg(spec gearPhysicsSpec) float64 {
 		}
 	}
 	return limit
+}
+
+// gearStrengthCapKg 是按当前钓具承力换算的旧派鱼诊断口径。
+//
+// 默认不参与派鱼：鱼咬不咬钩取决于饵、水域、深度和鱼种分布，跟玩家手里
+// 这根线有多粗无关。弱线组照样会遇到大鱼，结果是在搏鱼阶段由客户端触发
+// 17/9 断件，而不是“大鱼不来”。只有 fish_weight_cap 打开时才恢复此口径。
+func gearStrengthCapKg(spec gearPhysicsSpec) float64 {
+	limit := gearBreakLimitKg(spec)
+	if limit <= 0 {
+		return 0
+	}
+	return limit * gearOverloadFactor
+}
+
+// hookEntryCapKg 是钩的入口换算：钩体太小，大鱼即使咬中也挂不住。
+// 这是"钩号 × 鱼嘴"的几何关系，不是承力，所以和强度上限分开控制。
+//
+// 注意：这是**假想模型**，不是本体规则。本体里钩号只决定钩的强度与外观，
+// 没有"鱼嘴太大咬不住小钩"的判定；默认关闭（见 fishWeightCapKg），
+// 只在管理员想对照调试时打开。
+func hookEntryCapKg(spec gearPhysicsSpec) float64 {
+	if !spec.HookPresent {
+		return 0
+	}
+	hookCapG := hookWeightCapG(spec.HookLengthMM, spec.HookSize)
+	if hookCapG <= 0 {
+		return 0
+	}
+	return (hookCapG / 1000.0) * gearOverloadFactor
+}
+
+// gearWeightCapKg 返回强度上限与钩入口上限中的较小值，保留给测试与诊断对照。
+// 真实派鱼必须先经过 fishWeightCapKg 的两个独立开关，不要直接用这个函数。
+func gearWeightCapKg(spec gearPhysicsSpec) float64 {
+	strength := gearStrengthCapKg(spec)
+	entry := hookEntryCapKg(spec)
+	if strength <= 0 {
+		return entry
+	}
+	if entry <= 0 {
+		return strength
+	}
+	return math.Min(strength, entry)
+}
+
+// fishWeightCapKg 是派鱼实际生效的重量上限，两条限制分别开关，**默认都关**：
+//   - 承力截断 fish_weight_cap：默认 0。线多粗不影响鱼来不来，只影响搏鱼时断不断；
+//   - 钩入口截断 hook_entry_cap：默认 0。钩号大小不影响鱼来不来，所有钩都可能上所有鱼。
+//
+// 两个都关时返回 0，表示不截断——这是默认状态：鱼种由饵、水域、深度和鱼种分布决定，
+// 钓具只决定"拉不拉得上来"。管理员显式写 1 才恢复对应的旧模型，用于对照调试。
+func (s *Server) fishWeightCapKg(spec gearPhysicsSpec) float64 {
+	capKg := 0.0
+	if s.tunableF("fish_weight_cap", 0) > 0 {
+		capKg = gearStrengthCapKg(spec)
+	}
+	if s.tunableF("hook_entry_cap", 0) > 0 {
+		if entry := hookEntryCapKg(spec); entry > 0 && (capKg <= 0 || entry < capKg) {
+			capKg = entry
+		}
+	}
+	return capKg
 }
 
 func gearWeakestPart(spec gearPhysicsSpec) string {
@@ -238,6 +428,9 @@ func gearWeakestPart(spec gearPhysicsSpec) string {
 		{"rod", spec.RodPowerKg},
 		{"line", spec.LineStrengthKg},
 		{"leader", spec.LeaderStrengthKg},
+		{"leadcore", spec.LeadcoreStrengthKg},
+		{"connector", spec.ConnectorStrengthKg},
+		{"hook", spec.HookStrengthKg},
 	}
 	name := ""
 	limit := 0.0
@@ -250,24 +443,6 @@ func gearWeakestPart(spec gearPhysicsSpec) string {
 	return name
 }
 
-// canLandGear 判断鱼能否拉上岸，并返回最弱断件（rod/line/leader）。
-// pull = fish_weight_kg * k，默认 k 为 0.35。
-func canLandGear(spec gearPhysicsSpec, fishWeightKg, k float64) (bool, string) {
-	if fishWeightKg <= 0 {
-		return true, ""
-	}
-	if k <= 0 {
-		k = 0.35
-	}
-	pull := fishWeightKg * k
-	weakestName := gearWeakestPart(spec)
-	weakestKg := gearBreakLimitKg(spec)
-	if weakestKg == 0 || pull <= weakestKg {
-		return true, ""
-	}
-	return false, weakestName
-}
-
 // effectiveLineBuffer 是线材吸收冲击后的拉力系数（1=刚性，越大越能缓冲）。
 func effectiveLineBuffer(stretch float64) float64 {
 	if stretch < 0 {
@@ -277,27 +452,6 @@ func effectiveLineBuffer(stretch float64) float64 {
 		stretch = 1
 	}
 	return 1.0 - 0.5*stretch
-}
-
-// gearWeightCapKg 是断件阈值换算后的可搏鱼体重上限；0 表示不约束。
-// 钩号/钩体尺寸额外给出一个“鱼能入口”的重量上限，因此小钩不会再派发巨物。
-func gearWeightCapKg(spec gearPhysicsSpec) float64 {
-	limit := gearBreakLimitKg(spec)
-	capKg := 0.0
-	if limit > 0 {
-		capKg = limit * gearOverloadFactor
-	}
-	if spec.HookPresent {
-		hookCapG := hookWeightCapG(spec.HookLengthMM, spec.HookSize)
-		if hookCapG <= 0 {
-			return capKg
-		}
-		hookCapKg := (hookCapG / 1000.0) * gearOverloadFactor
-		if capKg <= 0 || hookCapKg < capKg {
-			capKg = hookCapKg
-		}
-	}
-	return capKg
 }
 
 // hookWeightCapG 以钩体长度估算鱼入口的重量上限。缺少长度时用钩号
@@ -359,6 +513,7 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 		return v * durability
 	}
 	spec.RodPowerKg = applyDurability(rodPowerKg(load(ids.Rod)), ids.RodDurability)
+	s.logMissingRodPhysics(ids.Rod, load(ids.Rod))
 	spec.ReelPresent = strings.TrimSpace(ids.Reel) != ""
 	if spec.ReelPresent {
 		spec.ReelDragKg = reelDragMaxKg(load(ids.Reel)) * reelLockMultiplier(ids.ReelDurability)
@@ -367,6 +522,8 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 	spec.LineStrengthKg = applyDurability(lineStrengthKg(lineDef), ids.LineDurability)
 	spec.LineStretch = lineStretch(lineDef)
 	spec.LeaderStrengthKg = applyDurability(leaderStrengthKg(load(ids.Leader)), ids.LeaderDurability)
+	spec.LeadcoreStrengthKg = applyDurability(itemDefF32(load(ids.Leadcore), gearAttrMaxLoad), ids.LeadcoreDurability)
+	spec.ConnectorStrengthKg = applyDurability(itemDefF32(load(ids.Connector), gearAttrMaxLoad), ids.ConnectorDurability)
 	return spec
 }
 
@@ -379,6 +536,8 @@ func (s *Server) loadGearSpecForRig(ctx context.Context, ids rigGearIDs, rodGUID
 			if perf, perr := s.syncReelPerformance(ctx, row); perr == nil {
 				spec.ReelPresent = true
 				spec.ReelDragKg = perf.LockedDragKg
+				setting, _ := s.rodReelDragSetting(ctx, rodGUID)
+				spec.ReelCurrentDragKg = reelDragAtSetting(perf, setting)
 			}
 		}
 	}
@@ -429,14 +588,15 @@ func (s *Server) mountedHookDef(ctx context.Context, rodGUID string) (*store.Ite
 	return def, 1
 }
 
-// gearWeightCapForRig 读取当前手持竿的物理件并返回可搏鱼体重上限（kg）。
+// gearWeightCapForRig 读取当前钓组并返回实际生效的派鱼重量上限（kg）；0 表示不截断。
 func (s *Server) gearWeightCapForRig(ctx context.Context, uid int64, rodGUID string) (float64, rigGearIDs, string) {
 	if s == nil || s.DB == nil {
 		return 0, rigGearIDs{}, ""
 	}
 	ids := s.rigGearIDs(ctx, uid, rodGUID)
 	spec := s.loadGearSpecForRig(ctx, ids, rodGUID)
-	return gearWeightCapKg(spec), ids, gearWeakestPart(spec)
+	// 两个截断开关默认都关；日志中的 weakest 仍用于诊断承力链。
+	return s.fishWeightCapKg(spec), ids, gearWeakestPart(spec)
 }
 
 // rigGearIDs 解析当前钓组，优先读取竿实例：
@@ -490,6 +650,12 @@ func (s *Server) rigGearIDs(ctx context.Context, uid int64, rodGUID string) rigG
 	if out.Leader == "" {
 		out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, compGUIDs[gearCatLeader])
 	}
+	// 铅芯前导与独立连接件是和前导/子线并列的终端承力件，各自有拉力，
+	// 不能混进"Leader"里算，否则最弱环会漏掉它们。
+	out.LeadcoreGUID = compGUIDs[gearCatLeadcore]
+	out.Leadcore, out.LeadcoreDurability = s.itemSystemIDDurabilityByGUID(ctx, out.LeadcoreGUID)
+	out.ConnectorGUID = compGUIDs[catLeaderLock]
+	out.Connector, out.ConnectorDurability = s.itemSystemIDDurabilityByGUID(ctx, out.ConnectorGUID)
 
 	// 没有挂轮就是手竿；轮子和主线都只认当前竿上的真实装配，
 	// 不能拿背包里的任意物品补位。

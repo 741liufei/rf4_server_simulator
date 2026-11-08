@@ -11,6 +11,7 @@ import (
 // FishingFish 是 RolledFish 的可持久化快照。恢复 pending 时必须复用原 GUID、
 // 重量与曲线输入，禁止重启后重新 roll。
 type FishingFish struct {
+	GearGUID       string  `json:"gear_guid,omitempty"`
 	HookGUID       string  `json:"hook_guid,omitempty"`
 	HappyHour      bool    `json:"happy_hour,omitempty"`
 	HappyHourKnown bool    `json:"happy_hour_known,omitempty"`
@@ -32,6 +33,7 @@ type FishingFish struct {
 // mutex/timer 是进程内对象，均不在这里序列化。
 type FishingState struct {
 	UID            int64
+	RodGUID        string // 稳定的竿键，GearGUID清空后仍覆盖原竿快照
 	GearGUID       string
 	RigType        int64
 	Loc            string
@@ -67,12 +69,34 @@ const fishingStateCols = `
 		COALESCE(push_sent,0), COALESCE(hooked,0), COALESCE(resolved,0),
 		pending_json, COALESCE(bait,''), COALESCE(last_skill,0), armed_json,
 		COALESCE(bite_speed,1.0), COALESCE(trophy_luck,0.0),
-		COALESCE(fight_tolerance,0.0), COALESCE(bite_at_ns,0)`
+		COALESCE(fight_tolerance,0.0), COALESCE(bite_at_ns,0), rod_guid`
 
 // LoadFishingState 读取玩家钓鱼快照；不存在时返回 (nil, nil)。
 func (d *DB) LoadFishingState(ctx context.Context, uid int64) (*FishingState, error) {
 	row := d.SQL.QueryRowContext(ctx,
-		`SELECT `+fishingStateCols+` FROM fishing_state WHERE uid=?`, uid)
+		`SELECT `+fishingStateCols+` FROM fishing_state WHERE uid=? ORDER BY updated_ts DESC LIMIT 1`, uid)
+	return scanFishingState(row)
+}
+
+// LoadFishingStates returns all rods, most recently updated first.
+func (d *DB) LoadFishingStates(ctx context.Context, uid int64) ([]*FishingState, error) {
+	rows, err := d.SQL.QueryContext(ctx, `SELECT `+fishingStateCols+` FROM fishing_state WHERE uid=? ORDER BY updated_ts DESC`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var states []*FishingState
+	for rows.Next() {
+		st, err := scanFishingState(rows)
+		if err != nil {
+			return nil, err
+		}
+		states = append(states, st)
+	}
+	return states, rows.Err()
+}
+
+func scanFishingState(row interface{ Scan(...any) error }) (*FishingState, error) {
 	var (
 		st       FishingState
 		spot     int64
@@ -94,7 +118,7 @@ func (d *DB) LoadFishingState(ctx context.Context, uid int64) (*FishingState, er
 		&st.UID, &st.GearGUID, &st.RigType, &st.Loc, &spot, &st.DepthCM, &cast,
 		&castNS, &fallNS, &fallSeen, &settled, &tickSeen, &tickSeq, &st.LastAnim,
 		&pushSent, &hooked, &resolved, &pending, &st.Bait, &st.LastSkill, &armed,
-		&st.BiteSpeed, &st.TrophyLuck, &st.FightTolerance, &biteNS,
+		&st.BiteSpeed, &st.TrophyLuck, &st.FightTolerance, &biteNS, &st.RodGUID,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -127,7 +151,7 @@ func (d *DB) LoadFishingState(ctx context.Context, uid int64) (*FishingState, er
 	return &st, nil
 }
 
-// SaveFishingState 原子覆盖每个 uid 的唯一钓鱼快照。
+// SaveFishingState 原子覆盖该玩家该竿的快照。
 func (d *DB) SaveFishingState(ctx context.Context, st *FishingState) error {
 	if st == nil || st.UID == 0 {
 		return fmt.Errorf("fishing_state: uid 不能为空")
@@ -140,15 +164,19 @@ func (d *DB) SaveFishingState(ctx context.Context, st *FishingState) error {
 	if err != nil {
 		return fmt.Errorf("编码 armed_json: %w", err)
 	}
+	rodGUID := st.RodGUID
+	if rodGUID == "" {
+		rodGUID = st.GearGUID
+	}
 	_, err = d.SQL.ExecContext(ctx, `
 		INSERT INTO fishing_state(
 			uid, gear_guid, rig_type, loc, spot, depth_cm, cast_active,
 			cast_ts_ns, fall_ts_ns, fall_seen, rig_settled, tick_seen,
 			tick_seq, last_anim, push_sent, hooked, resolved, pending_json, bait,
 			last_skill, armed_json, bite_speed, trophy_luck, fight_tolerance,
-			bite_at_ns, updated_ts
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(uid) DO UPDATE SET
+			bite_at_ns, updated_ts, rod_guid
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(uid,rod_guid) DO UPDATE SET
 			gear_guid=excluded.gear_guid,
 			rig_type=excluded.rig_type,
 			loc=excluded.loc,
@@ -182,6 +210,7 @@ func (d *DB) SaveFishingState(ctx context.Context, st *FishingState) error {
 		fishingBoolInt(st.Resolved), pending, st.Bait, st.LastSkill, armed,
 		st.BiteSpeed, st.TrophyLuck, st.FightTolerance, fishingTimeNS(st.BiteAt),
 		float64(time.Now().UnixNano())/1e9,
+		rodGUID,
 	)
 	return err
 }

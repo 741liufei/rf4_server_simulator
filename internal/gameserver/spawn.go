@@ -2,8 +2,10 @@ package gameserver
 
 import (
 	"context"
+	"database/sql"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -224,9 +226,28 @@ func irFieldInt(n *irNode, idx int) (int64, bool) {
 	return v, true
 }
 
+// markTripPlaceDob 凭证水域 dob.f1（ghkchkmebcd.nipfkbkgbll）置 1。客户端
+// 抛竿门 hncnmlgnhjm.jccgcdgncjg 只在当前地点类型=1（klaglfafejl）时走
+// f23 钓鱼游通行校验；=0 走等级/买断路径，凭证图必然禁抛竿并提示
+// "钓鱼旅结束了"（2026-11-05 实测：票有效、徽章倒计时长场，抛竿仍被拒）。
+// 仅当该玩家在此地点有活跃钓鱼游时才打标：无票进入（房契/买断）时
+// f1=1 会让客户端以钓鱼游会话语义加载地图，而 f23 已无有效条目 →
+// 加载黑屏（2026-11-06 实测：钓鱼游过期后买房进北海直接黑屏）。
+func (s *Server) markTripPlaceDob(uid int64, key string, dob *irNode) {
+	if _, isTrip := placeTripPrices[key]; !isTrip {
+		return
+	}
+	if _, ok := s.activeTripRemainingSec(context.Background(), uid, key); !ok {
+		return
+	}
+	if len(dob.Fields) > 1 && dob.Fields[1].F == "byte" {
+		dob.Fields[1].V = json.RawMessage("1")
+	}
+}
+
 // buildSpawnLocatorBody 1/13 响应体：206 cgbaffjpbkg{dob, scene}。
 // levelKey 是玩家上次所在地图；scene 为空时按地图选择已知默认场景。
-func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([]byte, error) {
+func (s *Server) buildSpawnLocatorBody(uid int64, levelKey, scene string, nowUnix int64) ([]byte, error) {
 	levelKey = travelLevelKey(levelKey)
 	if scene == "" {
 		scene = sceneForLevel(levelKey)
@@ -246,6 +267,7 @@ func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([
 	if err := materializeIR(&dob); err != nil {
 		return nil, err
 	}
+	s.markTripPlaceDob(uid, levelKey, &dob)
 	reanchorWeather(&dob, nowUnix)
 	dobVal, err := irToValue(&dob)
 	if err != nil {
@@ -259,7 +281,7 @@ func (s *Server) buildSpawnLocatorBody(levelKey, scene string, nowUnix int64) ([
 }
 
 // buildMapDobBody 1/12 place：指定地图 key 的 dob(205 dobfogbcggd)。
-func (s *Server) buildMapDobBody(key string, nowUnix int64) ([]byte, error) {
+func (s *Server) buildMapDobBody(uid int64, key string, nowUnix int64) ([]byte, error) {
 	maps, err := loadMapDefs()
 	if err != nil {
 		return nil, err
@@ -275,6 +297,7 @@ func (s *Server) buildMapDobBody(key string, nowUnix int64) ([]byte, error) {
 	if err := materializeIR(&dob); err != nil {
 		return nil, err
 	}
+	s.markTripPlaceDob(uid, key, &dob)
 	reanchorWeather(&dob, nowUnix)
 	dobVal, err := irToValue(&dob)
 	if err != nil {
@@ -291,7 +314,7 @@ func (s *Server) buildTravelBody(sess *Session, key string) ([]byte, error) {
 }
 
 func (s *Server) buildTravelBodyAt(sess *Session, key string, nowUnix int64) ([]byte, error) {
-	dobBody, err := s.buildMapDobBody(key, nowUnix)
+	dobBody, err := s.buildMapDobBody(sess.Userid, key, nowUnix)
 	if err != nil {
 		return nil, err
 	}
@@ -307,14 +330,14 @@ func (s *Server) buildTravelBodyAt(sess *Session, key string, nowUnix int64) ([]
 	}
 	kn := proto.Args(proto.S("61"))
 	for _, e := range list {
-		kn.Items = append(kn.Items, buildKeepnet25(e, key))
+		kn.Items = append(kn.Items, buildKeepnet25(e, key, s.rarityOf25(e.Species)))
 	}
 	snap := proto.Obj("dlbahppbdad", 800,
 		proto.Field{Op: "VAL", Val: kn},
 		proto.Field{Op: "VAL", Val: nullVal()},
 		proto.Field{Op: "VAL", Val: nullVal()},
 	)
-	prof, err := s.BuildProfile307(ctx, sess.Userid)
+	prof, err := s.BuildProfile307W(ctx, sess.Userid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		return nil, fmt.Errorf("profile 307: %w", err)
 	}
@@ -363,21 +386,77 @@ func placeBuyoutPrice(place string, packet int64) int64 {
 	return tiers[packet-1]
 }
 
-// placeOwned 返回玩家是否已买断该地点。
-func (s *Server) placeOwned(ctx context.Context, uid int64, place string) bool {
+// placeTravelCosts 保存各地图切图所需银币，取自 1/4 game/configs(6) 下发
+// 的地点配置（type_6.bin，DTO 209 的 f3 lndfgbajbfn）。客户端地图详情用
+// 同一数值显示"所需银币"并与档案 f7 余额比较，因此服务端只认这张静态表，
+// 不接受客户端报价。未登记或免费地图为 0。
+var placeTravelCosts = map[string]int64{
+	"level_001_lake":            0,
+	"level_002_kirzah_river":    0,
+	"level_003_viiveri_lake":    2590,
+	"level_004_torfyanoe_ozero": 790,
+	"level_005_volhov":          1490,
+	"level_006_ladoga":          2980,
+	"level_007_grass_lake":      1390,
+	"level_008_sura_river":      1690,
+	"level_009_ahtuba":          3480,
+	"level_010_belaya":          890,
+	"level_011_ladoga_02":       3380,
+	"level_012_north_sea":       9880,
+	"level_013_sev_don":         1590,
+	"level_014_carp_lake":       3160,
+	"level_015_tunguska":        4880,
+	"level_016_yama":            9880,
+	"level_018_moskitnoe":       4490,
+	"level_019_american_pond":   0,
+	"level_ban":                 0,
+	"level_tutorial":            0,
+}
+
+// placeTravelCost 返回切到该地图需要扣除的银币。
+func placeTravelCost(key string) int64 {
+	return placeTravelCosts[key]
+}
+
+// hasFreeTravelAccessTx 判断玩家是否可免票进入该地图，所有判定都读同一个
+// 切图事务：金币买断、房契（place 为地图 key 或 <key>_house）和有效钓鱼游。
+//
+// 钓鱼游由 PR #171 引入：trip_state.remaining_sec > 0 即表示票有效，购票后
+// 首次进图（尚未启表计时）同样免费。PR #171 未合并的旧库没有这张表，此时按
+// 无票处理，避免旧库切图失败；合并后无需改动即可生效。
+func hasFreeTravelAccessTx(ctx context.Context, tx *sql.Tx, uid int64, place string) (bool, error) {
 	if place == "" {
-		return false
+		return false, nil
 	}
-	places, err := s.DB.PlaceAccessList(ctx, uid)
+	var owned int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM place_access
+		WHERE uid=? AND ((kind='buyout' AND place=?) OR (kind='house' AND place IN (?,?)))`,
+		uid, place, place, place+"_house").Scan(&owned); err != nil {
+		return false, err
+	}
+	if owned > 0 {
+		return true, nil
+	}
+	var table string
+	err := tx.QueryRowContext(ctx,
+		`SELECT name FROM sqlite_master WHERE type='table' AND name='trip_state'`).Scan(&table)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, err
 	}
-	for _, p := range places {
-		if p == place {
-			return true
-		}
+	var remaining float64
+	err = tx.QueryRowContext(ctx,
+		`SELECT remaining_sec FROM trip_state WHERE uid=? AND place=?`, uid, place).Scan(&remaining)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
 	}
-	return false
+	if err != nil {
+		return false, err
+	}
+	return remaining > 0, nil
 }
 
 // travelLevelKey 校验 1/12 和 1/14 的目标地图；无效 key 退回出生地图。

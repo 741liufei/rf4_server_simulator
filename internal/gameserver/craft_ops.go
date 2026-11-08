@@ -7,11 +7,13 @@ package gameserver
 import (
 	"context"
 	"crypto/sha1"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"math/rand"
-	"strconv"
 	"strings"
 	"time"
 
@@ -46,8 +48,73 @@ const (
 	obj8FQty       = 5 // ekjiebkgboh 数量
 )
 
-// maxCraftTimes 单次制作的份数上限（防止异常 qty 把材料一次扣光）。
-const maxCraftTimes = 100
+// maxCraftQty 单次制作的份数上限（防止异常 qty 把材料一次扣光）。
+const maxCraftQty = 1_000_000
+
+// craftBatchSpec 描述产物单次制作的批次规则：Limit 是材料套数上限，
+// Yield 是每套材料固定产出的数量。
+type craftBatchSpec struct {
+	Limit int64
+	Yield int64
+}
+
+// craftBatchSpecFor 返回产物的批次规则。
+// 窝料一套固定出 60 个、PVA 棒按规格 60/30/12 个，受背包单格上限约束；
+// 拟饵/引线/PVA 网/奖板等整件产物一次只能做 1 件；其余按 maxCraftQty。
+func craftBatchSpecFor(def *store.ItemDef) craftBatchSpec {
+	if def == nil {
+		return craftBatchSpec{Limit: 1, Yield: 1}
+	}
+	switch def.Category {
+	case 46:
+		return craftBatchSpec{Limit: 60, Yield: 60}
+	case 30:
+		switch def.ItemID {
+		case "pva_stick_m":
+			return craftBatchSpec{Limit: 30, Yield: 30}
+		case "pva_stick_l":
+			return craftBatchSpec{Limit: 12, Yield: 12}
+		}
+		return craftBatchSpec{Limit: 60, Yield: 60}
+	case 13, 15, 17, 61, 71:
+		return craftBatchSpec{Limit: 1, Yield: 1}
+	}
+	return craftBatchSpec{Limit: maxCraftQty, Yield: 1}
+}
+
+// craftTimesFor 把客户端提交的 qty 收敛到 [1, spec.Limit]。
+func craftTimesFor(spec craftBatchSpec, qty uint64) int64 {
+	if qty < 1 {
+		return 1
+	}
+	limit := spec.Limit
+	if limit < 1 {
+		limit = 1
+	}
+	if qty > uint64(limit) {
+		return limit
+	}
+	return int64(qty)
+}
+
+// craftOutputMerges 决定制作产物是否并入背包已有同种堆。
+// 窝料与 PVA 棒每组材料独立占一格，不与其他批次合并；
+// 其余计件产物（茶、咖啡、面包等）继续按数量堆叠。
+func craftOutputMerges(def *store.ItemDef) bool {
+	if def == nil {
+		return true
+	}
+	return def.Category != 46 && def.Category != 30
+}
+
+// appendMaterialUses 按实际扣掉的件数记录用料。PVA 棒的 10/20/50 克规格
+// 分别装 1/2/5 份干饵，只记一次会让大棒和小棒的成分比例失真。
+func appendMaterialUses(dst []string, itemID string, qty int64) []string {
+	for i := int64(0); i < qty; i++ {
+		dst = append(dst, itemID)
+	}
+	return dst
+}
 
 // 制作配方对应的技能大类（捕获鱼饵 4 见 baitdig.go）。
 const (
@@ -76,13 +143,18 @@ func craftSkillCatForRecipe(recipeID string) int64 {
 // bundleCategory 套盒类别（shop_rules.BUNDLE_CATEGORY）。
 const bundleCategory = 55
 
+// trophyMountCategory 标本/奖章类（悬挂板、落地架、吊顶，输出均此类别）。
+const trophyMountCategory = 71
+
 // ---- 请求解析 ----
 
 // craftSlot 表示 koelkolmmee 槽位：f0 是需求 id，f1 是物品实例 GUID。
 // 部分界面使用客户端临时 GUID，服务端会再按需求 id 定位材料。
+// 标本板的槽位是三字段 bhfikaplhmh {需求id, 鱼护EchoGUID, 鱼种}，f2 带鱼种。
 type craftSlot struct {
-	ItemID string
-	GUID   string
+	ItemID  string
+	GUID    string
+	Species string
 }
 
 // craftPayload 9/1 / 9/4 共用的制作载荷。
@@ -148,7 +220,11 @@ func slotList(tree *proto.Value) []craftSlot {
 		if v.Kind == proto.KindObj && v.FieldCount() == 3 {
 			g := v.Fields[1]
 			if g.Op == "GUID16" || (g.Op == "OPTGUID" && g.Hex != "") {
-				out = append(out, craftSlot{ItemID: v.Fields[0].StrOr(), GUID: g.Hex})
+				out = append(out, craftSlot{
+					ItemID:  v.Fields[0].StrOr(),
+					GUID:    g.Hex,
+					Species: v.Fields[2].StrOr(),
+				})
 			}
 		}
 		walkChildren(v, walk)
@@ -268,17 +344,22 @@ func allDemandsExplicit(ms []craftDemand) bool {
 }
 
 // scaleDemands 按制作份数放大材料需求；times 为 1 时原样返回。
-func scaleDemands(ms []craftDemand, times int64) []craftDemand {
+// 乘法溢出时返回 ok=false，避免异常份数绕过材料校验。
+func scaleDemands(ms []craftDemand, times int64) ([]craftDemand, bool) {
 	if times <= 1 {
-		return ms
+		return ms, true
 	}
 	out := make([]craftDemand, len(ms))
 	copy(out, ms)
 	for i := range out {
-		q := out[i].need() * times
+		per := out[i].need()
+		if per > 0 && times > math.MaxInt64/per {
+			return nil, false
+		}
+		q := per * times
 		out[i].Qty = &q
 	}
-	return out
+	return out, true
 }
 
 // resolveRecipe 依次按配方 id、产出物 id 和 recipe_ 前缀解析配方键。
@@ -298,10 +379,37 @@ func (s *Server) resolveRecipe(ctx context.Context, key string) *store.Recipe {
 	return nil
 }
 
+// setItemName 把玩家在制作界面填写的自定义名称写入物品实例。
+// 客户端该字段（phoglfnffah）为空时回落到定义名，非空时原样显示。
+func setItemName(it *store.Item, name string) error {
+	if it == nil {
+		return errors.New("空物品行")
+	}
+	if name == "" {
+		return nil
+	}
+	fields, err := FieldsFromJSON(it.FieldsJSON)
+	if err != nil {
+		return err
+	}
+	idx := fieldIdxByCS(it.WireClass, csCustomName)
+	if idx < 0 || idx >= len(fields) {
+		return fmt.Errorf("物品 %s 没有名称字段", it.ItemID)
+	}
+	fields[idx].Str = &name
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return err
+	}
+	it.FieldsJSON = fj
+	return nil
+}
+
 // ---- 9/1 制作闭环 ----
 
-// hCraft 处理 9/1 制作：解析配方、校验材料、事务内扣料、创建独立新实例并写流水。
-// 制作产出不并入已有同种堆，803.f1 返回新实例，f6 返回背包增量，f8 返回移除项。
+// hCraft 处理 9/1 制作：解析配方、校验材料、事务内扣料、产出入包并写流水。
+// 可计件产物并入已有同种堆，非计件产物保持独立实例；803.f1 返回本次产出
+// （数量为本次产出量），f6 返回背包增量（合并后为整堆），f8 返回移除项。
 //
 // 未知配方、材料不足和入库失败均返回 803(false)，避免客户端等待缺失响应。
 func hCraft(ctx *Ctx) ([]byte, bool) {
@@ -321,21 +429,42 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 	if outputID == "" {
 		outputID = req.Recipe
 	}
-	times := int64(req.Qty)
-	if times < 1 || times > maxCraftTimes {
+	outputDef, derr := srv.DB.GetItemDefByItemID(cctx, outputID)
+	if derr != nil {
+		ctx.Log.Warn("9/1 产出物定义读取失败", "output", outputID, "err", derr)
+		return srv.replyCraftResult(ctx, false, nil, nil, nil)
+	}
+	demands := parseDemands(recipe.MaterialsJSON)
+	spec := craftBatchSpecFor(outputDef)
+	times := craftTimesFor(spec, req.Qty)
+	if len(demands) == 0 {
+		// 零材料配方尚未接入鱼获/熟饵等消耗，先限制单份，避免无成本批量产出。
 		times = 1
 	}
 	uid := ctx.Sess.Userid
-	demands := parseDemands(recipe.MaterialsJSON)
-	isBaitCraft := strings.HasPrefix(recipe.RecipeID, "craft_bait_")
 	isLeaderCraft := strings.HasPrefix(recipe.RecipeID, "craft_leader_")
 
 	// 先在事务外构造物品；构造失败时尚未扣材料。
-	producedRow, err := srv.prepareNewItem(cctx, uid, outputID, "backpack", times, "")
+	producedRow, err := srv.prepareNewItem(cctx, uid, outputID, "backpack",
+		times*spec.Yield, "")
 	if err != nil {
 		ctx.Log.Warn("9/1 产出物不可构造", "output", outputID, "err", err)
 		return srv.replyCraftResult(ctx, false, nil, nil, nil)
 	}
+
+	// 标本/奖章族（悬挂板 board s/m/l、落地架 stand xl、吊顶 ceil xxl，
+	// 输出均为 cat 71）：客户端材料槽带鱼护 EchoGUID+鱼种（bhfikaplhmh
+	// 三字段），把该渔获按鱼护同款 25 类编码嵌进板子 f1 peipahjmida，
+	// 客户端据此在奖牌上渲染鱼。按输出品类判定而非配方前缀——stand/ceil
+	// 族曾因只匹配 craft_fish_board_ 前缀漏嵌鱼（2026-11-06 实测）。
+	// 复用上方 outputDef（静态库查询必须在经济事务开启前完成，SQLite 单连接）。
+	// 嵌鱼 guid 按板子 guid 派生，避免与鱼护内原鱼同 guid。
+	// 渔获定位/嵌鱼/消耗都在事务内做：无有效渔获必须 803(false)——
+	// 曾实测无鱼护 GUID 的请求静默产出空白板；且消费与制作同事务，
+	// 杜绝"板子已入库、鱼还在护"或并发同鱼双开标本。
+	isTrophyMount := outputDef != nil && outputDef.Category == trophyMountCategory
+	var mounted *mountedFish
+
 	if isLeaderCraft {
 		// 必须在经济事务开启前加载静态目录；SQLite 单连接事务内再查会阻塞。
 		if _, err := srv.leaderWireCatalog(cctx); err != nil {
@@ -352,6 +481,9 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 	defer func() { _ = tx.Rollback() }()
 
 	touched := []string{}
+	// usedMats 记下本次真的扣掉了哪些原料 item_id（不是槽里的需求 id）。
+	// 自制窝料的产物没有独立 item_id，只能按实例把用料记下来。
+	usedMats := []string{}
 	var leaderMaterials craftedLeaderMaterials
 	fail := func(reason string, args ...any) ([]byte, bool) {
 		ctx.Log.Warn("9/1 制作失败："+reason, args...)
@@ -366,7 +498,10 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 			return fail("引线材料扣除失败", "err", materialErr)
 		}
 	} else if len(demands) > 0 && allDemandsExplicit(demands) {
-		need := scaleDemands(demands, times)
+		need, ok := scaleDemands(demands, times)
+		if !ok {
+			return fail("材料数量溢出", "times", times)
+		}
 		rows, lerr := listItemsTx(cctx, tx, uid, []string{"backpack", "rig"})
 		if lerr != nil {
 			return fail("读取材料失败", "err", lerr)
@@ -390,8 +525,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 						return fail("扣材料失败", "item", accept, "err", cerr)
 					}
 					remaining -= got
-					if got > 0 && !containsGUID(touched, it.GUID) {
-						touched = append(touched, it.GUID)
+					if got > 0 {
+						usedMats = appendMaterialUses(usedMats, it.ItemID, got)
+						if !containsGUID(touched, it.GUID) {
+							touched = append(touched, it.GUID)
+						}
 					}
 				}
 			}
@@ -421,18 +559,36 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 			if slot.GUID == "" {
 				continue
 			}
+			// 材料槽按“每套需求 × 制作套数”扣减；槽的 ItemID 是需求 id。
+			demand, hasDemand := byDemand[slot.ItemID]
+			per := int64(1)
+			if hasDemand {
+				per = demand.need()
+				if per < 1 {
+					per = 1
+				}
+			}
+			if per > math.MaxInt64/times {
+				return fail("材料数量溢出", "demand", slot.ItemID, "times", times)
+			}
+			need := per * times
 			consumed := false
-			consumedGUID := ""
 			if row := byGUID[slot.GUID]; row != nil && row.Qty > 0 {
-				if _, cerr := consumeItemQtyTx(cctx, tx, row, 1); cerr != nil {
+				got, cerr := consumeItemQtyTx(cctx, tx, row, need)
+				if cerr != nil {
 					return fail("扣指定材料失败", "guid", slot.GUID, "err", cerr)
 				}
+				if got < need {
+					return fail("材料不足", "item", row.ItemID, "missing", need-got)
+				}
 				consumed = true
-				consumedGUID = row.GUID
+				usedMats = appendMaterialUses(usedMats, row.ItemID, got)
+				if !containsGUID(touched, row.GUID) {
+					touched = append(touched, row.GUID)
+				}
 			}
 			if !consumed {
-				demand, ok := byDemand[slot.ItemID]
-				if !ok {
+				if !hasDemand {
 					return fail("材料槽既不在背包也无对应需求", "demand", slot.ItemID, "guid", slot.GUID)
 				}
 				alts := make(map[string]bool)
@@ -445,7 +601,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 				for _, c := range demand.Categories {
 					cats[c] = true
 				}
+				remaining := need
 				for _, it := range rows {
+					if remaining <= 0 {
+						break
+					}
 					if it.Qty <= 0 {
 						continue
 					}
@@ -459,24 +619,50 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 					if !match {
 						continue
 					}
-					if _, cerr := consumeItemQtyTx(cctx, tx, it, 1); cerr != nil {
+					got, cerr := consumeItemQtyTx(cctx, tx, it, remaining)
+					if cerr != nil {
 						return fail("按需求扣材料失败", "item", it.ItemID, "err", cerr)
 					}
+					if got > 0 && !containsGUID(touched, it.GUID) {
+						touched = append(touched, it.GUID)
+					}
+					remaining -= got
+					if got > 0 {
+						usedMats = appendMaterialUses(usedMats, it.ItemID, got)
+					}
 					consumed = true
-					consumedGUID = it.GUID
-					break
 				}
-			}
-			if !consumed {
-				return fail("材料槽无法从背包定位", "demand", slot.ItemID, "guid", slot.GUID)
-			}
-			if consumedGUID != "" && !containsGUID(touched, consumedGUID) {
-				touched = append(touched, consumedGUID)
+				if remaining > 0 || !consumed {
+					return fail("材料不足", "demand", demand.DemandID, "missing", remaining)
+				}
 			}
 		}
 		if len(touched) == 0 {
 			return fail("配方要求材料但未扣到任何材料")
 		}
+	}
+
+	if err := setItemName(producedRow, req.Name); err != nil {
+		return fail("自定义名称写入失败", "err", err)
+	}
+
+	// 标本挂鱼（事务内）：定位→嵌鱼→消耗一体，任何一步失败整体回滚。
+	if isTrophyMount {
+		mf, note, merr := srv.mountedFishTreeTx(cctx, tx, uid, req.Materials, producedRow.GUID)
+		if merr != nil {
+			return fail("标本渔获读取失败", "err", merr)
+		}
+		if mf == nil {
+			return fail("标本制作缺少有效渔获", "note", note)
+		}
+		if err := embedMountedFish(producedRow, mf); err != nil {
+			return fail("标本嵌鱼失败", "err", err)
+		}
+		if err := srv.consumeMountedFishTx(cctx, tx, uid, mf.EchoGUID); err != nil {
+			return fail("标本消耗渔获失败", "guid", shortGUID(mf.EchoGUID), "err", err)
+		}
+		mounted = mf
+		ctx.Log.Info("9/1 标本挂鱼", "species", mf.Species, "board", shortGUID(producedRow.GUID))
 	}
 
 	if isLeaderCraft {
@@ -485,12 +671,25 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		}
 	}
 
-	// 鱼饵和作者现有可堆叠物品一样并入同编号背包堆，避免每做一次多出一个 30 个的独立堆。
-	row, merged, err := grantPreparedItemTx(cctx, tx, producedRow, isBaitCraft)
+	// 本次产出量：可计件产物在 prepareNewItem 已按定义单位量×份数折算；
+	// 引线物化只改子材料与强度，不动数量。
+	producedQty := producedRow.Qty
+
+	// 可计件产物（面包、茶、饲料等）并入已有同种背包堆，避免每次制作多出一个独立堆；
+	// 窝料/PVA 棒每组独立占一格；拟饵、引线等非计件产物仍插入新实例。
+	row, merged, err := grantPreparedItemTx(cctx, tx, producedRow, craftOutputMerges(outputDef))
 	if err != nil {
 		return fail("产出物入库失败", "output", outputID, "err", err)
 	}
-	_ = merged
+	// 自制窝料/PVA 棒：产物在客户端只有一个 item_id（feedcompleted），五个槽怎么
+	// 配都叫这个名字，所以「这袋料到底用了什么」必须按实例记下来。等投进窝里
+	// 再回查就晚了：那份料可能早被吃掉删掉，而窝还要活几个小时。
+	if outputDef != nil && (outputDef.Category == catGroundbaitMix || outputDef.Category == catPVAStick) {
+		if err := groundbaitRecordInstanceMaterialsTx(cctx, tx, row.GUID, usedMats); err != nil {
+			return fail("窝料用料记录写入失败", "err", err)
+		}
+	}
+
 	if err := addTxnTx(cctx, tx, uid, "craft", outputID, "",
 		0, 0, fmt.Sprintf("recipe=%s qty=%d", recipe.RecipeID, times)); err != nil {
 		return fail("制作流水写入失败", "err", err)
@@ -504,11 +703,28 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		"took", len(touched), "recipe", recipe.RecipeID,
 		"skill", skillCat, "mastery_gain", masteryGain)
 
-	produced := make([]*proto.Value, 0, 1)
+	// 背包快照（803.f6 与 4/22）沿用合并后的整堆行；结果卡（803.f1）只放
+	// 本次产出量，两者用各自独立的物品树，避免结果卡显示整堆数量。
+	upsert := make([]*proto.Value, 0, 1+len(touched))
+	var stackTree *proto.Value
 	if tree, terr := srv.ItemToTree(cctx, row); terr == nil {
-		produced = append(produced, tree)
+		stackTree = tree
+		upsert = append(upsert, tree)
+	} else {
+		ctx.Log.Warn("9/1 背包快照构造失败", "output", outputID, "err", terr)
 	}
-	upsert := append([]*proto.Value{}, produced...)
+	produced := make([]*proto.Value, 0, 1)
+	if stackTree != nil {
+		preview := stackTree
+		if merged && producedQty > 0 && producedQty != row.Qty {
+			if tree, perr := srv.craftProducedTree(cctx, row, producedQty); perr == nil {
+				preview = tree
+			} else {
+				ctx.Log.Warn("9/1 制作结果对象构造失败", "output", outputID, "err", perr)
+			}
+		}
+		produced = append(produced, preview)
+	}
 	var removed []string
 	for _, g := range touched {
 		r2, gerr := srv.DB.GetItemByGUID(cctx, g)
@@ -517,6 +733,11 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		} else if tree, terr := srv.ItemToTree(cctx, r2); terr == nil {
 			upsert = append(upsert, tree)
 		}
+	}
+	// 渔获已在事务内消耗（鱼即成为标本，官方语义）；这里只补通知信号。
+	if mounted != nil {
+		removed = append(removed, mounted.EchoGUID)
+		ctx.Log.Info("9/1 标本消耗渔获", "species", mounted.Species, "guid", shortGUID(mounted.EchoGUID))
 	}
 	var progress, skillTree *proto.Value
 	if masteryGain > 0 {
@@ -527,9 +748,24 @@ func hCraft(ctx *Ctx) ([]byte, bool) {
 		if masteryGain > 0 {
 			ctx.Sess.Push2_4SkillTree("制作 " + outputID)
 		}
-		if len(produced) > 0 {
-			ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), produced...))
+		if mounted != nil {
+			// 4/21 是物品移除信号：客户端据它把鱼护里的原鱼撤下
+			// （与卖鱼/移动物品同一信号，见 boat.go / hItemRemove）。
+			ctx.Sess.Push(4, 21, proto.Args524(proto.GuidArr([]string{mounted.EchoGUID})))
 		}
+		if stackTree != nil {
+			// 4/22 是背包快照，必须下发合并后的整堆数量。
+			ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), stackTree))
+		}
+	})
+	// 制作成功事件：配方 ID 供 250-417 的制作类成就判断；烹饪熟练度只在
+	// 本次是烹饪配方时装配，非烹饪制作保持 0，技能类成就便不会误判。
+	cookPoints := float64(0)
+	if skillCat == craftCookSkillID {
+		cookPoints, _ = srv.DB.GetSkillPoints(cctx, uid, craftCookSkillID)
+	}
+	srv.evaluateAchievements(ctx, achievementEvent{
+		Kind: evCraftOK, RecipeID: recipe.RecipeID, CookPoints: cookPoints,
 	})
 	return srv.replyCraftResultWithSkill(ctx, true, produced, upsert, removed, progress, skillTree)
 }
@@ -955,6 +1191,87 @@ func (s *Server) removeItems(ctx context.Context, uid int64, guids []string) int
 	return n
 }
 
+// mountedFish 标本挂鱼结果：嵌进板子树的鱼对象 + 被消耗的鱼护条目。
+type mountedFish struct {
+	Tree     *proto.Value
+	EchoGUID string
+	Species  string
+}
+
+// mountedFishTreeTx 标本挂鱼对象（事务内）：按材料槽（bhfikaplhmh {需求id,
+// 鱼护EchoGUID, 鱼种}）在鱼护里定位该渔获，按鱼护同款 25 类构造鱼对象，
+// guid 以板子 guid 派生（uuid5，避免与鱼护内原鱼同 guid）。
+// 返回 (nil, 原因, nil) = 没有槽位指向有效鱼护记录（槽位 GUID 是普通材料
+// 或已不存在的 echo guid）；返回 (nil, "", err) = 读取异常；两者都要求
+// 调用方（猫 71 制作）以 803(false) 收场——猫 71 的 52 个配方全部是标本
+// 板/支架/吊顶，没有渔获就没有标本，静默放行会产出空白板。
+// 鱼种不符同样拒绝：客户端槽位鱼种与鱼护实不符意味着引用已错位。
+func (s *Server) mountedFishTreeTx(ctx context.Context, tx *sql.Tx, uid int64, slots []craftSlot, boardGUID string) (*mountedFish, string, error) {
+	for _, sl := range slots {
+		if sl.GUID == "" {
+			continue
+		}
+		entry, err := s.DB.KeepnetGetTx(ctx, tx, uid, sl.GUID)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, "", err
+		}
+		if sl.Species != "" && entry.Species != "" && sl.Species != entry.Species {
+			return nil, fmt.Sprintf("鱼种不符 slot=%s keepnet=%s", sl.Species, entry.Species), nil
+		}
+		fish := buildKeepnet25(entry, "", store.SpeciesRarityTx(ctx, tx, entry.Species))
+		if idx := fieldIdxByCS("ecknbkpeeji", csGUID); idx >= 0 && idx < len(fish.Fields) {
+			fish.Fields[idx].Hex = uuid5OIDHex(boardGUID + "/mounted_fish")
+		}
+		return &mountedFish{Tree: fish, EchoGUID: entry.EchoGUID, Species: entry.Species}, "", nil
+	}
+	return nil, "材料槽没有指向有效鱼护记录", nil
+}
+
+// embedMountedFish 把渔获对象嵌进板子字段 f1 peipahjmida 并序列化回快照。
+// 任何失败都应让制作整体失败：无鱼的板子客户端渲染为空白标本。
+func embedMountedFish(row *store.Item, mf *mountedFish) error {
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return fmt.Errorf("板子字段解析失败: %w", err)
+	}
+	idx := fieldIdxByCS(row.WireClass, "peipahjmida")
+	if idx < 0 || idx >= len(fields) {
+		return fmt.Errorf("wire 类 %s 无 peipahjmida 字段", row.WireClass)
+	}
+	fields[idx] = proto.Field{Op: "VAL", Val: mf.Tree}
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return fmt.Errorf("板子字段序列化失败: %w", err)
+	}
+	row.FieldsJSON = fj
+	return nil
+}
+
+// consumeMountedFishTx 事务内消耗渔获：护网条目 + 导入快照镜像行 +
+// 槽位/钓组关联一并清理（与旧 KeepnetDelete+DeleteItemOfUID+DeleteItemRefs
+// 同语义）。条目不存在返回错误——消费必须"恰好一次"，杜绝同一尾鱼双开。
+func (s *Server) consumeMountedFishTx(ctx context.Context, tx *sql.Tx, uid int64, guid string) error {
+	deleted, err := s.DB.DeleteKeepnetTx(ctx, tx, uid, guid)
+	if err != nil {
+		return err
+	}
+	if !deleted {
+		return fmt.Errorf("鱼护条目不存在或已被消费")
+	}
+	// 镜像行兜底清理：type_id 非 25 的残留行也一并移除（正常不存在）。
+	if _, err := tx.ExecContext(ctx, `DELETE FROM item WHERE uid=? AND guid=?`, uid, guid); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM container_slot WHERE guid=?`, guid); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `DELETE FROM rig_component WHERE guid=?`, guid)
+	return err
+}
+
 // ---- 9/4 制作询价 ----
 
 // hCraftCost 处理 9/4 制作询价，返回 501 价格行：
@@ -1066,6 +1383,36 @@ func craftDemandObjs(recipe *store.Recipe) []*proto.Value {
 
 // ---- 803 构造 ----
 
+// craftProducedTree 构造 803.f1 的制作结果对象：数量只取本次产出量。
+// 可计件产物并入已有堆后 row.Qty 是整堆总量，直接下发会让结果卡显示
+// "整堆数量"而不是本次做了多少；GUID 与物理字段仍沿用合并后的行，
+// 保证客户端按同一实例渲染。f6 与 4/22 的背包快照必须用原行，不能复用本函数。
+func (s *Server) craftProducedTree(ctx context.Context, row *store.Item, producedQty int64) (*proto.Value, error) {
+	if row == nil {
+		return nil, fmt.Errorf("空物品行")
+	}
+	if producedQty < 1 {
+		return nil, fmt.Errorf("无效产出数量 %d", producedQty)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return nil, err
+	}
+	idx := fieldIdxByCS(row.WireClass, csQty)
+	if idx < 0 || idx >= len(fields) {
+		return nil, fmt.Errorf("物品 %s 没有数量字段", row.ItemID)
+	}
+	fields[idx].Num = ptrU64(uint64(producedQty))
+	fj, err := FieldsToJSON(fields)
+	if err != nil {
+		return nil, err
+	}
+	preview := *row
+	preview.Qty = producedQty
+	preview.FieldsJSON = fj
+	return s.ItemToTree(ctx, &preview)
+}
+
 // replyCraftResult 构造 803 制作/分解结果：
 // f1 是制作结果预览，f6 是背包增量（产出 + 剩余材料），f8 是耗尽移除的 GUID。
 func (s *Server) replyCraftResult(ctx *Ctx, ok bool, produced, upsert []*proto.Value, removed []string) ([]byte, bool) {
@@ -1102,21 +1449,39 @@ func (s *Server) replyCraftResultWithSkill(ctx *Ctx, ok bool, produced, upsert [
 	return body, true
 }
 
-// listCodeForObjs 根据首个对象元素的 type_id 推导数组容器 code。
-// by_elem 优先，by_type_id 兜底；都无法确定或结果为 524 时返回 61。
+// listCodeOverrides 个别元素 type_id 的容器 code 显式覆盖（优先于
+// by_elem/by_type_id）。只放有实抓断线证据、且合成段结果已验证有毒的条目，
+// 不做全局策略变更——by_type_id 段虽是按"属性 id 顺序补全"的合成表，但
+// cat 46 窝料(120→49)、cat 30 干饵(145→74)、cat 19 香精(125→54)、cat 61
+// (3103→193)、9/6 需求对象(17→18) 等既有制作/模板一直按它下发且客户端
+// 接受，全量改回落 61 属于无回归矩阵的行为变更。
+var listCodeOverrides = map[string]string{
+	// cat 71 标本实例 (13001)：by_type_id 合成段给 471，客户端按 code 471
+	// 走 dnepcgceamm 枚举解码器，803 解码 InvalidCastException 直接断线
+	// （Player.log 2026-11-06 02:59 实证）。实抓容器 code 同通用对象列表 61
+	// （cat 13/17/26/27 的 by_elem 亦为 61）。
+	"13001": "61",
+}
+
+// listCodeForObjs 根据首个对象元素的 type_id 推导数组容器 code：
+// 显式覆盖 → by_elem 实抓映射 → by_type_id 兜底 → 61（通用对象列表）。
 func listCodeForObjs(items []*proto.Value) string {
 	a := loadArgcode()
 	for _, it := range items {
-		if it == nil || !it.IsKind(proto.KindObj) {
+		if it == nil || it.Kind != proto.KindObj {
 			continue
 		}
-		k := strconv.FormatUint(uint64(it.TypeID), 10)
+		k := fmt.Sprintf("%d", it.TypeID)
+		if v, ok := listCodeOverrides[k]; ok && v != "" {
+			return v
+		}
 		if v, ok := a.ByElem[k]; ok && v != "" && v != "524" {
 			return v
 		}
 		if v, ok := a.ByTypeID[k]; ok && v != "" && v != "524" {
 			return v
 		}
+		break
 	}
 	return "61"
 }

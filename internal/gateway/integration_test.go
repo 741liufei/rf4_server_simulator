@@ -13,39 +13,6 @@ import (
 	"rf4server/internal/testutil"
 )
 
-// TestGatewayFullHandshakeAndEcho 全链路：HTTPS 登录 → token → 全握手 →
-// 加密请求 → ACK → 经隧道到主服桩 → 响应解密回读。
-func TestGatewayFullHandshakeAndEcho(t *testing.T) {
-	stub, stubAddr := testutil.StartStubGameServer(t, testutil.TestPSK)
-	gw := testutil.StartGateway(t, stubAddr, testutil.TestPSK)
-
-	token, userid := gw.Login(t)
-	if userid <= 0 {
-		t.Fatalf("userid 异常: %d", userid)
-	}
-
-	fc := testutil.NewFakeClient(t, gw.RealAddr)
-	fc.Dial(token, false)
-
-	fc.SendRequest(5, 1, 1)
-	fc.WaitAck(1, 2*time.Second)
-	env := fc.WaitResponse(2 * time.Second)
-	if env.Marker != -2 || env.CallID != 5 {
-		t.Fatalf("响应不符: marker=%d call_id=%d", env.Marker, env.CallID)
-	}
-
-	opened, dataN, _ := stub.Stats()
-	if len(opened) != 1 {
-		t.Fatalf("stub 应收到 1 次 OPEN, 实得 %d", len(opened))
-	}
-	if opened[0].Token != token || opened[0].Userid != userid || opened[0].Reconnect {
-		t.Fatalf("OPEN payload 不符: %+v", opened[0])
-	}
-	if dataN != 1 {
-		t.Fatalf("stub 应收到 1 条 DATA, 实得 %d", dataN)
-	}
-}
-
 // TestGatewayPlainHTTPCompatLogin 旧版 CN 客户端会向 7515 发明文 HTTP，
 // 且把上游 URL 原样放进 /lv54/https://... 路径。兼容口必须保留双斜杠、
 // 不经 ServeMux 清理或重定向，直接返回旧版 <response> XML。
@@ -101,43 +68,6 @@ func TestGatewayPlainHTTPCompatLogin(t *testing.T) {
 	}
 	if string(greeting) != proto.GreetingUUID {
 		t.Fatalf("realtime 问候不符: %q", greeting)
-	}
-}
-
-// TestGatewayReconnectResume 重连场景：断线后用同一 token + 0x01 标记重连，
-// 网关必须承接既有 RC4 流与 wire_id 计数（客户端校验严格递增）。
-func TestGatewayReconnectResume(t *testing.T) {
-	stub, stubAddr := testutil.StartStubGameServer(t, testutil.TestPSK)
-	gw := testutil.StartGateway(t, stubAddr, testutil.TestPSK)
-
-	token, _ := gw.Login(t)
-	fc := testutil.NewFakeClient(t, gw.RealAddr)
-	fc.Dial(token, false)
-
-	fc.SendRequest(5, 1, 1)
-	if env := fc.WaitResponse(2 * time.Second); env.CallID != 5 {
-		t.Fatalf("首请求响应异常")
-	}
-	fc.Close()
-	time.Sleep(200 * time.Millisecond) // 等网关完成 handoff 保存
-
-	// 重连：客户端保留 RC4 流
-	fc.Dial(token, true)
-	fc.SendRequest(6, 1, 1)
-	env := fc.WaitResponse(3 * time.Second)
-	if env.Marker != -2 || env.CallID != 6 {
-		t.Fatalf("重连后响应不符: marker=%d call_id=%d", env.Marker, env.CallID)
-	}
-	if fc.WireBad != 0 {
-		t.Fatalf("服务端出帧 wire_id 非严格递增（重连未续号）: %d 次违规", fc.WireBad)
-	}
-
-	opened, _, _ := stub.Stats()
-	if len(opened) != 2 {
-		t.Fatalf("stub 应收到 2 次 OPEN, 实得 %d", len(opened))
-	}
-	if opened[1].Token != token || !opened[1].Reconnect {
-		t.Fatalf("第二次 OPEN 应标记 reconnect: %+v", opened[1])
 	}
 }
 

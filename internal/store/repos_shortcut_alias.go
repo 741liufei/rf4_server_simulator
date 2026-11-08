@@ -24,13 +24,15 @@ func sortedShortcuts(bindings map[int64]string) []Shortcut {
 
 func shortcutItemAvailable(ctx context.Context, tx *sql.Tx, uid int64, guid string) (bool, error) {
 	var count int
-	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM item WHERE uid=? AND guid=? AND container IN ('backpack','rig')", uid, guid).Scan(&count)
+	err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM item WHERE uid=? AND guid=? AND container IN ('backpack','rig','tent','car','boat','scooter','house')", uid, guid).Scan(&count)
 	return count == 1, err
 }
 
 func loadShortcutBindings(ctx context.Context, tx *sql.Tx, uid int64) (map[int64]string, error) {
 	bindings := map[int64]string{}
-	rows, err := tx.QueryContext(ctx, `SELECT cs.slot,cs.guid FROM container_slot cs JOIN item i ON i.guid=cs.guid AND i.uid=cs.uid WHERE cs.uid=? AND cs.container=0 AND i.container IN ('backpack','rig')`, uid)
+	// 读取绑定时不限制容器：竿子会在 backpack/rig/船/车等容器之间移动，
+	// 绑定不该因为换了容器就消失（否则客户端会把快捷栏重新编号，出现槽位错位）。
+	rows, err := tx.QueryContext(ctx, `SELECT cs.slot,cs.guid FROM container_slot cs JOIN item i ON i.guid=cs.guid AND i.uid=cs.uid WHERE cs.uid=? AND cs.container=0`, uid)
 	if err != nil {
 		return nil, err
 	}

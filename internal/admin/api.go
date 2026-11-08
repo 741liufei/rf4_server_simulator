@@ -12,6 +12,8 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -19,6 +21,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
+	"rf4server"
 	"rf4server/internal/config"
 	"rf4server/internal/gameserver"
 	"rf4server/internal/logging"
@@ -37,6 +40,12 @@ type Server struct {
 
 	// 会话计数（由 gameserver 统计写入共享 KV；这里只读展示）
 	sessionCount atomic.Int64
+
+	// 版本更新检测结果（由 launcher 注入；nil = 尚未检测）
+	updateInfo atomic.Pointer[UpdateInfo]
+
+	// 发布包根目录的「发布说明.md」；为空时按工作目录 / 可执行文件位置查找。
+	releaseNotesPath string
 }
 
 type plog struct{ l logger }
@@ -46,6 +55,8 @@ type logger interface {
 	Warn(string, ...any)
 	Error(string, ...any)
 }
+
+const releaseNotesFilename = "发布说明.md"
 
 // NewServer 构建管理后台（webFS 为内嵌前端，nil 时只有 API）。
 // 运行时指令写入共享 SQLite 队列，由 gameserver 轮询消费。
@@ -65,6 +76,8 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("GET /api/players", auth(s.handlePlayers))
 	mux.HandleFunc("GET /api/players/detail", auth(s.handlePlayerDetail))
 	mux.HandleFunc("POST /api/players/update", auth(s.handlePlayerUpdate))
+	mux.HandleFunc("GET /api/players/records", auth(s.handlePlayerRecords))
+	mux.HandleFunc("POST /api/players/records", auth(s.handlePlayerRecordsSave))
 	mux.HandleFunc("POST /api/players/membership", auth(s.handlePlayerMembership))
 	mux.HandleFunc("POST /api/players/grant", auth(s.handleGrantItem))
 	mux.HandleFunc("POST /api/players/items/delete", auth(s.handlePlayerItemDelete))
@@ -86,6 +99,8 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("GET /api/fish/pool", auth(s.handleFishPool))
 	mux.HandleFunc("POST /api/mail/send", auth(s.handleMailSend))
 	mux.HandleFunc("GET /api/audit", auth(s.handleAudit))
+	mux.HandleFunc("GET /api/about", auth(s.handleAbout))
+	mux.HandleFunc("GET /api/release-notes", auth(s.handleReleaseNotes))
 
 	if webFS != nil {
 		mux.Handle("/", http.FileServer(http.FS(webFS)))
@@ -100,6 +115,29 @@ func (s *Server) Handler() http.Handler { return s.mux }
 
 // SetSessionCount 供外部更新在线会话数。
 func (s *Server) SetSessionCount(n int64) { s.sessionCount.Store(n) }
+
+// UpdateInfo 是版本更新检测结果在管理后台 API 中的投影；
+// 由 launcher 检测后注入，admin 自身不做网络请求。
+type UpdateInfo struct {
+	Available      bool   `json:"available"`
+	Channel        string `json:"channel"` // stable | preview
+	CurrentVersion string `json:"current_version"`
+	LatestVersion  string `json:"latest_version"`
+	NotesURL       string `json:"notes_url,omitempty"`
+	DownloadURL    string `json:"download_url,omitempty"`
+	// DownloadMirrorURL 国内加速直链（gh-proxy 包裹的 release 附件）。
+	DownloadMirrorURL string `json:"download_mirror_url,omitempty"`
+	// PreviewVersion / PreviewDownloadMirror 最新 preview 通道摘要。
+	PreviewVersion        string `json:"preview_version,omitempty"`
+	PreviewDownloadMirror string `json:"preview_download_mirror,omitempty"`
+	Forced                bool   `json:"forced,omitempty"`
+}
+
+// SetUpdateInfo 供 launcher 推送最近一次更新检测结果（nil 清空）。
+func (s *Server) SetUpdateInfo(u *UpdateInfo) { s.updateInfo.Store(u) }
+
+// updatePayload 返回应并入响应的 update 字段（nil 时调用方应省略该键）。
+func (s *Server) updatePayload() *UpdateInfo { return s.updateInfo.Load() }
 
 // Start 启动监听（返回错误 channel 与绑定错误）。
 func (s *Server) Start() (<-chan error, error) {
@@ -192,7 +230,11 @@ func adminOf(r *http.Request) string {
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]string{"username": adminOf(r)})
+	payload := map[string]any{"username": adminOf(r)}
+	if u := s.updatePayload(); u != nil {
+		payload["update"] = u
+	}
+	writeJSON(w, payload)
 }
 
 // ---- 仪表盘 ----
@@ -206,7 +248,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	_ = s.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM mail`).Scan(&mails)
 	_ = s.db.SQL.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log`).Scan(&audits)
 	tunables, _ := s.db.TunableList(ctx)
-	writeJSON(w, map[string]any{
+	payload := map[string]any{
 		"sessions": s.sessionCount.Load(),
 		"players":  players,
 		"items":    items,
@@ -214,7 +256,11 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		"audits":   audits,
 		"tunables": len(tunables),
 		"pg":       "up",
-	})
+	}
+	if u := s.updatePayload(); u != nil {
+		payload["update"] = u
+	}
+	writeJSON(w, payload)
 }
 
 // ---- 运行参数 ----
@@ -237,7 +283,7 @@ func (s *Server) handleTunableSet(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 400, "参数错误")
 		return
 	}
-	if (req.Key == "fish_bait_rules_enabled" || req.Key == "fish_distribution_enabled" || req.Key == "fish_weather_enabled" || req.Key == "happy_hour_enabled") && req.Value != "0" && req.Value != "1" {
+	if (req.Key == "fish_ecology_enabled" || req.Key == "fish_bait_rules_enabled" || req.Key == "fish_distribution_enabled" || req.Key == "fish_weather_enabled" || req.Key == "happy_hour_enabled") && req.Value != "0" && req.Value != "1" {
 		httpError(w, 400, "鱼群开关只能为 0 或 1")
 		return
 	}
@@ -491,6 +537,98 @@ func (s *Server) handleBan(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.db.AuditLogWrite(r.Context(), adminOf(r), action, strconv.FormatInt(req.UID, 10), "")
 	writeJSON(w, map[string]any{"ok": true})
+}
+
+// handleAbout 返回 README.md，供管理后台「关于」页展示。
+// 优先读取发布包内的本地文件；缺失时回退到编译期内嵌副本。
+func (s *Server) handleAbout(w http.ResponseWriter, r *http.Request) {
+	content := rf4server.README
+	if path, err := findLocalFile("README.md"); err == nil {
+		if local, err := readLocalTextFile(path); err == nil {
+			content = local
+		}
+	}
+	writeJSON(w, map[string]string{"content": content})
+}
+
+// handleReleaseNotes 读取发布包根目录的「发布说明.md」。
+// 打包脚本会在发布包根目录生成该文件；同时兼容从 bin/ 目录启动。
+func (s *Server) handleReleaseNotes(w http.ResponseWriter, r *http.Request) {
+	path, err := s.findReleaseNotes()
+	if err != nil {
+		httpError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	content, err := readLocalTextFile(path)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "读取发布说明失败: "+err.Error())
+		return
+	}
+	writeJSON(w, map[string]string{
+		"filename": releaseNotesFilename,
+		"content":  content,
+	})
+}
+
+func (s *Server) findReleaseNotes() (string, error) {
+	if s.releaseNotesPath != "" {
+		info, err := os.Stat(s.releaseNotesPath)
+		if err != nil || info.IsDir() {
+			return "", fmt.Errorf("未找到 %s；请从完整发布包启动，或先执行打包流程", releaseNotesFilename)
+		}
+		return s.releaseNotesPath, nil
+	}
+	path, err := findLocalFile(releaseNotesFilename)
+	if err != nil {
+		return "", fmt.Errorf("未找到 %s；请从完整发布包启动，或先执行打包流程", releaseNotesFilename)
+	}
+	return path, nil
+}
+
+func findLocalFile(name string) (string, error) {
+	seen := map[string]struct{}{}
+	var candidates []string
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		path := filepath.Clean(filepath.Join(dir, name))
+		if _, ok := seen[path]; ok {
+			return
+		}
+		seen[path] = struct{}{}
+		candidates = append(candidates, path)
+	}
+	if cwd, err := os.Getwd(); err == nil {
+		add(cwd)
+		add(filepath.Dir(cwd))
+	}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		add(dir)
+		add(filepath.Dir(dir))
+	}
+	for _, path := range candidates {
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			return path, nil
+		}
+	}
+	return "", fmt.Errorf("未找到 %s", name)
+}
+
+func readLocalTextFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Size() > 4<<20 {
+		return "", fmt.Errorf("文件超过 4 MiB")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimPrefix(string(raw), "\ufeff"), nil
 }
 
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {

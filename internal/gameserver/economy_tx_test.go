@@ -206,6 +206,11 @@ func TestCraftMissingMaterialAndRollback(t *testing.T) {
 		WHEN NEW.item_id='econ_out' BEGIN SELECT RAISE(ABORT,'boom'); END`); err != nil {
 		t.Fatal(err)
 	}
+	// 产出可计件时走并入已有堆的 UPDATE 路径，同样要触发失败以验证回滚。
+	if _, err := db.SQL.Exec(`CREATE TRIGGER econ_fail_output_upd BEFORE UPDATE ON item
+		WHEN NEW.item_id='econ_out' BEGIN SELECT RAISE(ABORT,'boom'); END`); err != nil {
+		t.Fatal(err)
+	}
 	var outBefore int
 	if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM item WHERE uid=? AND item_id='econ_out'`, uid).Scan(&outBefore); err != nil {
 		t.Fatal(err)

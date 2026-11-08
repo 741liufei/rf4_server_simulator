@@ -2,8 +2,8 @@ package gameserver
 
 import (
 	"context"
+	"fmt"
 	"math"
-	"path/filepath"
 	"testing"
 
 	"rf4server/internal/config"
@@ -14,20 +14,6 @@ import (
 
 // skills_craft_test.go 测试技能学习（5/2、5/3、5/4）和制作流程（9/1、9/3、9/4、9/6）。
 // 测试使用仓库自带的静态库，并按需导入 skill_def、skill_cat_def、recipe 和 item_def。
-
-// importStaticForSkillsCraft 从静态库导入指定表；缺少表或库时跳过测试。
-func importStaticForSkillsCraft(t *testing.T, db *store.DB, tables ...string) {
-	t.Helper()
-	if _, err := db.SQL.Exec(`ATTACH DATABASE ? AS src`, "../../server_data/static.sqlite3"); err != nil {
-		t.Skip("静态库不可用: ", err)
-	}
-	defer func() { _, _ = db.SQL.Exec(`DETACH DATABASE src`) }()
-	for _, tb := range tables {
-		if _, err := db.SQL.Exec(`INSERT INTO main.` + tb + ` SELECT * FROM src.` + tb); err != nil {
-			t.Skipf("%s 导入失败: %v", tb, err)
-		}
-	}
-}
 
 func newSkillsCraftServer(t *testing.T, db *store.DB) *Server {
 	t.Helper()
@@ -72,7 +58,8 @@ func craftObj8(recipe string, materials []craftSlot, qty uint64) *proto.Value {
 		materialsArg.Items = append(materialsArg.Items, proto.Obj("bhfikaplhmh", 9,
 			proto.FStr("STR", proto.S(sl.ItemID)),
 			proto.FGuid(sl.GUID),
-			proto.FStr("STR", proto.S("")),
+			// f2 鱼种：标本板的槽位第三字段（普通制作留空）
+			proto.FStr("STR", proto.S(sl.Species)),
 		))
 	}
 	return proto.Obj("dhkphmjinmj", 8,
@@ -88,15 +75,7 @@ func craftObj8(recipe string, materials []craftSlot, qty uint64) *proto.Value {
 // TestSkillLearnFlow 验证技能学习、学习点数扣减、重置和全量重置。
 // 测试数据包含 cat1 的节点 502、504 和 514。
 func TestSkillLearnFlow(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "skills.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		t.Fatal(err)
-	}
-	importStaticForSkillsCraft(t, db, "item_def", "skill_def", "skill_cat_def")
+	db := openSkillCraftTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	if err := srv.EnsurePlayer(ctx, 1000001); err != nil {
@@ -242,18 +221,338 @@ func TestSkillLearnFlow(t *testing.T) {
 	}
 }
 
-// TestCraftFlow 制作闭环：材料齐 → 产出+消耗；材料缺 → 803(false)。
-// 附带 9/3 分解、9/4 询价、9/6 模板与路径 2（客户端材料槽）。
-func TestCraftFlow(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "craft.db"))
+// TestSkillLearnAtLevel5SharedPoints 复现线上角色状态：5 级、无已投点。
+// 5 级累计 4 点；学习 514 应扣 1 点并把 313/701/1002 同步到同一等级。
+func TestSkillLearnAtLevel5SharedPoints(t *testing.T) {
+	db := openSkillCraftTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	if err := srv.EnsurePlayer(ctx, 1000001); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET level=5 WHERE uid=1000001`); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: 1000001, Srv: srv, log: logging.Discard()}
+	// 请求先编码成 args(524) 字节再解码，覆盖真实分发的解码路径。
+	call := func(sub uint8, args ...*proto.Value) []byte {
+		t.Helper()
+		raw, err := proto.EncodeValue(proto.Args524(args...), srv.Table())
+		if err != nil {
+			t.Fatalf("5/%d 请求编码失败: %v", sub, err)
+		}
+		tree, _, err := proto.DecodeValue(raw, 0, srv.Table())
+		if err != nil {
+			t.Fatalf("5/%d 请求解码失败: %v", sub, err)
+		}
+		body, ok := (&handlerBox{srv: srv, sess: sess, main: 5, sub: sub, tree: tree}).invoke(t)
+		if !ok {
+			t.Fatalf("5/%d 未处理", sub)
+		}
+		return body
+	}
+
+	if got := treeAvailPoints(t, decodeTreeValue(t, srv, call(1))); got != 4 {
+		t.Fatalf("5 级初始可用点应 4，实得 %d", got)
+	}
+	if got := treeAvailPoints(t, decodeTreeValue(t, srv, call(2, proto.U32(1), proto.U32(514)))); got != 3 {
+		t.Fatalf("学习 514 后可用点应 3，实得 %d", got)
+	}
+	for _, node := range []int64{514, 313, 701, 1002} {
+		if lv, err := db.GetSkillNode(ctx, 1000001, node); err != nil || lv != 1 {
+			t.Fatalf("共享节点 %d 等级应 1，实得 %d err=%v", node, lv, err)
+		}
+	}
+	if spent, err := db.SkillNodeLevelSum(ctx, 1000001); err != nil || spent != 1 {
+		t.Fatalf("共享组已投点应只算 1，实得 %d err=%v", spent, err)
+	}
+
+	// 从另一个类目的同组节点继续加点，整组同步且仍只扣 1 点。
+	if got := treeAvailPoints(t, decodeTreeValue(t, srv, call(2, proto.U32(2), proto.U32(701)))); got != 2 {
+		t.Fatalf("跨类目学习 701 后可用点应 2，实得 %d", got)
+	}
+	for _, node := range []int64{514, 313, 701, 1002} {
+		if lv, _ := db.GetSkillNode(ctx, 1000001, node); lv != 2 {
+			t.Fatalf("跨类目加点后共享节点 %d 等级应 2，实得 %d", node, lv)
+		}
+	}
+
+	// 重置任一同组节点返还整组点数并归零。
+	if got := treeAvailPoints(t, decodeTreeValue(t, srv, call(3, proto.U32(1), proto.U32(514)))); got != 4 {
+		t.Fatalf("重置后可用点应 4，实得 %d", got)
+	}
+	for _, node := range []int64{514, 313, 701, 1002} {
+		if lv, _ := db.GetSkillNode(ctx, 1000001, node); lv != 0 {
+			t.Fatalf("重置后共享节点 %d 等级应 0，实得 %d", node, lv)
+		}
+	}
+}
+
+// TestSkillLearnEveryCategoryWithAdminPoints 验证后台派点后各大类能否加点。
+// 当前静态数据：1/2/3/4/5/7/8/10/11 各有开放节点，可逐级练满；
+// 6 类没有 max_level>0 的节点，9 类熟练度 0 时全部锁定。
+func TestSkillLearnEveryCategoryWithAdminPoints(t *testing.T) {
+	db := openSkillCraftTestDB(t)
+	ctx := context.Background()
+	const uid = 1000001
+	srv := newSkillsCraftServer(t, db)
+	if err := srv.EnsurePlayer(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET level=50 WHERE uid=?`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetSkillBonus(ctx, uid, 500); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	call := func(sub uint8, args ...*proto.Value) []byte {
+		t.Helper()
+		raw, err := proto.EncodeValue(proto.Args524(args...), srv.Table())
+		if err != nil {
+			t.Fatalf("5/%d 请求编码失败: %v", sub, err)
+		}
+		tree, _, err := proto.DecodeValue(raw, 0, srv.Table())
+		if err != nil {
+			t.Fatalf("5/%d 请求解码失败: %v", sub, err)
+		}
+		body, ok := (&handlerBox{srv: srv, sess: sess, main: 5, sub: sub, tree: tree}).invoke(t)
+		if !ok {
+			t.Fatalf("5/%d 未处理", sub)
+		}
+		return body
+	}
+	avail := func() uint64 { return treeAvailPoints(t, decodeTreeValue(t, srv, call(1))) }
+	learn := func(cat, node int64) uint64 {
+		t.Helper()
+		return treeAvailPoints(t, decodeTreeValue(t, srv,
+			call(2, proto.U32(uint32(cat)), proto.U32(uint32(node)))))
+	}
+
+	wantAvail := uint64(skillPointsTotal(50) + 500)
+	if got := avail(); got != wantAvail {
+		t.Fatalf("50 级加 500 点后可用点应 %d，实得 %d", wantAvail, got)
+	}
+
+	type openNode struct{ cat, node, maxLevel int64 }
+	rows, err := db.SQL.QueryContext(ctx, `
+		SELECT d.cat_id, d.node_id, d.max_level
+		FROM skill_def d
+		WHERE d.max_level>0 AND (d.enabled=1 OR d.unlock_pct<=0)
+		  AND d.node_id=(SELECT MIN(x.node_id) FROM skill_def x
+		                 WHERE x.cat_id=d.cat_id AND x.max_level>0 AND (x.enabled=1 OR x.unlock_pct<=0))
+		ORDER BY d.cat_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
+	var open []openNode
+	for rows.Next() {
+		var item openNode
+		if err := rows.Scan(&item.cat, &item.node, &item.maxLevel); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		open = append(open, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
 		t.Fatal(err)
 	}
-	importStaticForSkillsCraft(t, db, "item_def", "recipe")
+	rows.Close()
+	wantCats := []int64{1, 2, 3, 4, 5, 7, 8, 10, 11}
+	if len(open) != len(wantCats) {
+		t.Fatalf("可加点大类应 %v，实得 %+v", wantCats, open)
+	}
+	for i, cat := range wantCats {
+		if open[i].cat != cat {
+			t.Fatalf("第 %d 个可加点大类应 %d，实得 %+v", i+1, cat, open)
+		}
+	}
+
+	for _, item := range open {
+		for level := int64(1); level <= item.maxLevel; level++ {
+			wantAvail--
+			if got := learn(item.cat, item.node); got != wantAvail {
+				t.Fatalf("大类 %d 节点 %d 加到 %d 级后可用点应 %d，实得 %d",
+					item.cat, item.node, level, wantAvail, got)
+			}
+			if rank, err := db.GetSkillNode(ctx, uid, item.node); err != nil || rank != level {
+				t.Fatalf("大类 %d 节点 %d 等级应 %d，实得 %d err=%v",
+					item.cat, item.node, level, rank, err)
+			}
+		}
+		if got := learn(item.cat, item.node); got != wantAvail {
+			t.Fatalf("大类 %d 满级后再点不应扣点，期望 %d 实得 %d", item.cat, wantAvail, got)
+		}
+		if rank, _ := db.GetSkillNode(ctx, uid, item.node); rank != item.maxLevel {
+			t.Fatalf("大类 %d 节点 %d 应保持满级 %d，实得 %d", item.cat, item.node, item.maxLevel, rank)
+		}
+	}
+
+	// 6 类：静态数据没有任何 max_level>0 的节点，任何加号都不应生效。
+	var cat6Node int64
+	if err := db.SQL.QueryRow(`SELECT node_id FROM skill_def WHERE cat_id=6 ORDER BY node_id LIMIT 1`).Scan(&cat6Node); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := srv.skillLearn(ctx, uid, 6, cat6Node); ok || reason != "not-learnable" {
+		t.Fatalf("6 类应拒绝 not-learnable，实得 ok=%v reason=%s", ok, reason)
+	}
+	if got := learn(6, cat6Node); got != wantAvail {
+		t.Fatalf("6 类加点不应扣点，期望 %d 实得 %d", wantAvail, got)
+	}
+
+	// 9 类：首个节点需要 10% 熟练度；补到 10% 后即可加点。
+	var cat9Node int64
+	if err := db.SQL.QueryRow(`SELECT node_id FROM skill_def
+		WHERE cat_id=9 AND max_level>0 ORDER BY unlock_pct,node_id LIMIT 1`).Scan(&cat9Node); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := srv.skillLearn(ctx, uid, 9, cat9Node); ok || reason != "locked" {
+		t.Fatalf("9 类熟练度 0 时应拒绝 locked，实得 ok=%v reason=%s", ok, reason)
+	}
+	if got := learn(9, cat9Node); got != wantAvail {
+		t.Fatalf("9 类锁定加点不应扣点，期望 %d 实得 %d", wantAvail, got)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO skill(uid,skill_id,points) VALUES(?,9,10)
+		ON CONFLICT(uid,skill_id) DO UPDATE SET points=excluded.points`, uid); err != nil {
+		t.Fatal(err)
+	}
+	wantAvail--
+	if got := learn(9, cat9Node); got != wantAvail {
+		t.Fatalf("9 类熟练度 10%% 后加点可用点应 %d，实得 %d", wantAvail, got)
+	}
+	if rank, err := db.GetSkillNode(ctx, uid, cat9Node); err != nil || rank != 1 {
+		t.Fatalf("9 类节点 %d 等级应 1，实得 %d err=%v", cat9Node, rank, err)
+	}
+}
+
+// TestSkillLearnAllNodesAtFullProficiency 把 11 个大类熟练度设为 100% 后逐节点加点。
+// 可解锁的节点应全部成功；要求 110% 的节点仍锁定（永久熟练度封顶 100，需竿加成到 110）。
+// 6 类没有 max_level>0 的节点，熟练度全满也不能加点。
+func TestSkillLearnAllNodesAtFullProficiency(t *testing.T) {
+	db := openSkillCraftTestDB(t)
+	ctx := context.Background()
+	const uid = 1000001
+	srv := newSkillsCraftServer(t, db)
+	if err := srv.EnsurePlayer(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET level=50 WHERE uid=?`, uid); err != nil {
+		t.Fatal(err)
+	}
+	for cat := int64(1); cat <= 11; cat++ {
+		if err := db.SetPlayerSkillPointsAdmin(ctx, uid, cat, 100); err != nil {
+			t.Fatalf("设置大类 %d 熟练度失败: %v", cat, err)
+		}
+	}
+	if err := db.SetSkillBonus(ctx, uid, 500); err != nil {
+		t.Fatal(err)
+	}
+
+	type nodeCase struct {
+		cat, node, maxLevel int64
+		unlock              float64
+		enabled             bool
+	}
+	rows, err := db.SQL.QueryContext(ctx, `SELECT cat_id,node_id,max_level,unlock_pct,enabled
+		FROM skill_def WHERE max_level>0 ORDER BY cat_id,node_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []nodeCase
+	for rows.Next() {
+		var item nodeCase
+		var enabled int64
+		if err := rows.Scan(&item.cat, &item.node, &item.maxLevel, &item.unlock, &enabled); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
+		item.enabled = enabled != 0
+		cases = append(cases, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		t.Fatal(err)
+	}
+	rows.Close()
+
+	okCount, lockedCount := 0, 0
+	seenCats := map[int64]bool{}
+	for _, item := range cases {
+		if _, err := db.SQL.Exec(`DELETE FROM skill_node WHERE uid=?`, uid); err != nil {
+			t.Fatal(err)
+		}
+		ok, reason := srv.skillLearn(ctx, uid, item.cat, item.node)
+		wantOK := nodeUnlocked(skillNodeDef{
+			NodeID: item.node, CatID: item.cat, MaxLevel: item.maxLevel,
+			UnlockPct: float32(item.unlock), Enabled: item.enabled,
+		}, 100, 0)
+		if wantOK {
+			if !ok || reason != "ok" {
+				t.Fatalf("大类 %d 节点 %d 在熟练度 100%% 下应可加点，实得 ok=%v reason=%s",
+					item.cat, item.node, ok, reason)
+			}
+			if rank, err := db.GetSkillNode(ctx, uid, item.node); err != nil || rank != 1 {
+				t.Fatalf("大类 %d 节点 %d 等级应 1，实得 %d err=%v",
+					item.cat, item.node, rank, err)
+			}
+			if spent, err := db.SkillNodeLevelSum(ctx, uid); err != nil || spent != 1 {
+				t.Fatalf("大类 %d 节点 %d 投入应 1 点，实得 %d err=%v",
+					item.cat, item.node, spent, err)
+			}
+			seenCats[item.cat] = true
+			okCount++
+			continue
+		}
+		if ok || reason != "locked" {
+			t.Fatalf("大类 %d 节点 %d（要求 %.0f%%）应保持锁定，实得 ok=%v reason=%s",
+				item.cat, item.node, item.unlock, ok, reason)
+		}
+		var n int
+		if err := db.SQL.QueryRow(`SELECT COUNT(*) FROM skill_node WHERE uid=?`, uid).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("锁定节点 %d 不应写入等级，实得 %d err=%v", item.node, n, err)
+		}
+		if !nodeUnlocked(skillNodeDef{
+			NodeID: item.node, CatID: item.cat, MaxLevel: item.maxLevel,
+			UnlockPct: float32(item.unlock), Enabled: item.enabled,
+		}, 100, 10) {
+			t.Fatalf("大类 %d 节点 %d 在 100%%+竿 10%% 后应满足 %.0f%% 门槛",
+				item.cat, item.node, item.unlock)
+		}
+		lockedCount++
+	}
+
+	var cat6Learnable, cat6Nodes int
+	if err := db.SQL.QueryRow(`SELECT COUNT(*), COALESCE(SUM(max_level>0),0)
+		FROM skill_def WHERE cat_id=6`).Scan(&cat6Nodes, &cat6Learnable); err != nil {
+		t.Fatal(err)
+	}
+	if cat6Learnable != 0 {
+		t.Fatalf("6 类出现可升级节点，期望测试与实际数据不一致: %d", cat6Learnable)
+	}
+	var cat6Node int64
+	if err := db.SQL.QueryRow(`SELECT node_id FROM skill_def WHERE cat_id=6 ORDER BY node_id LIMIT 1`).Scan(&cat6Node); err != nil {
+		t.Fatal(err)
+	}
+	if ok, reason := srv.skillLearn(ctx, uid, 6, cat6Node); ok || reason != "not-learnable" {
+		t.Fatalf("6 类熟练度 100%% 仍应返回 not-learnable，实得 ok=%v reason=%s", ok, reason)
+	}
+
+	for _, item := range cases {
+		if item.unlock <= 100+1e-6 && !seenCats[item.cat] {
+			t.Fatalf("大类 %d 有可解锁节点但未加点成功", item.cat)
+		}
+	}
+	if len(seenCats) != 10 || okCount != 116 || lockedCount != 5 {
+		t.Fatalf("熟练度 100%% 下应 10 个大类共 116 个节点可加点、5 个 110%% 节点锁定，实得 cats=%d ok=%d locked=%d",
+			len(seenCats), okCount, lockedCount)
+	}
+}
+
+// TestCraftFlow 制作闭环：材料齐 → 产出+消耗；材料缺 → 803(false)。
+// 附带 9/3 分解、9/4 询价、9/6 模板与路径 2（客户端材料槽）。
+func TestCraftFlow(t *testing.T) {
+	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	srv.randFloat = fixedRolls(0.1, 0.9)
@@ -398,6 +697,8 @@ func TestCraftFlow(t *testing.T) {
 		t.Fatalf("9/6 名称不符: %q", s)
 	}
 	f3 := v.Fields[3].Val
+	// 需求对象 tid=17 无 by_elem，走 by_type_id 兜底 18——与主网既有行为
+	// 一致，不做全局策略变更（见 listCodeForObjs 注释）。
 	if f3 == nil || f3.Kind != proto.KindArgs || f3.ArgCodeStr() != "18" || len(f3.Items) != 1 {
 		t.Fatalf("9/6.f3 应 args(18)[1]，实得 %+v", f3)
 	}
@@ -437,8 +738,8 @@ func TestCraftFlow(t *testing.T) {
 	if got := u64Of(v.Fields[0].Num); got != 1 {
 		t.Fatalf("路径2 803.f0 应 1，实得 %d（body=%x…）", got, head(body, 16))
 	}
-	if got := countOf("feedcompleted"); got != 1 {
-		t.Fatalf("feedcompleted 应入库 1 份，实得 %d", got)
+	if got := countOf("feedcompleted"); got != 60 {
+		t.Fatalf("feedcompleted 一套应入库 60 份，实得 %d", got)
 	}
 	after := countOf("mix_combi")
 	if after != before-1 {
@@ -476,15 +777,7 @@ func TestCraftFlow(t *testing.T) {
 // TestBaitCraftStacksAndMastery 验证连续制作鱼饵会合并到同一个背包堆，
 // 每次制作固定产出一包 30 个并增加 0.1% 捕获鱼饵熟练度。
 func TestBaitCraftStacksAndMastery(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "bait-craft-stack.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		t.Fatal(err)
-	}
-	importStaticForSkillsCraft(t, db, "item_def", "recipe")
+	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	srv.randFloat = fixedRolls(0.1, 0.9)
@@ -521,15 +814,7 @@ func TestBaitCraftStacksAndMastery(t *testing.T) {
 
 // TestBaitDigFlow 验证 9/3 使用铲子会产出鱼饵、合并背包堆并增加捕获鱼饵熟练度。
 func TestBaitDigFlow(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "baitdig.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		t.Fatal(err)
-	}
-	importStaticForSkillsCraft(t, db, "item_def")
+	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	uid := int64(2000003)
@@ -644,16 +929,233 @@ func TestCraftSkillCatForRecipe(t *testing.T) {
 	}
 }
 
-// TestCraftProficiencyByRecipeFamily 校验四类技能按件概率增长、未命中与上限处理。
-func TestCraftProficiencyByRecipeFamily(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "craft-prof.db"))
+// TestListCodeForObjsMatrix 对象列表容器 code 审计矩阵（覆盖 9/1 产出列表与
+// 9/6 需求列表两个调用点能出现的全部产物类别，见审查回复的产物 type_id
+// 分布表）：
+//   - 13001 标本：显式覆盖 61。by_type_id 合成段的 471 会把客户端 803 解码
+//     送进 dnepcgceamm 枚举解码器强转断线（Player.log 2026-11-06 02:59 实证）。
+//   - by_elem 实抓段照常生效（140→61）。
+//   - 其余沿用 by_type_id 兜底的既有类别一律保持原值：窝料 120→49、干饵
+//     145→74、香精 125→54、礼包 3103→193、9/6 需求对象 17→18——这些是
+//     主网已验证行为，不做无回归矩阵的全局变更。
+func TestListCodeForObjsMatrix(t *testing.T) {
+	cases := []struct {
+		typeID uint32
+		want   string
+		note   string
+	}{
+		{13001, "61", "标本 override（合成段 471 有断线证据）"},
+		{140, "61", "ohciikgjghe，by_elem=61"},
+		{120, "49", "cat46 成品窝料，by_type_id 既有"},
+		{145, "74", "cat30 干饵，by_type_id 既有"},
+		{125, "54", "cat19 香精，by_type_id 既有"},
+		{3103, "193", "cat61，by_type_id 既有"},
+		{17, "18", "9/6 需求对象 kdpbhdffjaf，by_type_id 既有"},
+	}
+	for _, c := range cases {
+		v := &proto.Value{Kind: proto.KindObj, TypeID: c.typeID}
+		if got := listCodeForObjs([]*proto.Value{v}); got != c.want {
+			t.Fatalf("tid %d 应 %s（%s），实得 %q", c.typeID, c.want, c.note, got)
+		}
+	}
+	if got := listCodeForObjs([]*proto.Value{nil, &proto.Value{Kind: proto.KindObj, TypeID: 13001}}); got != "61" {
+		t.Fatalf("非对象元素应跳过，实得 %q", got)
+	}
+	if got := listCodeForObjs([]*proto.Value{&proto.Value{Kind: proto.KindObj, TypeID: 999999}}); got != "61" {
+		t.Fatalf("未知 tid 应回落 61，实得 %q", got)
+	}
+	if got := listCodeForObjs(nil); got != "61" {
+		t.Fatalf("空列表应回落 61，实得 %q", got)
+	}
+}
+
+// TestMountedFishTreeTx 校验标本挂鱼（事务内）：按槽位 EchoGUID 定位鱼护
+// 渔获，产出 25/ecknbkpeeji 鱼对象、鱼种一致、guid 按板子派生（不与鱼护
+// 原鱼同 guid）；鱼种不符与无有效鱼护引用都必须返回 (nil, 原因)——猫 71
+// 制作据此 803(false)，不再静默产空白板。
+func TestMountedFishTreeTx(t *testing.T) {
+	srv, db := newEconomyTxTestServer(t)
+	const uid int64 = 7361
+	entry, _ := seedImportedKeepnetFish(t, srv, uid, 21, false) // species=asp
+
+	const boardGUID = "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1"
+	ctx := context.Background()
+	tx, err := db.SQL.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
+	defer tx.Rollback()
+
+	mf, note, merr := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{ItemID: "bait_fishForCut", GUID: entry.EchoGUID, Species: "asp"}}, boardGUID)
+	if merr != nil || mf == nil {
+		t.Fatalf("应定位到渔获，mf=%v err=%v note=%q", mf, merr, note)
+	}
+	if mf.Species != "asp" || mf.EchoGUID != entry.EchoGUID {
+		t.Fatalf("返回渔获不符: %+v", mf)
+	}
+	fish := mf.Tree
+	if fish.Class != "ecknbkpeeji" || fish.TypeID != 25 {
+		t.Fatalf("应 25/ecknbkpeeji，实得 %d/%s", fish.TypeID, fish.Class)
+	}
+	if s := fish.Fields[0].StrOr(); s != "asp" {
+		t.Fatalf("f0 鱼种应 asp，实得 %q", s)
+	}
+	if mounted := fish.Fields[16].Hex; mounted == "" || mounted == entry.EchoGUID {
+		t.Fatalf("嵌鱼 guid 应派生新值，实得 %q", mounted)
+	}
+	if mf2, bad, err2 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{GUID: entry.EchoGUID, Species: "perch"}}, boardGUID); mf2 != nil || bad == "" || err2 != nil {
+		t.Fatalf("鱼种不符应拒绝，got=%v note=%q err=%v", mf2, bad, err2)
+	}
+	if mf3, note3, err3 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{GUID: "ffffffffffffffffffffffffffffffff"}}, boardGUID); mf3 != nil || note3 == "" || err3 != nil {
+		t.Fatalf("未知 guid 应返回 nil+原因，got=%v note=%q err=%v", mf3, note3, err3)
+	}
+	if mf4, note4, err4 := srv.mountedFishTreeTx(ctx, tx, uid,
+		[]craftSlot{{ItemID: "worm_01", GUID: ""}}, boardGUID); mf4 != nil || note4 == "" || err4 != nil {
+		t.Fatalf("无鱼护引用应返回 nil+原因，got=%v note=%q err=%v", mf4, note4, err4)
+	}
+}
+
+// TestCraftFishBoardConsumesKeepnet 标本制作端到端：803 成功、产出板 f1 嵌
+// 25 类鱼对象（鱼种一致、guid 派生）、f8 携带被消耗的鱼护 guid、鱼护条目删除。
+func TestCraftFishBoardConsumesKeepnet(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.1, 0.9)
+	uid := int64(2000003)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
 		t.Fatal(err)
 	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess}
+
+	entry, _ := seedImportedKeepnetFish(t, srv, uid, 31, false) // species=asp
+	box.main, box.sub, box.tree = 9, 1, proto.Args524(craftObj8("craft_fish_board_s_01",
+		[]craftSlot{{ItemID: "bait_fishForCut", GUID: entry.EchoGUID, Species: "asp"}}, 1))
+	body, ok := box.invoke(t)
+	if !ok {
+		t.Fatal("9/1 未处理")
+	}
+	v := decodeTreeValue(t, srv, body)
+	if !v.IsKind(proto.KindObj) || v.TypeID != 803 {
+		t.Fatalf("应 803，实得 %v/%d", v.Kind, v.TypeID)
+	}
+	if got := u64Of(v.Fields[0].Num); got != 1 {
+		t.Fatalf("803.f0 应 1，实得 %d", got)
+	}
+
+	// f1 产出：13001 板，f1 peipahjmida 嵌 25 类鱼
+	f1 := v.Fields[1].Val
+	if f1 == nil || f1.Kind != proto.KindArgs || len(f1.Items) != 1 {
+		t.Fatalf("803.f1 应 1 件产出，实得 %+v", f1)
+	}
+	board := f1.Items[0]
+	if board.TypeID != 13001 {
+		t.Fatalf("产出应 13001 标本，实得 %d", board.TypeID)
+	}
+	mounted := board.Fields[1].Val
+	if mounted == nil || mounted.Kind != proto.KindObj || mounted.TypeID != 25 {
+		t.Fatalf("板 f1 应嵌 25 类鱼，实得 %+v", mounted)
+	}
+	if s := mounted.Fields[0].StrOr(); s != "asp" {
+		t.Fatalf("嵌鱼鱼种应 asp，实得 %q", s)
+	}
+	if mounted.Fields[16].Hex == entry.EchoGUID {
+		t.Fatal("嵌鱼 guid 应派生新值")
+	}
+
+	// f8 移除列表含被消耗的鱼护 guid
+	f8 := v.Fields[8].Val
+	if f8 == nil {
+		t.Fatal("803.f8 应携带移除列表")
+	}
+	found := false
+	for _, g := range f8.Items {
+		if g.Hex == entry.EchoGUID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("f8 应含鱼护 guid %s，实得 %+v", entry.EchoGUID, f8)
+	}
+
+	// 鱼护条目已删除（KeepnetGet 对不存在返回 err=ErrNoRows）
+	if got, gerr := srv.DB.KeepnetGet(ctx, uid, entry.EchoGUID); gerr == nil && got != nil {
+		t.Fatalf("鱼护条目应已删除，got=%v", got)
+	}
+}
+
+// TestCraftFishBoardWithoutFishFails 审查 P1 回归：无有效渔获的标本制作必须
+// 803(f0=0)，且不留任何痕迹——不产板、不扣标本券、不动鱼护。此前该路径
+// 静默成功并生成空白板（craft_ops 挂鱼失败仅记日志）。
+func TestCraftFishBoardWithoutFishFails(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.1, 0.9)
+	uid := int64(2000004)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess}
+
+	// 种一条无关鱼到鱼护，验证它不会被误伤；标本券给一张，验证不被扣。
+	other, _ := seedImportedKeepnetFish(t, srv, uid, 41, false)
+	coupon := &store.Item{GUID: fmt.Sprintf("%032x", 999), UID: uid, ItemID: "coupon_chuchelo",
+		Container: "backpack", Qty: 1}
+	if err := db.InsertItem(ctx, coupon); err != nil {
+		t.Fatal(err)
+	}
+
+	// 无鱼护 GUID 的槽位（客户端临时 GUID / 材料引用）
+	box.main, box.sub, box.tree = 9, 1, proto.Args524(craftObj8("craft_fish_board_s_01",
+		[]craftSlot{{ItemID: "coupon_chuchelo", GUID: coupon.GUID}}, 1))
+	body, ok := box.invoke(t)
+	if !ok {
+		t.Fatal("9/1 未处理")
+	}
+	v := decodeTreeValue(t, srv, body)
+	if !v.IsKind(proto.KindObj) || v.TypeID != 803 {
+		t.Fatalf("应 803，实得 %v/%d", v.Kind, v.TypeID)
+	}
+	if got := u64Of(v.Fields[0].Num); got != 0 {
+		t.Fatalf("803.f0 应 0（拒绝空白标本），实得 %d", got)
+	}
+	// 无产出
+	if f1 := v.Fields[1].Val; f1 != nil && len(f1.Items) != 0 {
+		t.Fatalf("失败回包不应携带产出，实得 %+v", f1)
+	}
+	// 标本券未被扣
+	var n int
+	if err := db.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE uid=? AND item_id=?`, uid, "coupon_chuchelo").Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("标本券不应被消耗，剩余 %d", n)
+	}
+	// 鱼护无关鱼完好
+	if got, gerr := db.KeepnetGet(ctx, uid, other.EchoGUID); gerr != nil || got == nil {
+		t.Fatalf("无关渔获不应被误删，got=%v err=%v", got, gerr)
+	}
+	// 背包没有板子
+	var n2 int
+	if err := db.SQL.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM item WHERE uid=? AND item_id=?`, uid, "fish_board_s_01").Scan(&n2); err != nil {
+		t.Fatal(err)
+	}
+	if n2 != 0 {
+		t.Fatalf("不应产出板子，背包有 %d", n2)
+	}
+}
+
+// TestCraftProficiencyByRecipeFamily 校验四类技能按件概率增长、未命中与上限处理。
+func TestCraftProficiencyByRecipeFamily(t *testing.T) {
+	db := openMigratedTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	uid := int64(2000005)
@@ -712,15 +1214,7 @@ func TestCraftProficiencyByRecipeFamily(t *testing.T) {
 
 // TestCraftCookReplyCarriesSkillTree 校验烹调制作 803 回包携带 310 进度与 312 技能树。
 func TestCraftCookReplyCarriesSkillTree(t *testing.T) {
-	db, err := store.Open(filepath.Join(t.TempDir(), "cook-skill.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	if err := db.Migrate(); err != nil {
-		t.Fatal(err)
-	}
-	importStaticForSkillsCraft(t, db, "item_def", "recipe")
+	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	srv.randFloat = fixedRolls(0.1, 0.9)
@@ -767,4 +1261,182 @@ func TestCraftCookReplyCarriesSkillTree(t *testing.T) {
 	if pts, err := db.GetSkillPoints(ctx, uid, craftCookSkillID); err != nil || pts != 0.1 {
 		t.Fatalf("烹调术熟练度应 0.1，实得 %.3f err=%v", pts, err)
 	}
+}
+
+// TestCraftCountableProductsStack 验证可计件的制作产物会并入同一背包堆，
+// 而非计件产物（如 PVA 饵料板）仍保持独立实例。
+func TestCraftCountableProductsStack(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.9) // 固定不涨熟练度，避免干扰数量断言
+	uid := int64(2000007)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess, main: 9, sub: 1}
+
+	craftOnce := func(recipe string, materials []craftSlot) *proto.Value {
+		t.Helper()
+		box.tree = proto.Args524(craftObj8(recipe, materials, 1))
+		body, ok := box.invoke(t)
+		if !ok {
+			t.Fatalf("%s 未处理", recipe)
+		}
+		v := decodeTreeValue(t, srv, body)
+		if !v.IsKind(proto.KindObj) || v.TypeID != 803 || u64Of(v.Fields[0].Num) != 1 {
+			t.Fatalf("%s 制作应成功，实得 %v/%d", recipe, v.Kind, v.TypeID)
+		}
+		return v
+	}
+	stackRows := func(itemID string) (rows, qty int64) {
+		t.Helper()
+		if err := db.SQL.QueryRow(`SELECT COUNT(*), COALESCE(SUM(qty),0) FROM item
+			WHERE uid=? AND item_id=? AND container='backpack'`, uid, itemID).Scan(&rows, &qty); err != nil {
+			t.Fatal(err)
+		}
+		return rows, qty
+	}
+
+	// 烹调：food_egg → boiled_egg（类别 26），两次应合成 1 堆 2 个。
+	for i := 0; i < 2; i++ {
+		egg, err := srv.CreateItem(ctx, uid, "food_egg", "backpack", 1)
+		if err != nil {
+			t.Fatalf("第 %d 次创建 food_egg 失败: %v", i+1, err)
+		}
+		srv.alignItemRowQty(ctx, egg)
+		v := craftOnce("craft_cook_boiled_egg", nil)
+		// 结果卡只显示本次产出 1；背包快照必须是合并后的整堆。
+		if got := craftResultQty(t, v); got != 1 {
+			t.Fatalf("第 %d 次烹调 803.f1 数量应为本产出 1，实得 %d", i+1, got)
+		}
+		if got := craftInventoryQty(t, v); got != int64(i+1) {
+			t.Fatalf("第 %d 次烹调 803.f6 数量应为整堆 %d，实得 %d", i+1, i+1, got)
+		}
+	}
+	if rows, qty := stackRows("boiled_egg"); rows != 1 || qty != 2 {
+		t.Fatalf("两次烹调应合并成 1 堆 2 个，实得 rows=%d qty=%d", rows, qty)
+	}
+
+	// 饲料：mix_combi → feedcompleted（类别 46），一套 60 个；每组独立占一格，两次为 2 堆共 120。
+	feedSlot := []craftSlot{{
+		ItemID: "craft_feed_generic_mix_1",
+		GUID:   "00112233445566778899aabbccddeeff",
+	}}
+	for i := 0; i < 2; i++ {
+		mix, err := srv.CreateItem(ctx, uid, "mix_combi", "backpack", 1)
+		if err != nil {
+			t.Fatalf("第 %d 次创建 mix_combi 失败: %v", i+1, err)
+		}
+		srv.alignItemRowQty(ctx, mix)
+		craftOnce("craft_feed_universal", feedSlot)
+	}
+	if rows, qty := stackRows("feedcompleted"); rows != 2 || qty != 120 {
+		t.Fatalf("两次饲料制作应各占一格、共 120 个，实得 rows=%d qty=%d", rows, qty)
+	}
+
+	// PVA 饵料板：hvz_pva_string → pvas_b10（类别 61，非计件），两次应保持 2 个独立实例。
+	for i := 0; i < 2; i++ {
+		line, err := srv.CreateItem(ctx, uid, "hvz_pva_string", "backpack", 1)
+		if err != nil {
+			t.Fatalf("第 %d 次创建 hvz_pva_string 失败: %v", i+1, err)
+		}
+		srv.alignItemRowQty(ctx, line)
+		craftOnce("craft_pva_stinger_boil_10", nil)
+	}
+	if rows, qty := stackRows("pvas_b10"); rows != 2 || qty != 2 {
+		t.Fatalf("两次 PVA 制作应保持 2 个独立实例，实得 rows=%d qty=%d", rows, qty)
+	}
+}
+
+// TestCraftResultCardUsesProducedQuantity 验证制作结果卡只带本次产出量：
+// 同一成品堆连续制作时 803.f1 不能下发整堆数量，f6 仍必须是整堆快照。
+func TestCraftResultCardUsesProducedQuantity(t *testing.T) {
+	db := openRecipeTestDB(t)
+	ctx := context.Background()
+	srv := newSkillsCraftServer(t, db)
+	srv.randFloat = fixedRolls(0.9) // 不涨熟练度，避免干扰数量断言
+	uid := int64(2000008)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	sess := &Session{ID: 1, Userid: uid, Srv: srv, log: logging.Discard()}
+	box := &handlerBox{srv: srv, sess: sess, main: 9, sub: 1}
+
+	// bread 的定义单位量是 30：制作 1 份产出 30，制作 2 份产出 60。
+	craft := func(times uint64) *proto.Value {
+		t.Helper()
+		for i := uint64(0); i < times; i++ {
+			loaf, err := srv.CreateItem(ctx, uid, "loaf_01", "backpack", 1)
+			if err != nil {
+				t.Fatalf("构造 loaf_01 失败: %v", err)
+			}
+			srv.alignItemRowQty(ctx, loaf)
+		}
+		box.tree = proto.Args524(craftObj8("craft_bait_bread", nil, times))
+		body, ok := box.invoke(t)
+		if !ok {
+			t.Fatal("9/1 未处理")
+		}
+		v := decodeTreeValue(t, srv, body)
+		if !v.IsKind(proto.KindObj) || v.TypeID != 803 || u64Of(v.Fields[0].Num) != 1 {
+			t.Fatalf("bread 制作应成功，实得 %v/%d", v.Kind, v.TypeID)
+		}
+		return v
+	}
+
+	first := craft(1)
+	if got := craftResultQty(t, first); got != 30 {
+		t.Fatalf("首份 803.f1 数量应为本次产出 30，实得 %d", got)
+	}
+	if got := craftInventoryQty(t, first); got != 30 {
+		t.Fatalf("首份 803.f6 数量应为整堆 30，实得 %d", got)
+	}
+
+	second := craft(1)
+	if got := craftResultQty(t, second); got != 30 {
+		t.Fatalf("第二份 803.f1 数量应为本次产出 30（不是整堆 60），实得 %d", got)
+	}
+	if got := craftInventoryQty(t, second); got != 60 {
+		t.Fatalf("第二份 803.f6 数量应为整堆 60，实得 %d", got)
+	}
+
+	third := craft(2)
+	if got := craftResultQty(t, third); got != 60 {
+		t.Fatalf("制作 2 份的 803.f1 数量应为本次产出 60，实得 %d", got)
+	}
+	if got := craftInventoryQty(t, third); got != 120 {
+		t.Fatalf("制作 2 份的 803.f6 数量应为整堆 120，实得 %d", got)
+	}
+}
+
+// craftResultQty 返回 803.f1 第一件产出物的数量。
+func craftResultQty(t *testing.T, v *proto.Value) int64 {
+	t.Helper()
+	return craftItemListQty(t, v, 1, "803.f1")
+}
+
+// craftInventoryQty 返回 803.f6 背包增量里第一件产出物的数量。
+func craftInventoryQty(t *testing.T, v *proto.Value) int64 {
+	t.Helper()
+	return craftItemListQty(t, v, 6, "803.f6")
+}
+
+// craftItemListQty 读取 803 指定字段里第一件物品的数量位。
+func craftItemListQty(t *testing.T, v *proto.Value, field int, label string) int64 {
+	t.Helper()
+	if v == nil || !v.IsKind(proto.KindObj) || field >= len(v.Fields) {
+		t.Fatalf("%s: 响应不是 803: %+v", label, v)
+	}
+	list := v.Fields[field].Val
+	if list == nil || list.Kind != proto.KindArgs || list.ArgCount() < 1 {
+		t.Fatalf("%s 应至少带 1 件物品，实得 %+v", label, list)
+	}
+	item := list.ArgItem(0)
+	idx := fieldIdxByCS(item.Class, csQty)
+	if idx < 0 || idx >= len(item.Fields) || item.Fields[idx].Num == nil {
+		t.Fatalf("%s 的 %s 物品树没有数量字段: %+v", label, item.Class, item)
+	}
+	return int64(u64Of(item.Fields[idx].Num))
 }

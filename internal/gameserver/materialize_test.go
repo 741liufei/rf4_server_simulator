@@ -120,11 +120,11 @@ func TestRodFactoryPartsCarryCondition(t *testing.T) {
 	}
 }
 
-// TestForcePartsStrengthRendered 验证线和钩的 U32 字段按 F32 位型承载强度。
+// TestForcePartsStrengthRendered 验证线、前导和钩的 U32 字段按 F32 位型承载强度。
 func TestForcePartsStrengthRendered(t *testing.T) {
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
-	for _, itemID := range []string{"mono_15097", "clas_20163"} {
+	for _, itemID := range []string{"mono_15097", "sh_leader_40815", "clas_20163"} {
 		it, err := srv.CreateItem(ctx, 1000001, itemID, "backpack", 1)
 		if err != nil {
 			t.Fatalf("创建 %s 失败: %v", itemID, err)

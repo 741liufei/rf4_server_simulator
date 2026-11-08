@@ -17,9 +17,23 @@ type CampfireState struct {
 	UpdatedTS   float64
 }
 
+type campfireDBTX interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
 func (d *DB) GetCampfireState(ctx context.Context, uid int64) (*CampfireState, error) {
+	return getCampfireStateQ(ctx, d.SQL, uid)
+}
+
+// GetCampfireStateTx 在事务内读取篝火状态，用于与材料扣减保持同一写锁。
+func GetCampfireStateTx(ctx context.Context, tx *sql.Tx, uid int64) (*CampfireState, error) {
+	return getCampfireStateQ(ctx, tx, uid)
+}
+
+func getCampfireStateQ(ctx context.Context, q campfireDBTX, uid int64) (*CampfireState, error) {
 	var v CampfireState
-	err := d.SQL.QueryRowContext(ctx, `
+	err := q.QueryRowContext(ctx, `
 		SELECT uid, loc, spot, duration_min, expires_ft, updated_ts
 		FROM campfire_state WHERE uid=?`, uid).Scan(
 		&v.UID, &v.Loc, &v.Spot, &v.DurationMin, &v.ExpiresFT, &v.UpdatedTS)
@@ -33,10 +47,19 @@ func (d *DB) GetCampfireState(ctx context.Context, uid int64) (*CampfireState, e
 }
 
 func (d *DB) UpsertCampfireState(ctx context.Context, v CampfireState) error {
+	return upsertCampfireStateQ(ctx, d.SQL, v)
+}
+
+// UpsertCampfireStateTx 在经济事务内保存篝火状态。
+func UpsertCampfireStateTx(ctx context.Context, tx *sql.Tx, v CampfireState) error {
+	return upsertCampfireStateQ(ctx, tx, v)
+}
+
+func upsertCampfireStateQ(ctx context.Context, q campfireDBTX, v CampfireState) error {
 	if v.UpdatedTS <= 0 {
 		v.UpdatedTS = float64(time.Now().Unix())
 	}
-	_, err := d.SQL.ExecContext(ctx, `
+	_, err := q.ExecContext(ctx, `
 		INSERT INTO campfire_state(uid, loc, spot, duration_min, expires_ft, updated_ts)
 		VALUES(?,?,?,?,?,?)
 		ON CONFLICT(uid) DO UPDATE SET

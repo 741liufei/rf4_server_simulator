@@ -209,6 +209,10 @@ func (s *Server) nextCallID(token string) uint64 {
 // 客户端根据 2/2 推算世界日号，长时间无下行会断开连接。
 func (s *Session) startKeepalive() {
 	s.updateDrinkBonuses(time.Now())
+	s.advanceGroundbaitClock()
+	// 状态条在线钟：登录/重连时冻结离线跨度（饱食度停扣、精力停恢复），
+	// 会话期间由每拍 pushKeepalive 的读路径按时间差推进。
+	s.Srv.resumePlayerConditionClock(s.pushCtx(), s.Userid)
 	interval := s.Srv.cfg.KeepaliveInterval()
 	go func() {
 		timer := time.NewTimer(500 * time.Millisecond)
@@ -224,6 +228,12 @@ func (s *Session) startKeepalive() {
 				s.updateHappyHour(time.Now(), false)
 				pushKeepalive(s)
 				s.updateDrinkBonuses(time.Now())
+				s.advanceGroundbaitClock()
+				// 钓鱼游在线计时：每拍扣减，到期回收 place_access 后推档案，
+				// 客户端 f23 徽章随之消失（目的地重新上锁）。
+				if s.consumeTripTimes(time.Now()) {
+					s.Push2_1()
+				}
 				// 每 6 拍（约 30 秒）刷新一次已租用船票的剩余分钟，
 				// 让客户端的到期提示随时间递减（客户端自身不会重算）。
 				// 每 6 拍（约 30 秒）清理一次已到期的租用船票。
@@ -231,6 +241,11 @@ func (s *Session) startKeepalive() {
 				s.keepaliveTicks++
 				if s.keepaliveTicks%6 == 0 {
 					s.expireRentalTickets()
+					// 有已启表的钓鱼游时同步推档案：客户端徽章的剩余时间
+					// 只在档案对象替换时重算，不推就一直显示旧值。
+					if s.hasTickingTrips(s.pushCtx()) {
+						s.Push2_1()
+					}
 				}
 				timer.Reset(interval)
 			}
@@ -243,6 +258,10 @@ func (s *Session) Close(reason string) {
 	if s.closed.CompareAndSwap(false, true) {
 		s.updateHappyHour(time.Now(), true)
 		s.updateDrinkBonuses(time.Now())
+		// 钓鱼游停表：离线暂停计时，把关闭时刻前的在线时长消费完。
+		s.consumeTripTimes(time.Now())
+		// 下线即离开所有地图：钓鱼游装备包全部回收（重登进图再发放）。
+		s.Srv.recallAllTripEquipment(s.pushCtx(), s.Userid)
 		s.log.Info("会话关闭", "reason", reason)
 		s.stopOnce.Do(func() { close(s.stopCh) })
 		s.Srv.removeSession(s)

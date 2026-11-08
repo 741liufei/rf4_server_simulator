@@ -128,7 +128,7 @@ func TestAdminFishUsesRealWeightAndSurvivesRestart(t *testing.T) {
 	}
 	for _, e := range entries {
 		want := s.rollGradeDB(context.Background(), e.Species, e.WeightG)
-		if e.Cat != want || u32Of(buildKeepnet25(e, "").Field(3).Num) != uint32(want) {
+		if e.Cat != want || u32Of(buildKeepnet25(e, "", 0).Field(3).Num) != uint32(want) {
 			t.Fatalf("keepnet fish=%+v want grade=%d", e, want)
 		}
 	}

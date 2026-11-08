@@ -26,20 +26,22 @@ test('happy hour switch and remaining time fit supported sizes and long text',as
     return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
    });
    await page.goto('http://127.0.0.1:19214/admin/#fish');
-   const toggle=page.locator('#happyHourToggle');await toggle.waitFor();
-   assert.equal(await toggle.textContent(),'关闭');assert.equal(await toggle.getAttribute('aria-pressed'),'true');
-   await toggle.click();await page.waitForFunction(()=>document.getElementById('happyHourToggle').getAttribute('aria-pressed')==='false');
-   assert.equal(await page.locator('#fishRulesToggle').getAttribute('aria-pressed'),'false');assert.equal(await page.locator('#fishDistributionToggle').getAttribute('aria-pressed'),'false');
-   await page.reload();await page.waitForFunction(()=>document.getElementById('happyHourToggle').textContent==='开启');
-   await toggle.click();await page.waitForFunction(()=>document.getElementById('happyHourToggle').getAttribute('aria-pressed')==='true');
+   const toggle=page.locator('#happyHourSwitch');await toggle.waitFor();
+   assert.equal(await toggle.isChecked(),true);
+   await toggle.click();await page.waitForFunction(()=>{const e=document.getElementById('happyHourSwitch');return !e.disabled&&e.checked===false;});
+   assert.equal(await page.locator('#fishRulesSwitch').isChecked(),false);assert.equal(await page.locator('#fishDistributionSwitch').isChecked(),false);
+   await page.reload();await page.waitForFunction(()=>document.getElementById('happyHourSwitch').checked===false);
+   await toggle.click();await page.waitForFunction(()=>{const e=document.getElementById('happyHourSwitch');return !e.disabled&&e.checked===true;});
    assert.deepEqual(writes.map(x=>x.value),['0','1']);
    for(const [scenario,text,active,remaining,label] of [['normal','欢乐时光',true,3600,'生效中'],['chinese','最长合理欢乐时光状态说明'.repeat(12),false,1800,'暂停'],['continuous','UnbrokenHappyHourStatus'.repeat(25),false,0,'暂停']]){
     await page.evaluate(()=>location.hash='fish');await page.locator('#view-fish').waitFor({state:'visible'});
-    await page.waitForFunction(()=>!document.getElementById('happyHourToggle').disabled);
+    await page.waitForFunction(()=>!document.getElementById('happyHourSwitch').disabled);
+    // 说明面板默认收起；量文字溢出前先展开
+    if(await page.locator('#rulesHelp').isHidden())await page.locator('#rulesHelpBtn').click();
     if(scenario!=='normal')await page.locator('#happyHourMessage').evaluate((e,text)=>e.textContent=text,text);
     const switchSize=await page.locator('#fishRulesCard').evaluate(card=>{
-     const b=card.querySelector('#happyHourToggle'),d=card.querySelector('#happyHourMessage'),br=b.getBoundingClientRect(),dr=d.getBoundingClientRect();
-     return{scroll:document.documentElement.scrollWidth,width:innerWidth,buttonWidth:br.width,buttonHeight:br.height,font:getComputedStyle(b).fontSize,messageScroll:d.scrollWidth,messageWidth:d.clientWidth,overlap:br.x<dr.right&&br.y<dr.bottom};
+     const b=card.querySelector('#happyHourSwitch'),d=card.querySelector('#happyHourMessage'),br=b.getBoundingClientRect(),dr=d.getBoundingClientRect();
+     return{scroll:document.documentElement.scrollWidth,width:innerWidth,buttonWidth:br.width,buttonHeight:br.height,font:getComputedStyle(b).fontSize,messageScroll:d.scrollWidth,messageWidth:d.clientWidth,overlap:br.x<dr.right&&br.y<dr.bottom&&br.bottom>dr.y&&dr.height>0};
     });
     assert.ok(switchSize.scroll<=width+1&&switchSize.messageScroll<=switchSize.messageWidth+1&&!switchSize.overlap,JSON.stringify({width,dpi,scenario,switchSize}));
     await page.evaluate(()=>location.hash='players');await page.locator('#view-players').waitFor({state:'visible'});
