@@ -85,36 +85,8 @@ func (s *Server) prepareStoreGoods(ctx context.Context, uid int64, itemID string
 		return nil, false, fmt.Errorf("无定义 %s", itemID)
 	}
 	if def.Category == bundleCategory {
-		attrs := defAttrs(def)
-		contents, _ := attrs["nbkhfhenbag"].([]any)
-		for _, raw := range contents {
-			entry, _ := raw.(map[string]any)
-			inner, _ := entry["cemjmlpafmc"].(string)
-			if inner == "" {
-				return nil, true, fmt.Errorf("套盒内含物缺 item_id: %s", itemID)
-			}
-			qty := int64(1)
-			switch q := entry["ljnnpokapig"].(type) {
-			case float64:
-				qty = int64(q)
-			case int64:
-				qty = q
-			case int:
-				qty = int64(q)
-			}
-			if qty < 1 {
-				qty = 1
-			}
-			it, perr := s.prepareNewItem(ctx, uid, inner, "backpack", qty, "")
-			if perr != nil {
-				return nil, true, perr
-			}
-			items = append(items, it)
-		}
-		if len(items) == 0 {
-			return nil, true, fmt.Errorf("套盒没有可发放内含物: %s", itemID)
-		}
-		return items, true, nil
+		items, err = s.prepareBundleItems(ctx, uid, itemID, "backpack", 1)
+		return items, true, err
 	}
 	it, err := s.prepareNewItem(ctx, uid, itemID, "backpack", 1, "")
 	if err != nil {
@@ -183,12 +155,17 @@ func hStoreBuy(goldCol bool) Handler {
 
 		granted := make([]*store.Item, 0, len(prepared))
 		for _, it := range prepared {
-			row, _, gerr := grantPreparedItemTx(cctx, tx, it, true)
+			// 按购买批次独立存放，避免退一件商品时连带删除原有堆叠。
+			row, _, gerr := grantPreparedItemTx(cctx, tx, it, false)
 			if gerr != nil {
 				ctx.Log.Warn("商店入库失败", "item", it.ItemID, "err", gerr)
 				return fail("购买未完成，请刷新商店后重试")
 			}
 			granted = append(granted, row)
+		}
+		if err := srv.saveStorePurchaseTx(cctx, tx, uid, storeID, itemID, price, goldCol, granted); err != nil {
+			ctx.Log.Warn("商店购买凭据保存失败", "err", err)
+			return fail("购买未完成，请刷新商店后重试")
 		}
 		// 纸质地图（category 40）只是可阅读的地图道具，购买它不等于买断地点：
 		// 旧实现会在这里写 place_access(kind='buyout')，导致"买张地图就变成无限访问"。
@@ -206,23 +183,6 @@ func hStoreBuy(goldCol bool) Handler {
 				continue
 			}
 			trees = append(trees, tree)
-		}
-		level := spawnLevelKey
-		srv.levelMu.Lock()
-		if lv, ok := srv.levelMap[uid]; ok && lv != "" {
-			level = lv
-		}
-		srv.levelMu.Unlock()
-		receipt := proto.Obj("pcfflcdpjgk", 166,
-			proto.Field{Op: "STR", Str: &storeID},
-			proto.Field{Op: "U32", Num: ptrU64(uint64(uid))},
-			proto.Field{Op: "U32", Num: ptrU64(0)},
-			proto.Field{Op: "U64", Num: ptrU64(price)},
-			proto.Field{Op: "OPT", Num: ptrU64(0)},
-			proto.Field{Op: "STR", Str: &level},
-		)
-		if len(trees) > 0 {
-			attachReceipt(trees[0], receipt)
 		}
 		f1 := proto.Null()
 		f2 := proto.Null()
@@ -257,27 +217,9 @@ func boolToI(b bool) int64 {
 	return 0
 }
 
-// hStoreReturn 处理 22/4，返回 800 背包全量快照。
+// hStoreReturn 处理 22/4，原子扣物退款并返回 800 移除快照。
 func hStoreReturn(ctx *Ctx) ([]byte, bool) {
-	srv := ctx.Sess.Srv
-	if !srv.requireDB(ctx) {
-		return nil, false
-	}
-	cctx := ctx.Sess.pushCtx()
-	out := proto.Args(proto.S("61"))
-	guids, _ := srv.DB.ItemGUIDsByContainers(cctx, ctx.Sess.Userid, []string{"backpack"})
-	for _, g := range guids {
-		if row, err := srv.DB.GetItemByGUID(cctx, g); err == nil {
-			if tree, terr := srv.ItemToTree(cctx, row); terr == nil {
-				out.Items = append(out.Items, tree)
-			}
-		}
-	}
-	body, err := proto.EncodeValue(build800(out, proto.Null(), proto.Null()), ctx.Sess.Table())
-	if err != nil {
-		return nil, false
-	}
-	return body, true
+	return ctx.Sess.Srv.returnStorePurchase(ctx)
 }
 
 // hStoreATMQuery 处理 22/6。实抓证据（2026-11-04 trace）：客户端在房产
@@ -326,6 +268,7 @@ func registerShopHandlers(d *Dispatch) {
 		d.RegisterResponseContract(22, sub, ResponseContractRule{Kind: proto.KindObj, TypeIDs: []uint32{804}, Classes: []string{"jfafgmcfjkc"}})
 	}
 	d.Register(22, 4, hStoreReturn)
+	d.RegisterResponseContract(22, 4, ResponseContractRule{Kind: proto.KindObj, TypeIDs: []uint32{800}, Classes: []string{"dlbahppbdad"}})
 	d.Register(22, 6, hStoreATMQuery)
 }
 
