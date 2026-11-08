@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-// 00046 必须可从旧库升级、失败不留半表、重复执行幂等。
+// 00047 必须可从旧库升级、失败不留半表、重复执行幂等。
 func TestQualificationProgressUpgradeAndRollback(t *testing.T) {
-	db := openCatchHistoryDBAtVersion(t, 45)
+	db := openCatchHistoryDBAtVersion(t, 46)
 	if _, err := db.SQL.Exec(`CREATE TRIGGER fail_qual BEFORE INSERT ON schema_migrations
-		WHEN NEW.name='migrations/00046_qualification_progress.sql'
+		WHEN NEW.name='migrations/00047_qualification_progress.sql'
 		BEGIN SELECT RAISE(ABORT,'test migration failure'); END`); err != nil {
 		t.Fatal(err)
 	}
