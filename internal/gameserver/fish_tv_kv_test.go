@@ -29,6 +29,25 @@ func TestFishLandedKVText(t *testing.T) {
 	if !bytes.Contains(b, []byte{0xa9, 0x01, 0x00, 0x00}) {
 		t.Fatalf("键2 重量应为 425 克: %x", b)
 	}
+	// 长度前缀必须是 UTF-8 字节数，而不是字符数。
+	name := []byte("丁鱵")
+	if prefix := append([]byte{0x01, 0x14, byte(len(name))}, name...); !bytes.Contains(b, prefix) {
+		t.Fatalf("键1 UTF-8 长度前缀不符: %x", b)
+	}
+}
+
+// 没有中文名时，键1 回退到鱼种 key。
+func TestFishLandedKVFallbackUsesSpeciesKey(t *testing.T) {
+	srv, _ := newDetachTestServer(t)
+	sess := newProbeSess(srv)
+	b, err := proto.EncodeValue(srv.fishLandedKV(&RolledFish{Species: "missing_species", WeightG: 425}), sess.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := []byte("missing_species")
+	if prefix := append([]byte{0x01, 0x14, byte(len(key))}, key...); !bytes.Contains(b, prefix) {
+		t.Fatalf("回退 key 长度前缀不符: %x", b)
+	}
 }
 
 // TestFishTVShape30MatchesProduction 回归：面板 kv_shape=30 的编码字节必须与
