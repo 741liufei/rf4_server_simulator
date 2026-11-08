@@ -310,8 +310,77 @@ func TestRigEnergyBonusesFromAttrs(t *testing.T) {
 	if math.Abs(regen-0.3) > 1e-9 || math.Abs(maxAdd-0.1) > 1e-9 {
 		t.Fatalf("装备加成解析错误: regen=%v max=%v", regen, maxAdd)
 	}
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.GearGuid = rod.GUID
+	st.mu.Unlock()
+	if err := db.UpsertPlayerCondition(ctx, store.PlayerCondition{
+		UID: uid, Primary: 0.90, Secondary: 1.0, Comfort: 1.0,
+		UpdatedTS: float64(time.Now().Unix()) + 3600,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.spendEnergy(ctx, uid, 0.01)
+	row, err := db.EnsurePlayerCondition(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if math.Abs(row.Primary-0.89) > 1e-9 {
+		t.Fatalf("装备上限加成不应被动作路径截断: primary=%v want=0.89", row.Primary)
+	}
 	if _, ok := consumableRestoreForItem("rod_energy_test"); ok {
 		t.Fatal("装备不应进消耗品恢复白名单")
+	}
+}
+
+// 307/档案响应里的 308 只读，不推进在线钟。
+func TestBuildPose308DoesNotAdvanceCondition(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+	oldTS := float64(time.Now().Add(-2 * time.Hour).Unix())
+	if err := db.UpsertPlayerCondition(ctx, store.PlayerCondition{
+		UID: uid, Primary: 0.40, Secondary: 0.50, Comfort: 0.60, LuckPenalty: 0.1,
+		UpdatedTS: oldTS,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv.buildPose308(ctx, uid)
+	row, err := db.EnsurePlayerCondition(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Primary != 0.40 || row.Secondary != 0.50 || row.Comfort != 0.60 || row.UpdatedTS != oldTS {
+		t.Fatalf("非 2/2 的 308 构建不应推进状态: %+v", row)
+	}
+}
+
+// 篝火舒适度只对同一地点/钓点生效。
+func TestConditionEnvCampfireRequiresSameLocation(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	sess := newProbeSess(srv)
+	st := srv.stateFor(sess.Userid)
+	st.mu.Lock()
+	st.Loc = "loc_a"
+	st.Spot = 10
+	st.mu.Unlock()
+	if err := db.UpsertCampfireState(t.Context(), store.CampfireState{
+		UID: sess.Userid, Loc: "loc_a", Spot: 10, DurationMin: 60,
+		ExpiresFT: int64(proto.WindowsFiletimeNow()) + 10_000_000,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	env := sess.conditionEnvForSession(time.Now(), srv.conditionParams())
+	if !env.Campfire {
+		t.Fatal("同一地点/钓点应获得篝火加成")
+	}
+	st.mu.Lock()
+	st.Loc = "loc_b"
+	st.Spot = 10
+	st.mu.Unlock()
+	env = sess.conditionEnvForSession(time.Now(), srv.conditionParams())
+	if env.Campfire {
+		t.Fatal("离开篝火地点后不应继续获得加成")
 	}
 }
 

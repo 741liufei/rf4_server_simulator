@@ -34,10 +34,11 @@ func BuildPose308() *proto.Value {
 }
 
 // buildPose308 使用 SQLite 中的玩家状态构造姿态块；读库失败才回退到协议默认值。
-// f0=精力、f1=饱食度经状态机懒计算推进；f3=舒适度、f4=幸运惩罚本轮透传常量
-// （无动态写入者，specs/changes/player-condition-core）。
+// 非 2/2 档案响应只读取当前持久化值，不做在线钟推进；环境感知与推进统一由
+// 2/2 保活负责，避免任意 307 以空环境抢走舒适度漂移区间。
+// f3=舒适度、f4=幸运惩罚由 player_condition 透传。
 func (s *Server) buildPose308(ctx context.Context, uid int64) *proto.Value {
-	c := s.currentPlayerCondition(ctx, uid)
+	c := s.peekPlayerCondition(ctx, uid)
 	return wiregen.MustMakeObj("pnbphpdmppe", map[int]*proto.Value{
 		0: proto.F32(float32(c.Primary)), 1: proto.F32(float32(c.Secondary)), 2: proto.F32(0.0),
 		3: proto.F32(float32(c.Comfort)), 4: proto.F32(float32(c.LuckPenalty)),

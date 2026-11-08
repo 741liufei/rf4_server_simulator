@@ -145,6 +145,27 @@ func (s *Server) conditionParams() conditionParams {
 	}
 }
 
+// conditionParamsForUID 返回叠加当前已装配竿/轮被动加成后的有效参数。
+// 所有会推进或消耗精力状态的口径都必须使用该结果，避免基础上限 0.85
+// 把装备提供的上限加成截断。
+func (s *Server) conditionParamsForUID(ctx context.Context, uid int64) conditionParams {
+	if s == nil {
+		return conditionParams{}
+	}
+	p := s.conditionParams()
+	if s.DB == nil || !p.Enabled {
+		return p
+	}
+	regen, maxAdd := s.rigEnergyBonuses(ctx, uid, s.heldRodGUID(uid))
+	if regen != 0 {
+		p.EnergyRegenPerHour *= 1 + regen
+	}
+	if maxAdd != 0 {
+		p.EnergyMax = clampFloat(p.EnergyMax+maxAdd, 0, 1)
+	}
+	return p
+}
+
 // conditionEnv 环境快照：舒适度均衡点与晒阳精力恢复的输入。
 // 由会话侧解析天气/昼夜/篝火，推进函数只消费布尔结果；
 // 零值表示"环境未知"，均衡点回到 1.0（与无环境联动时行为一致）。
@@ -228,7 +249,7 @@ func (s *Server) resumePlayerConditionClock(ctx context.Context, uid int64) {
 // currentPlayerCondition 懒计算读取口：Ensure → 推进 → 变化超阈值才写回。
 // 总开关关闭时回退协议默认常量，与改动前行为逐字段一致（不写库）。
 func (s *Server) currentPlayerCondition(ctx context.Context, uid int64) store.PlayerCondition {
-	return s.currentPlayerConditionP(ctx, uid, s.conditionParams(), conditionEnv{})
+	return s.currentPlayerConditionP(ctx, uid, s.conditionParamsForUID(ctx, uid), conditionEnv{})
 }
 
 // currentPlayerConditionEnv 带环境快照的读取口（2/2 保活专用）：
@@ -268,6 +289,38 @@ func (s *Server) currentPlayerConditionP(ctx context.Context, uid int64, p condi
 	return next
 }
 
+// peekPlayerCondition 只读当前状态，不做在线钟推进。
+// 307/档案响应里的 308 使用该口径：环境感知和在线推进只由 2/2 保活负责，
+// 避免任意 307 以空环境消耗环境漂移区间。读取时仍按有效装备上限做显示钳制，
+// 但不回写。
+func (s *Server) peekPlayerCondition(ctx context.Context, uid int64) store.PlayerCondition {
+	now := float64(time.Now().Unix())
+	def := store.PlayerCondition{
+		Primary:     store.DefaultPlayerConditionPrimary,
+		Secondary:   store.DefaultPlayerConditionSecondary,
+		Comfort:     store.DefaultPlayerConditionComfort,
+		LuckPenalty: store.DefaultPlayerConditionLuckPenalty,
+		UpdatedTS:   now,
+	}
+	if s == nil || s.DB == nil {
+		return def
+	}
+	p := s.conditionParamsForUID(ctx, uid)
+	if !p.Enabled {
+		return def
+	}
+	cur, err := s.DB.EnsurePlayerCondition(ctx, uid)
+	if err != nil || cur == nil {
+		return def
+	}
+	out := *cur
+	out.Primary = clampFloat(out.Primary, 0, p.EnergyMax)
+	out.Secondary = clampFloat(out.Secondary, 0, 1)
+	out.Comfort = clampFloat(out.Comfort, 0, 1)
+	out.LuckPenalty = clampFloat(out.LuckPenalty, 0, 1)
+	return out
+}
+
 // conditionAllowsCast 抛投精力闸门：低于阈值时 14/2 以结果码 84 拒绝。
 func (s *Server) conditionAllowsCast(ctx context.Context, uid int64) bool {
 	p := s.conditionParams()
@@ -283,11 +336,11 @@ func (s *Server) spendEnergy(ctx context.Context, uid int64, amount float64) {
 	if s == nil || s.DB == nil || amount <= 0 {
 		return
 	}
-	p := s.conditionParams()
+	p := s.conditionParamsForUID(ctx, uid)
 	if !p.Enabled {
 		return
 	}
-	c := s.currentPlayerCondition(ctx, uid)
+	c := s.currentPlayerConditionP(ctx, uid, p, conditionEnv{})
 	c.Primary = clampFloat(c.Primary-amount, 0, p.EnergyMax)
 	c.UpdatedTS = float64(time.Now().Unix())
 	if err := s.DB.UpsertPlayerCondition(ctx, c); err != nil {
@@ -310,7 +363,7 @@ func (s *Session) conditionEnvForSession(now time.Time, p conditionParams) condi
 	}
 	st := s.Srv.stateFor(s.Userid)
 	st.mu.Lock()
-	loc := st.Loc
+	loc, spot := st.Loc, int64(st.Spot)
 	st.mu.Unlock()
 	if loc != "" {
 		if w := s.weatherAt(loc, now); w.known {
@@ -321,8 +374,10 @@ func (s *Session) conditionEnvForSession(now time.Time, p conditionParams) condi
 	} else {
 		env.Sun = isDaylightGameMinute(gameMinuteOfDayAt(now))
 	}
-	if state, err := s.Srv.DB.GetCampfireState(s.pushCtx(), s.Userid); err == nil && state != nil {
-		env.Campfire = state.ExpiresFT > int64(proto.WindowsFiletimeNow())
+	if state, err := s.Srv.DB.GetCampfireState(s.pushCtx(), s.Userid); err == nil && state != nil &&
+		state.ExpiresFT > int64(proto.WindowsFiletimeNow()) {
+		// 篝火加成只对同一地点/钓点生效；玩家离开后不能继续享受。
+		env.Campfire = loc != "" && state.Loc == loc && state.Spot == spot
 	}
 	return env
 }
@@ -373,13 +428,7 @@ func jsonFloatAttr(attrs map[string]any, key string) float64 {
 // buildPose308Env 带环境与装备加成的 308 构建（2/2 保活专用）：
 // 装备加成调整精力恢复速率与上限后按环境推进。
 func (s *Server) buildPose308Env(ctx context.Context, uid int64, env conditionEnv) *proto.Value {
-	p := s.conditionParams()
-	if p.Enabled {
-		if regen, maxAdd := s.rigEnergyBonuses(ctx, uid, s.heldRodGUID(uid)); regen != 0 || maxAdd != 0 {
-			p.EnergyRegenPerHour *= 1 + regen
-			p.EnergyMax = clampFloat(p.EnergyMax+maxAdd, 0, 1)
-		}
-	}
+	p := s.conditionParamsForUID(ctx, uid)
 	c := s.currentPlayerConditionP(ctx, uid, p, env)
 	return wiregen.MustMakeObj("pnbphpdmppe", map[int]*proto.Value{
 		0: proto.F32(float32(c.Primary)), 1: proto.F32(float32(c.Secondary)), 2: proto.F32(0.0),

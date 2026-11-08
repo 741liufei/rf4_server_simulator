@@ -39,8 +39,9 @@ func (s *Server) useAlcoholDrink(ctx *Ctx) ([]byte, bool) {
 	}
 	cctx, uid := ctx.Sess.pushCtx(), ctx.Sess.Userid
 	// tunableF 首次装载有 2 秒超时的表查询，不能发生在持锁事务内
-	//（查询等待锁会超时并静默回退默认值）；统一在开事务前取好状态机参数。
-	cond := s.conditionParams()
+	//（查询等待锁会超时并静默回退默认值）；统一在开事务前取好状态机参数，
+	// 并叠加当前装备的精力上限/恢复加成。
+	cond := s.conditionParamsForUID(cctx, uid)
 	key, bodySHA := requestReceiptKey(ctx)
 	receiptKey := fmt.Sprintf("drink-use:%d:%s:%d:%d:%d", uid, key.TokenHash, key.Main, key.Sub, key.CallID)
 	var err error

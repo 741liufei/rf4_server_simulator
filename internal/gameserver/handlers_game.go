@@ -895,11 +895,7 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 	st.GearGuid = gear
 	st.CastPosX, st.CastPosZ, st.HasCastPos = castX, castZ, hasCastPos
 	st.mu.Unlock()
-	if err := ctx.Sess.prepareBaitForCast(st, gear); err != nil {
-		ctx.Log.Warn("抛竿前补饵失败", "err", err)
-		return nil, false
-	}
-	srv.ensureRig(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear)
+
 	// 记录钓组类型并读取当前钩上饵；路亚使用独立的咬钩节奏。
 	rigType := int64(0)
 	if row, err := srv.DB.GetItemByGUID(ctx.Sess.pushCtx(), gear); err == nil && row != nil {
@@ -943,6 +939,13 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyOperationResult(operationResultLowEnergyLevel)
 		return nil, true
 	}
+	// 补饵/ensureRig 会写库并推送背包状态，必须在精力闸门放行后执行；
+	// 否则一次低精力拒绝也会产生可见的钓组/背包副作用。
+	if err := ctx.Sess.prepareBaitForCast(st, gear); err != nil {
+		ctx.Log.Warn("抛竿前补饵失败", "err", err)
+		return nil, false
+	}
+	srv.ensureRig(ctx.Sess.pushCtx(), ctx.Sess.Userid, gear)
 	// 14/1 给出的是满力度上限；14/2 才携带本次实际落点、动作和出手力度。
 	// 这里只做真实请求诊断，不能把本杆力度写回下一杆的上限。
 	requestedM := throwDistance(ctx.Tree)
