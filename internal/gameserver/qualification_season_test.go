@@ -31,7 +31,7 @@ func TestSeasonBoundsCoversNow(t *testing.T) {
 func TestSeasonBoundsSharedByProfileAndFog(t *testing.T) {
 	start, end := seasonBounds()
 
-	body, err := proto.EncodeValue(build5013(), wiregen.Table())
+	body, err := proto.EncodeValue(build5013(0, seasonEndFiletime(0)), wiregen.Table())
 	if err != nil {
 		t.Fatalf("5013 编码失败: %v", err)
 	}

@@ -65,6 +65,7 @@ type Server struct {
 	// 运行参数缓存
 	tunMu    sync.Mutex
 	tunCache map[string]float64
+	tunText  map[string]string
 	tunAt    time.Time
 
 	// 搏鱼曲线池

@@ -102,26 +102,34 @@ func build745() *proto.Value {
 	})
 }
 
-// build5013 构造赛季起止时段。
-// Idx0 是赛季阶段（0=无/哨兵，5=新年活动，6=生日/周年活动）。这里必须发 0：
-// 发 6 会让客户端在主菜单点亮「周年纪念任务」入口；资格分支本身不需要活动阶段，
-// 只需一个覆盖当前时刻的时间窗来避免节点被判过期。
-func build5013() *proto.Value {
-	start, end := seasonBounds()
+// build5013 构造一条赛季起止时段。
+// Idx0 是赛季阶段（0=无/哨兵，5=新年活动，6=生日/周年活动）；客户端
+// kkaadaemdkb.bbhdipfopfk 按 Idx0 索引 5013 条目，所以 5012.f0 可同时下发多阶段。
+// 阶段 0 的哨兵条目恒发，供永久资格节点使用；发 6 会点亮主菜单「周年纪念任务」入口。
+//
+// Idx4 是周年面板倒计时的结束时间（iibalkfkhml.nehplcfdejp 从 dto+0x28 读
+// FILETIME 后减当前时间），由后台 event_anniversary_end_unix 配置；
+// 填 0 会让客户端回退到内置 2022-08-06，显示 -1555 天。
+// Idx3 是 OPT（1 字节 flag，PackU8），放不下 FILETIME，交由 wiregen 按 ClassOps 填零。
+func build5013(stage uint32, end uint64) *proto.Value {
+	start, seasonEnd := seasonBounds()
 	return wiregen.MustMakeObj("nkakjeigjla", map[int]*proto.Value{
-		0: proto.U32(0),
+		0: proto.U32(stage),
 		1: proto.U64(start),
-		2: proto.U64(end),
-		3: proto.U32(0),
-		4: proto.U64(0),
+		2: proto.U64(seasonEnd),
+		4: proto.U64(end),
 		5: proto.Null(),
 	})
 }
 
-// build5012 构造包含 5013 的赛季容器。
-func build5012() *proto.Value {
+// build5012 构造包含各阶段 5013 条目的赛季容器。
+func build5012(stages []uint32, end uint64) *proto.Value {
+	items := make([]*proto.Value, 0, len(stages))
+	for _, stage := range stages {
+		items = append(items, build5013(stage, end))
+	}
 	return wiregen.MustMakeObj("fkcmcjlagdh", map[int]*proto.Value{
-		0: proto.Args(proto.S("210"), build5013()),
+		0: proto.Args(proto.S("210"), items...),
 	})
 }
 
@@ -172,10 +180,8 @@ func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*
 	if p.XP > base {
 		inLevel = uint64(p.XP - base)
 	}
-	// 5012 赛季块
-	season := wiregen.MustMakeObj("fkcmcjlagdh", map[int]*proto.Value{
-		0: proto.Args(proto.S("210"), build5013()),
-	})
+	// 5012 赛季块：阶段与结束时间都取自运行参数。
+	season := s.buildSeason5012()
 
 	// f23 钓鱼游（wire 类 hajlpdpmnfe/1506）：客户端世界地图按 dhaenhabecc
 	// 匹配地图键（hncnmlgnhjm.hlcjincbjma），据此渲染"✈还剩下N天"徽章、
