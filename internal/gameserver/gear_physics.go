@@ -273,10 +273,13 @@ func (s *Server) craftedLeaderBaseStrengthKg(ctx context.Context, leaderGUID str
 	return s.craftedLeaderBaseStrengthFromFields(ctx, row.WireClass, fields)
 }
 
-// craftedLeaderBaseStrengthFromFields 从引线对象的内嵌材料反查定义取最弱承力。
-// 材料在 f1 前导线、f2 连接件、f3 普通主线（减震引线）三个槽位上，
-// 只认对象里的 numeric_id：快照里的强度字段会被下发链路按耐久重写，
-// 拿它当基准会把耐久乘两次。
+// craftedLeaderBaseStrengthFromFields 从引线对象的内嵌材料取最弱承力。
+// 材料在 f1 前导线、f2 连接件、f3 普通主线（减震引线）三个槽位上。
+//
+// 优先使用内嵌材料对象的 nlmnpekipjc：制作/修复路径已经把“实际材料额定拉力
+// × 材料自身耐久 × 材料工艺”写在这里。旧实现只按 numeric_id 回查定义，
+// 普通主线映射到前导线模型时会丢掉真实材料强度；重新乘材料耐久又容易与
+// 外层引线耐久叠加。只有旧存档缺少该字段时，才按材料定义与内嵌状态回算。
 func (s *Server) craftedLeaderBaseStrengthFromFields(
 	ctx context.Context,
 	class string,
@@ -295,19 +298,53 @@ func (s *Server) craftedLeaderBaseStrengthFromFields(
 		if obj == nil || obj.Kind != proto.KindObj {
 			continue
 		}
-		ni := fieldIdxByCS(obj.Class, csNumericID)
-		if ni < 0 || ni >= len(obj.Fields) || obj.Fields[ni].Num == nil {
-			continue
+		strength, ok := wireFloatAt(obj, csStrength)
+		if !ok || strength <= 0 {
+			ni := fieldIdxByCS(obj.Class, csNumericID)
+			if ni < 0 || ni >= len(obj.Fields) || obj.Fields[ni].Num == nil {
+				continue
+			}
+			def, err := s.DB.GetItemDef(ctx, int64(u64Of(obj.Fields[ni].Num)))
+			if err != nil || def == nil {
+				continue
+			}
+			base := itemDefF32(def, gearAttrMaxLoad)
+			if base <= 0 {
+				continue
+			}
+			durability, ok := wireFloatAt(obj, csDurability)
+			if !ok {
+				durability = 1
+			}
+			workmanship, ok := wireFloatAt(obj, csWorkmanship)
+			if !ok {
+				workmanship = 1
+			}
+			strength = base * clampUnit(durability) * clampUnit(workmanship)
 		}
-		def, err := s.DB.GetItemDef(ctx, int64(u64Of(obj.Fields[ni].Num)))
-		if err != nil || def == nil {
-			continue
-		}
-		if v := itemDefF32(def, gearAttrMaxLoad); v > 0 && (best <= 0 || v < best) {
-			best = v
+		if strength > 0 && (best <= 0 || strength < best) {
+			best = strength
 		}
 	}
 	return best
+}
+
+// wireFloatAt 读取 wire 对象上的浮点字段，兼容 FLOAT/DOUBLE 与 U32 位型。
+func wireFloatAt(obj *proto.Value, key string) (float64, bool) {
+	if obj == nil || obj.Kind != proto.KindObj {
+		return 0, false
+	}
+	idx := fieldIdxByCS(obj.Class, key)
+	if idx < 0 || idx >= len(obj.Fields) {
+		return 0, false
+	}
+	if fieldIsFloat(obj.Class, idx) {
+		return obj.Fields[idx].Float, true
+	}
+	if fieldOpAt(obj.Class, idx) != "U32" || obj.Fields[idx].Num == nil {
+		return 0, false
+	}
+	return float64(proto.F32FromBits(uint32(u64Of(obj.Fields[idx].Num)))), true
 }
 
 func reelDragMaxKg(def *store.ItemDef) float64 {
