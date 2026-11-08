@@ -14,6 +14,7 @@ package gameserver
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 
@@ -30,14 +31,19 @@ func deckSealed(fields []proto.Field) uint64 {
 	return 0
 }
 
-// deckStatuettePlan 奖座发放计划：已有的行 + 待补发的新物品（事务外准备，
-// 静态库查询不进事务——SQLite 单连接纪律，事务内只做 INSERT）。
+// deckStatuettePlan 奖座发放计划（全部事务外准备——静态库查询不进事务的
+// SQLite 单连接纪律）：def 顺序的奖座清单、已有行、缺发构造件，以及两种
+// 来源的响应树。事务内只做权威判定（是否已有/是否补发）与 INSERT；
+// ItemToTree 读静态库，不得在事务内调用（写锁期间池化读会饿死）。
 type deckStatuettePlan struct {
-	existing []*store.Item
-	prepared []*store.Item
+	statuettes []string
+	owned      map[string]*store.Item
+	prepared   map[string]*store.Item
+	trees      map[string]*proto.Value
 }
 
-// prepareDeckStatuettes 事务外读 def 与已有奖座、构造缺发物品。
+// prepareDeckStatuettes 事务外读 def、已有奖座与缺发构造件，并预生成响应树
+// （已有行用行树；缺发用构造件树，grantPreparedItemTx 落库 guid 不变）。
 func (s *Server) prepareDeckStatuettes(ctx context.Context, uid int64, deckID string) (*deckStatuettePlan, error) {
 	def, err := s.DB.GetItemDefByItemID(ctx, deckID)
 	if err != nil || def == nil || def.Category != 82 {
@@ -49,33 +55,59 @@ func (s *Server) prepareDeckStatuettes(ctx context.Context, uid int64, deckID st
 	if err := json.Unmarshal([]byte(def.AttrsJSON), &attrs); err != nil {
 		return nil, err
 	}
-	plan := &deckStatuettePlan{}
+	rows, err := s.DB.ListItemsByContainer(ctx, uid, "backpack")
+	if err != nil {
+		return nil, err
+	}
+	plan := &deckStatuettePlan{
+		owned:    map[string]*store.Item{},
+		prepared: map[string]*store.Item{},
+		trees:    map[string]*proto.Value{},
+	}
 	for _, st := range attrs.Statuettes {
 		if st == "" {
 			continue
 		}
-		rows, err := s.DB.ListItemsByContainer(ctx, uid, "backpack")
-		if err != nil {
-			return nil, err
-		}
-		found := false
+		plan.statuettes = append(plan.statuettes, st)
 		for _, r := range rows {
 			if r.ItemID == st {
-				plan.existing = append(plan.existing, r)
-				found = true
+				plan.owned[st] = r
 				break
 			}
 		}
-		if found {
+		if row := plan.owned[st]; row != nil {
+			if tree, terr := s.ItemToTree(ctx, row); terr == nil && tree != nil {
+				plan.trees[st] = tree
+			}
 			continue
 		}
 		prepared, err := s.prepareNewItem(ctx, uid, st, "backpack", 1, "")
 		if err != nil {
 			return nil, err
 		}
-		plan.prepared = append(plan.prepared, prepared)
+		plan.prepared[st] = prepared
+		if tree, terr := s.ItemToTree(ctx, prepared); terr == nil && tree != nil {
+			plan.trees[st] = tree
+		}
 	}
 	return plan, nil
+}
+
+// deckComplete 集齐校验：f0 内嵌卡的鱼种数字 id 去重后须恰好覆盖卡组
+// def 清单（成员校验而非只比数量——数量相同但混入外组卡/重复卡不得塑封）。
+func deckComplete(cards []*proto.Value, wantNumeric map[uint32]bool) bool {
+	seen := make(map[uint32]bool, len(cards))
+	for _, entry := range cards {
+		if len(entry.Fields) <= 4 {
+			return false
+		}
+		id := entry.Fields[4].U32()
+		if !wantNumeric[id] || seen[id] {
+			return false
+		}
+		seen[id] = true
+	}
+	return len(seen) == len(wantNumeric)
 }
 
 func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
@@ -94,28 +126,11 @@ func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyFailure("System.ArgumentException", "卡册塑封参数无效")
 		return nil, true
 	}
-	// 事务外：卡册行、def、集齐校验、奖座准备（静态库查询不进事务）
-	deck, err := s.DB.GetItemByGUID(c, deckGUID)
-	if err != nil || deck == nil || deck.UID != uid || deck.WireClass != deckClass ||
-		deck.Container != tradingCardContainer {
-		ctx.ReplyFailure("System.InvalidOperationException", "卡册不存在或不属于当前玩家")
-		return nil, true
-	}
-	fields, err := FieldsFromJSON(deck.FieldsJSON)
-	if err != nil {
-		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
-		return nil, true
-	}
-	if deckSealed(fields) > 0 {
-		ctx.ReplyFailure("System.InvalidOperationException", "卡册已塑封")
-		return nil, true
-	}
-	cards, err := cardsInDeck(deck)
-	if err != nil {
-		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
-		return nil, true
-	}
-	deckDef, err := s.DB.GetItemDefByItemID(c, deck.ItemID)
+	// 事务外只做静态库读取与奖座准备（SQLite 单连接纪律）：卡册 def、
+	// 集齐判定的鱼种数字 id 集合、缺发奖座的构造件。塑封状态与集齐的
+	// 权威校验在下方事务内以事务快照复查——否则并发的同 call 请求能同时
+	// 通过预检，第二个获写锁后再插一遍奖座（2026-11-08 review P1）。
+	deckDef, err := s.DB.GetItemDefByItemID(c, deckIDByGUIDLoose(c, s, uid, deckGUID))
 	if err != nil || deckDef == nil || deckDef.Category != 82 {
 		ctx.ReplyFailure("System.InvalidOperationException", "卡册定义无效")
 		return nil, true
@@ -127,61 +142,120 @@ func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyFailure("System.InvalidOperationException", "卡册定义无效")
 		return nil, true
 	}
-	if len(cards) < len(attrs.Cards) {
-		ctx.ReplyFailure("System.InvalidOperationException", "卡册尚未集齐")
-		return nil, true
+	wantNumeric := make(map[uint32]bool, len(attrs.Cards))
+	for _, cardID := range attrs.Cards {
+		cardDef, cerr := s.DB.GetItemDefByItemID(c, cardID)
+		if cerr != nil || cardDef == nil || cardDef.Category != 78 {
+			ctx.ReplyFailure("System.InvalidOperationException", "卡册定义无效")
+			return nil, true
+		}
+		wantNumeric[uint32(cardDef.NumericID)] = true
 	}
-	plan, err := s.prepareDeckStatuettes(c, uid, deck.ItemID)
+	plan, err := s.prepareDeckStatuettes(c, uid, deckDef.ItemID)
 	if err != nil {
-		ctx.Log.Warn("卡册塑封奖座准备失败", "deck", deck.ItemID, "err", err)
+		ctx.Log.Warn("卡册塑封奖座准备失败", "deck", deckDef.ItemID, "err", err)
 		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 		return nil, true
 	}
-	// 事务内：密封时间戳 + 奖座入库（事务外已复查塑封状态）
 	tx, err := beginEconomyTx(c, s.DB)
 	if err != nil {
 		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 		return nil, true
 	}
 	defer tx.Rollback()
+	// ── 事务内权威校验与写入（review P1：并发/重放防线）──
+	deck, err := getOwnedItemTx(c, tx, uid, deckGUID)
+	if err != nil || deck == nil || deck.WireClass != deckClass || deck.Container != tradingCardContainer ||
+		deck.ItemID != deckDef.ItemID {
+		ctx.ReplyFailure("System.InvalidOperationException", "卡册不存在或不属于当前玩家")
+		return nil, true
+	}
+	fields, err := FieldsFromJSON(deck.FieldsJSON)
+	if err != nil {
+		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+		return nil, true
+	}
+	if deckSealed(fields) > 0 {
+		// 重放/并发的第二发在此拦截（首个事务已提交密封）
+		ctx.ReplyFailure("System.InvalidOperationException", "卡册已塑封")
+		return nil, true
+	}
+	cards, err := cardsInDeck(deck)
+	if err != nil {
+		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+		return nil, true
+	}
+	if !deckComplete(cards, wantNumeric) {
+		ctx.ReplyFailure("System.InvalidOperationException", "卡册尚未集齐")
+		return nil, true
+	}
 	fields[1].Num = ptrU64(uint64(proto.WindowsFiletimeNow()))
 	if err := updateItemFieldsTx(c, s.DB, tx, deck, fields); err != nil {
 		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 		return nil, true
 	}
-	granted := make([]*store.Item, 0, len(plan.prepared))
-	for _, prepared := range plan.prepared {
-		row, _, gerr := grantPreparedItemTx(c, tx, prepared, false)
-		if gerr != nil {
+	// 奖座幂等补发：是否已有以事务内查询为准，只插缺的
+	trees := proto.Args(proto.S("61"))
+	granted := 0
+	for _, st := range plan.statuettes {
+		if _, terr := scanTxItem(tx.QueryRowContext(c, `SELECT `+txItemCols+
+			` FROM item WHERE uid=? AND item_id=? ORDER BY created_ts,guid LIMIT 1`, uid, st)); terr == nil {
+			if plan.trees[st] != nil {
+				trees.Items = append(trees.Items, plan.trees[st])
+			}
+			continue
+		} else if terr != sql.ErrNoRows {
 			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 			return nil, true
 		}
-		granted = append(granted, row)
-		s.log.Info("卡册塑封发奖座", "uid", uid, "deck", deck.ItemID, "item", prepared.ItemID)
-	}
-	if err := tx.Commit(); err != nil {
-		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
-		return nil, true
-	}
-	// ACK：obj-809 四值（f1=奖座树，可为空数组）
-	trees := proto.Args(proto.S("61"))
-	for _, row := range append(plan.existing, granted...) {
-		if tree, terr := s.ItemToTree(c, row); terr == nil && tree != nil {
-			trees.Items = append(trees.Items, tree)
+		prepared := plan.prepared[st]
+		if prepared == nil {
+			// 事务外已拥有但事务内查无：行被并发移动/删除，拒绝重试
+			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+			return nil, true
+		}
+		if _, _, gerr := grantPreparedItemTx(c, tx, prepared, false); gerr != nil {
+			ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+			return nil, true
+		}
+		granted++
+		s.log.Info("卡册塑封发奖座", "uid", uid, "deck", deck.ItemID, "item", st)
+		if plan.trees[st] != nil {
+			trees.Items = append(trees.Items, plan.trees[st])
 		}
 	}
+	// 响应在提交前构造完毕：提交后不再有可失败步骤（review 次要项）。
+	// f0 plhpmhpadcg[] 的 args code 未在真实注册表实证（已实证仅 61/362/
+	// 363/364，见 trading-card-array-types spec；DTO 名直发会 GetType not
+	// found，错码会 InvalidCastException），按实测安全值发 null。
 	body, err := proto.EncodeValue(wiregen.MustMakeObj("gglppphenoi", map[int]*proto.Value{
-		0: proto.Null(), 1: trees, 2: proto.Null(), 3: proto.Null(),
+		0: proto.Null(), 1: trees, 2: proto.Args(proto.S("61")), 3: proto.GuidArr(nil),
 	}), s.Table())
 	if err != nil {
 		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
 		return nil, true
 	}
-	// 会话内刷新：卡册 f1 已变、奖座进背包
-	s.resyncTradingCardsTwice(ctx.Sess, uid)
-	for _, row := range granted {
-		s.pushItemUpdate(uid, row)
+	if err := tx.Commit(); err != nil {
+		ctx.ReplyFailure("System.IO.IOException", "卡册塑封失败，请重试")
+		return nil, true
 	}
-	ctx.Log.Info("卡册塑封完成", "uid", uid, "deck", deck.ItemID, "rewards", len(trees.Items))
+	// 会话内刷新：卡册 f1 已变、新奖座进背包
+	s.resyncTradingCardsTwice(ctx.Sess, uid)
+	for _, prepared := range plan.prepared {
+		if row, gerr := s.DB.GetItemByGUID(c, prepared.GUID); gerr == nil && row != nil {
+			s.pushItemUpdate(uid, row)
+		}
+	}
+	ctx.Log.Info("卡册塑封完成", "uid", uid, "deck", deck.ItemID, "rewards", len(trees.Items), "granted", granted)
 	return body, true
+}
+
+// deckIDByGUIDLoose 事务外按卡册实例 guid 粗取 def id（仅用于静态库预读；
+// 权威归属校验在事务内）。
+func deckIDByGUIDLoose(ctx context.Context, s *Server, uid int64, deckGUID string) string {
+	row, err := s.DB.GetItemByGUID(ctx, deckGUID)
+	if err != nil || row == nil || row.UID != uid {
+		return deckGUID // 查无此行时原样返回，让 def 校验拒绝
+	}
+	return row.ItemID
 }

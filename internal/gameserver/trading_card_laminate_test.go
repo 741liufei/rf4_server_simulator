@@ -51,6 +51,13 @@ func TestTradingCardLaminate(t *testing.T) {
 	if f1 := v.Fields[1].Val; f1.Kind != proto.KindArgs || len(f1.Items) != 1 {
 		t.Fatalf("f1 应含奖座树: %+v", f1)
 	}
+	// 数组字段恒发空数组（仓库硬约束）：f2=空 args(61)、f3=空 GuidArr
+	if f2 := v.Fields[2].Val; f2.Kind != proto.KindArgs || f2.Code == nil || *f2.Code != "61" || len(f2.Items) != 0 {
+		t.Fatalf("f2 应为空 args(61) 数组: %+v", f2)
+	}
+	if f3 := v.Fields[3].Val; f3.Kind != proto.KindGuidArr || len(f3.Items) != 0 {
+		t.Fatalf("f3 应为空 GuidArr: %+v", f3)
+	}
 	// f1 时间戳 = FILETIME（约 1.3e17 量级；.NET Ticks 是 6.4e17 量级，
 	// 发错单位客户端 FromFileTime 会渲染成 +1600 年）
 	deck, err := db.GetItemByGUID(c, deckGUID)
