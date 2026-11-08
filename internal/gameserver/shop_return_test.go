@@ -3,6 +3,7 @@ package gameserver
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"testing"
@@ -38,6 +39,21 @@ func buyReturnTestItem(t *testing.T, s *Server, uid int64, shop, item string, go
 		t.Fatal(err)
 	}
 	return row
+}
+
+func buyReturnTestRod(t *testing.T, s *Server, db *store.DB, uid int64) *store.Item {
+	t.Helper()
+	const rodID = "boatr_10213_012"
+	if _, err := db.EnsureProfile(context.Background(), uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET silver=200000 WHERE uid=?`, uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop',?,100000,0,10)`, rodID); err != nil {
+		t.Fatal(err)
+	}
+	return buyReturnTestItem(t, s, uid, "shop", rodID, false)
 }
 
 func TestStoreReturnFourShopsBothCurrenciesAndReplay(t *testing.T) {
@@ -104,7 +120,7 @@ func TestStoreReturnRejectsModifiedForeignAndWrongShop(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s, db := newEconomyTxTestServer(t)
 			const uid = int64(4502)
-			seedEconomyItemDef(t, db, 991002, "return_hook", 27)
+			seedEconomyItemDef(t, db, 991002, "return_hook", 12)
 			db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop','return_hook',135,7,10)`)
 			db.EnsureProfile(context.Background(), uid)
 			db.SQL.Exec(`UPDATE profile SET silver=1000,gold=100 WHERE uid=?`, uid)
@@ -162,7 +178,7 @@ func TestStoreReturnRejectsModifiedForeignAndWrongShop(t *testing.T) {
 func TestStoreReturnKeepsExistingStackAndRefundsEachPurchase(t *testing.T) {
 	s, db := newEconomyTxTestServer(t)
 	const uid = int64(4503)
-	seedEconomyItemDef(t, db, 991003, "stack_hook", 27)
+	seedEconomyItemDef(t, db, 991003, "stack_hook", 12)
 	db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop','stack_hook',135,7,10)`)
 	db.EnsureProfile(context.Background(), uid)
 	db.SQL.Exec(`UPDATE profile SET silver=1000 WHERE uid=?`, uid)
@@ -226,13 +242,20 @@ func TestRecoverStorePurchasesOnlyUntouchedUniqueItems(t *testing.T) {
 }
 
 func TestStoreReturnBundleRefundsOnceAndPreservesUnrelatedStack(t *testing.T) {
-	s, db := newBundleTestServer(t)
+	s, db := newEconomyTxTestServer(t)
 	const uid = int64(4505)
+	const bundleID = "return_bundle"
+	seedEconomyItemDef(t, db, 991005, "return_hook", 12)
+	if _, err := db.SQL.Exec(`INSERT OR REPLACE INTO item_def(numeric_id,item_id,category,kind,brand,attrs_json)
+		VALUES(?,?,?, '','',?)`, 991006, bundleID, bundleCategory,
+		`{"nbkhfhenbag":[{"cemjmlpafmc":"return_hook","ljnnpokapig":1}]}`); err != nil {
+		t.Fatal(err)
+	}
 	db.EnsureProfile(context.Background(), uid)
 	db.SQL.Exec(`UPDATE profile SET silver=1000 WHERE uid=?`, uid)
-	db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop',?,135,0,10)`, testBundleID)
-	original := economyTestItem(t, s, uid, testBundleContentsID, "backpack", 3)
-	c := economyTestCtx(s, uid, proto.Args524(proto.StrVal("shop"), proto.StrVal(testBundleID), proto.U64(0)))
+	db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop',?,135,0,10)`, bundleID)
+	original := economyTestItem(t, s, uid, "return_hook", "backpack", 3)
+	c := economyTestCtx(s, uid, proto.Args524(proto.StrVal("shop"), proto.StrVal(bundleID), proto.U64(0)))
 	if b, ok := hStoreBuy(false)(c); !ok || len(b) == 0 {
 		t.Fatal("bundle purchase failed")
 	}
@@ -255,5 +278,166 @@ func TestStoreReturnBundleRefundsOnceAndPreservesUnrelatedStack(t *testing.T) {
 	db.SQL.QueryRow(`SELECT silver FROM profile WHERE uid=?`, uid).Scan(&silver)
 	if silver != 1000 {
 		t.Fatalf("bundle refund=%d", silver)
+	}
+}
+
+func TestStoreReturnEnforces48HourWindow(t *testing.T) {
+	s, db := newEconomyTxTestServer(t)
+	const uid = int64(4506)
+	seedEconomyItemDef(t, db, 991006, "window_float", 28)
+	db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop','window_float',135,7,10)`)
+	db.EnsureProfile(context.Background(), uid)
+	db.SQL.Exec(`UPDATE profile SET silver=1000 WHERE uid=?`, uid)
+	row := buyReturnTestItem(t, s, uid, "shop", "window_float", false)
+
+	purchaseKey := storePurchaseKey(uid, row.GUID)
+	var raw string
+	if err := db.SQL.QueryRow(`SELECT v FROM kv WHERE k=?`, purchaseKey).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var purchase storePurchase
+	if err := json.Unmarshal([]byte(raw), &purchase); err != nil {
+		t.Fatal(err)
+	}
+	now := worldTotalGameMin(time.Now())
+	purchase.BoughtMinute = now - storeReturnWindowGameMin
+	data, err := json.Marshal(purchase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE kv SET v=? WHERE k=?`, string(data), purchaseKey); err != nil {
+		t.Fatal(err)
+	}
+
+	c := storeReturnTestCtx(t, s, uid, "shop", row.GUID, 60)
+	hStoreReturn(c)
+	failureBody, _, _, failure := c.replyCapture.snapshot()
+	if !failure {
+		t.Fatal("expired return accepted")
+	}
+	if want := proto.BuildFailureEnvelope(c.CallID, "RF4.API.APIError", strconv.Itoa(149)); !bytes.Equal(failureBody, want) {
+		t.Fatalf("expired return must report 149, got %x", failureBody)
+	}
+	if _, err := db.GetItemByGUID(context.Background(), row.GUID); err != nil {
+		t.Fatal("expired return lost item")
+	}
+
+	purchase.BoughtMinute = now - storeReturnWindowGameMin + 100
+	data, err = json.Marshal(purchase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE kv SET v=? WHERE k=?`, string(data), purchaseKey); err != nil {
+		t.Fatal(err)
+	}
+	if body, ok := hStoreReturn(storeReturnTestCtx(t, s, uid, "shop", row.GUID, 61)); !ok || len(body) == 0 {
+		t.Fatal("return inside 48h window failed")
+	}
+	var silver int64
+	db.SQL.QueryRow(`SELECT silver FROM profile WHERE uid=?`, uid).Scan(&silver)
+	if silver != 1000 {
+		t.Fatalf("window refund=%d", silver)
+	}
+}
+
+func TestStoreReturnRejectsNonReturnableCategories(t *testing.T) {
+	for _, category := range []int64{18, 19, 27} {
+		t.Run(fmt.Sprintf("category_%d", category), func(t *testing.T) {
+			s, db := newEconomyTxTestServer(t)
+			const uid = int64(4507)
+			itemID := fmt.Sprintf("bad_category_%d", category)
+			seedEconomyItemDef(t, db, 992000+category, itemID, category)
+			db.SQL.Exec(`INSERT INTO shop_item(store_id,item_id,silver,gold,stock) VALUES('shop',?,135,7,10)`, itemID)
+			db.EnsureProfile(context.Background(), uid)
+			db.SQL.Exec(`UPDATE profile SET silver=1000,gold=100 WHERE uid=?`, uid)
+			row := buyReturnTestItem(t, s, uid, "shop", itemID, false)
+
+			c := storeReturnTestCtx(t, s, uid, "shop", row.GUID, 62)
+			hStoreReturn(c)
+			failureBody, _, _, failure := c.replyCapture.snapshot()
+			if !failure {
+				t.Fatal("non-returnable category accepted")
+			}
+			if want := proto.BuildFailureEnvelope(c.CallID, "RF4.API.APIError", strconv.Itoa(196)); !bytes.Equal(failureBody, want) {
+				t.Fatalf("non-returnable category must report 196, got %x", failureBody)
+			}
+			if _, err := db.GetItemByGUID(context.Background(), row.GUID); err != nil {
+				t.Fatal("rejected category lost item")
+			}
+			var silver int64
+			db.SQL.QueryRow(`SELECT silver FROM profile WHERE uid=?`, uid).Scan(&silver)
+			if silver != 865 {
+				t.Fatal("rejected category changed wallet")
+			}
+		})
+	}
+}
+
+func TestStoreReturnRodAllowsFactoryProjectionAndCleansRig(t *testing.T) {
+	s, db := newEconomyTxTestServer(t)
+	const uid = int64(4508)
+	row := buyReturnTestRod(t, s, db, uid)
+	if n, err := s.BackfillRigProjections(context.Background()); err != nil || n == 0 {
+		t.Fatalf("backfill rods=%d err=%v", n, err)
+	}
+	comps, err := db.ListRigComponents(context.Background(), row.GUID)
+	if err != nil || len(comps) == 0 {
+		t.Fatalf("factory rig projection missing: %d %v", len(comps), err)
+	}
+	if _, err := db.SQL.Exec(`INSERT OR REPLACE INTO rig(guid,uid,rig_type,name,fields_json) VALUES(?,?,?,?,?)`, row.GUID, uid, 0, "rod", "{}"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT OR REPLACE INTO rod_setting(guid,key,value,updated_ts) VALUES(?,?,?,?)`, row.GUID, "test", "1", 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if body, ok := hStoreReturn(storeReturnTestCtx(t, s, uid, "shop", row.GUID, 63)); !ok || len(body) == 0 {
+		t.Fatal("factory rod return failed")
+	}
+	if current, err := db.GetItemByGUID(context.Background(), row.GUID); err == nil && current != nil {
+		t.Fatal("returned rod still exists")
+	}
+	for _, q := range []string{
+		`SELECT COUNT(*) FROM rig_component WHERE rig_guid=?`,
+		`SELECT COUNT(*) FROM rig WHERE guid=? AND uid=?`,
+		`SELECT COUNT(*) FROM rod_setting WHERE guid=?`,
+	} {
+		var n int
+		args := []any{row.GUID}
+		if q == `SELECT COUNT(*) FROM rig WHERE guid=? AND uid=?` {
+			args = append(args, uid)
+		}
+		if err := db.SQL.QueryRow(q, args...).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("return left rig residue: query=%s n=%d err=%v", q, n, err)
+		}
+	}
+	var silver int64
+	db.SQL.QueryRow(`SELECT silver FROM profile WHERE uid=?`, uid).Scan(&silver)
+	if silver != 200000 {
+		t.Fatalf("rod refund=%d", silver)
+	}
+}
+
+func TestStoreReturnRodRejectsPlayerAddedProjection(t *testing.T) {
+	s, db := newEconomyTxTestServer(t)
+	const uid = int64(4509)
+	row := buyReturnTestRod(t, s, db, uid)
+	if _, err := s.BackfillRigProjections(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`INSERT INTO rig_component(rig_guid,slot,ordinal,guid,extra) VALUES(?,?,?,?,?)`,
+		row.GUID, 99, 0, "aa000000000000000000000000000099", 0); err != nil {
+		t.Fatal(err)
+	}
+	c := storeReturnTestCtx(t, s, uid, "shop", row.GUID, 64)
+	hStoreReturn(c)
+	failureBody, _, _, failure := c.replyCapture.snapshot()
+	if !failure {
+		t.Fatal("rod with added projection accepted")
+	}
+	if want := proto.BuildFailureEnvelope(c.CallID, "RF4.API.APIError", strconv.Itoa(151)); !bytes.Equal(failureBody, want) {
+		t.Fatalf("added projection must report 151, got %x", failureBody)
+	}
+	if current, err := db.GetItemByGUID(context.Background(), row.GUID); err != nil || current == nil {
+		t.Fatal("rejected rod return lost item")
 	}
 }
