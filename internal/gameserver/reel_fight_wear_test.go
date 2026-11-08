@@ -3,12 +3,14 @@ package gameserver
 // 搏鱼渔轮磨损回归：通道一（泄力打滑）只在未锁轮且鱼力超过当前泄力时计；通道二
 // （锁轮过载）按发热曲线烧，且过载段之间不累积（解锁即段作废，下段从曲线开头重爬）。
 // 摩擦片剩余寿命必须同步压低泄力与锁轮承力，结算每竿一次、重发不重复扣。
+// 过载秒数按服务端收到 14/8 的真实间隔累加：客户端上报密度会变，固定节拍折算会把摩擦片烧错。
 // 口径见 specs/changes/reel-friction-life-model/spec.md。
 
 import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"rf4server/internal/logging"
 )
@@ -246,4 +248,69 @@ func TestFightReelWearWithoutReelIsSafe(t *testing.T) {
 	// 没在搏鱼时收到 14/8 也必须安全返回。
 	sess := newProbeSess(srv)
 	srv.recordFightReelLoad(&Ctx{Sess: sess, Main: 14, Sub: 8, Tree: nil, DecodeOK: true, Log: logging.Discard()})
+}
+
+// TestFightReelLoadTickUsesRealGaps 断过载时长的折算口径：本竿第一条上报按兜底
+// 节拍起算，之后按两条上报之间的真实秒数，间隔过大只记上限，时钟回拨不倒扣。
+func TestFightReelLoadTickUsesRealGaps(t *testing.T) {
+	base := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	w := fightReelWear{}
+	if got := w.loadTickSecondsLocked(base, defaultReelLoadTickSeconds, defaultReelLoadMaxTickSeconds); got != defaultReelLoadTickSeconds {
+		t.Fatalf("首条上报应按兜底节拍 %.2fs 起算，实得 %.2fs", defaultReelLoadTickSeconds, got)
+	}
+	w.lastLoadAt = base
+	cases := []struct {
+		name   string
+		offset time.Duration
+		want   float64
+	}{
+		{"上报比节拍快只记真实间隔", 600 * time.Millisecond, 0.6},
+		{"上报比节拍慢记到 4 秒", 4 * time.Second, 4},
+		{"迟到上报只记上限", 40 * time.Second, defaultReelLoadMaxTickSeconds},
+		{"时钟回拨不倒扣", -2 * time.Second, 0},
+	}
+	for _, tc := range cases {
+		got := w.loadTickSecondsLocked(base.Add(tc.offset), defaultReelLoadTickSeconds, defaultReelLoadMaxTickSeconds)
+		if math.Abs(got-tc.want) > 1e-9 {
+			t.Fatalf("%s: 应折算 %.2fs，实得 %.2fs", tc.name, tc.want, got)
+		}
+	}
+}
+
+// TestFightReelBurnSecondsFollowRealGaps 断发热秒数不再假设“一条上报 = 1.9 秒”：
+// 客户端上报翻倍密集时，累计秒数仍只跟着真实时间走，摩擦片不会被虚增时长多烧。
+func TestFightReelBurnSecondsFollowRealGaps(t *testing.T) {
+	srv := &Server{}
+	base := time.Date(2026, 11, 8, 12, 0, 0, 0, time.UTC)
+	ledger := newFightWearForTest(7.7, 5, 7.7, 11.55, 1, 1, true)
+	var secs, wear float64
+	for i := 0; i < 8; i++ {
+		at := base.Add(time.Duration(i) * 500 * time.Millisecond)
+		tick := ledger.loadTickSecondsLocked(at, defaultReelLoadTickSeconds, defaultReelLoadMaxTickSeconds)
+		_, _, burn, _, seg := srv.fightReelTickWear(ledger, tick)
+		wear += burn
+		secs += tick
+		ledger.SegSecs = seg
+		ledger.lastLoadAt = at
+	}
+	// 首条 1.9 秒兜底，其余 7 条真实间隔 0.5 秒。
+	if want := defaultReelLoadTickSeconds + 7*0.5; math.Abs(secs-want) > 1e-9 {
+		t.Fatalf("发热秒数应按真实时长 %.2fs 累加，实得 %.2fs", want, secs)
+	}
+	// 同样的 8 条上报，按旧口径一律折 1.9 秒会多记近三倍时长，磨损必须更狠。
+	fixed := newFightWearForTest(7.7, 5, 7.7, 11.55, 1, 1, true)
+	var fixedWear float64
+	for i := 0; i < 8; i++ {
+		_, _, burn, _, seg := srv.fightReelTickWear(fixed, defaultReelLoadTickSeconds)
+		fixedWear += burn
+		fixed.SegSecs = seg
+	}
+	if !(wear < fixedWear) {
+		t.Fatalf("密集上报按真实时长结算应更省：真实 %.4f 固定节拍 %.4f", wear, fixedWear)
+	}
+	// 同一瞬间的重复上报不带时长，也就一分磨损都不该记。
+	dup := newFightWearForTest(7.7, 5, 7.7, 11.55, 1, 1, true)
+	if ticks, slip, burn, burnSecs, _ := srv.fightReelTickWear(dup, 0); ticks != 0 || slip != 0 || burn != 0 || burnSecs != 0 {
+		t.Fatalf("零时长上报不该产生任何磨损： ticks=%d slip=%v burn=%v", ticks, slip, burn)
+	}
 }

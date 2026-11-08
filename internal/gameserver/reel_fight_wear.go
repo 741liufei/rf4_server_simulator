@@ -7,19 +7,27 @@ package gameserver
 // 未锁轮且鱼拉力高于当前泄力 → 泄力打滑磨摩擦片；锁轮且鱼拉力高于此刻承力 →
 // 按发热曲线烧摩擦片，解锁散热、下次锁轮从曲线开头重新慢慢爬。
 // 节拍跟着客户端 14/8 负载上报：实测搏鱼期间每 1.8~2.0 秒一条，一条算一次判定。
+// 过载秒数按服务端收到 14/8 的真实间隔累加，不按“一条上报 = 固定节拍”折算：
+// 实测节拍 1.8~2.0 秒只是客户端的默认节奏，帧率与卡顿都会改变它。
 // 口径见 specs/changes/reel-friction-life-model/spec.md。
 
 import (
 	"context"
 	"math"
+	"time"
 
 	"rf4server/internal/proto"
 	"rf4server/internal/store"
 )
 
 const (
-	// defaultReelLoadTickSeconds 是一条 14/8 上报折算的时长（tunable reel_load_tick_seconds）。
+	// defaultReelLoadTickSeconds 是本竿第一条 14/8 的兜底时长（tunable reel_load_tick_seconds）：
+	// 还没收到过上一条上报时服务端不知道前面已经过了多久，按实测节拍 1.9 秒起算。
 	defaultReelLoadTickSeconds = 1.9
+	// defaultReelLoadMaxTickSeconds 是两条 14/8 之间最多折算的秒数（tunable
+	// reel_load_max_tick_seconds）：客户端卡顿、切场景或掉线会把间隔拉长，超过上限
+	// 就不再补记，宁可少烧一点摩擦片，也不让一条迟到上报把整段发热曲线一次烧完。
+	defaultReelLoadMaxTickSeconds = 5.0
 	// defaultReelBurnBaseSeconds 是校准点摩擦片连续锁轮的烧穿秒数（tunable reel_locked_burn_base_s）。
 	defaultReelBurnBaseSeconds = 10.0
 	// defaultReelBurnCurve 是锁轮过载的发热曲线指数（tunable reel_locked_burn_curve）：
@@ -54,6 +62,11 @@ type fightReelWear struct {
 	BaseCharged bool    // 本竿的“每竿基准 + 泡水”是否已计入本账
 	BreakHits   int     // 断件冲击次数：只在真断线/断竿那一次扣
 	settled     bool    // 本竿是否已落库（每竿一次）
+	// lastLoadAt 是上一条 14/8 到达服务端的时刻，用来把过载秒数换成真实时长；
+	// loadProbe 累计负载上报里的字段读数。两者都不结算，也只是进程内状态，
+	// 所以做成非导出字段，不进钓组状态的 JSON 快照。
+	lastLoadAt time.Time
+	loadProbe  fightLoadProbe
 }
 
 // reset 清空本竿账本（新的一杆）。
@@ -105,6 +118,23 @@ func (w *fightReelWear) markRodBreakLocked() {
 	}
 	w.Used = true
 	w.BreakHits++
+}
+
+// loadTickSecondsLocked 把两条 14/8 之间的真实间隔折算成结算时长（秒）。
+// 首条上报按 tunable 的兜底节拍起算：在那之前过了多久服务端无从得知。间隔为负
+// （时钟回拨）算 0 秒，超过上限只记上限，免得一条迟到上报把整段发热曲线一次烧完。
+func (w *fightReelWear) loadTickSecondsLocked(now time.Time, def, maxTick float64) float64 {
+	if w.lastLoadAt.IsZero() {
+		return def
+	}
+	gap := now.Sub(w.lastLoadAt).Seconds()
+	if gap <= 0 {
+		return 0
+	}
+	if gap > maxTick {
+		return maxTick
+	}
+	return gap
 }
 
 // partCounts 把本竿账本折算成零件消耗事件：过载秒数与打滑次数直接沿用摩擦片那条账，
@@ -246,12 +276,15 @@ func (s *Server) reelBurnSecondsFor(w fightReelWear) float64 {
 	return T
 }
 
-// fightReelTickWear 把一条 14/8 折算成磨损增量。
+// fightReelTickWear 把一条 14/8 折算成磨损增量，tick 是它与上一条上报之间的真实秒数。
 //
 // 未锁轮：鱼拉力高于当前泄力才算打滑，单次 reelSlipWear 再乘超出比例与轮油系数。
 // 锁轮：鱼拉力高于此刻承力才算过载，按 (段内秒数/T)^p 在段内加速；一旦不再过载
 // （解锁、卸力、鱼停），段作废，下段从曲线开头重新爬。
 func (s *Server) fightReelTickWear(w fightReelWear, tick float64) (ticks int, slipWear, burnWear, burnSecs, segSecs float64) {
+	if tick <= 0 {
+		return 0, 0, 0, 0, 0
+	}
 	if w.locked {
 		if w.lockedKg <= 0 || w.pullKg <= w.lockedKg+1e-9 {
 			return 0, 0, 0, 0, 0
@@ -305,10 +338,19 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 	if !cached.valid || cached.ratedKg <= 0 {
 		return
 	}
+	// 过载秒数按真实时长结算：上一条 14/8 到这一条之间隔了多久就记多久，
+	// 只有本竿第一条上报才用兜底节拍（那之前服务端不知道已经过了多久）。
+	now := time.Now()
 	tick := s.tunableF("reel_load_tick_seconds", defaultReelLoadTickSeconds)
 	if tick <= 0 || tick > 30 {
 		tick = defaultReelLoadTickSeconds
 	}
+	maxTick := s.tunableF("reel_load_max_tick_seconds", defaultReelLoadMaxTickSeconds)
+	if maxTick <= 0 || maxTick > 60 {
+		maxTick = defaultReelLoadMaxTickSeconds
+	}
+	probeOn := s.tunableF("fight_load_probe", 1) != 0
+	tick = cached.loadTickSecondsLocked(now, tick, maxTick)
 	ticks, slipWear, burnWear, burnSecs, segSecs := s.fightReelTickWear(cached, tick)
 
 	st.mu.Lock()
@@ -331,6 +373,12 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 	cur.BurnWear += burnWear
 	cur.BurnSecs += burnSecs
 	cur.SegSecs = segSecs
+	cur.lastLoadAt = now
+	if probeOn {
+		// 只观测不结算：14/8 里哪个载荷是鱼拉力还没有第二份证据，先把每竿的字段
+		// 范围写进损伤日志，攒够凭据再决定要不要用它。
+		cur.loadProbe.observe(ctx.Tree, ctx.DecodeOK)
+	}
 	st.mu.Unlock()
 	if hasPrevious {
 		s.applyFightReelWear(s.dbCtx(), uid, previous, "14/8")
@@ -432,6 +480,10 @@ func fightWearDetailFields(w fightReelWear, wear float64, parts map[string]float
 	}
 	if w.BreakHits > 0 {
 		detail["break_hits"] = w.BreakHits
+	}
+	// 负载观测只进日志：字段范围是下一步挑出鱼拉力的凭据，不参与结算。
+	for key, val := range w.loadProbe.logFields() {
+		detail[key] = val
 	}
 	if len(parts) > 0 {
 		partWear := map[string]float64{}
