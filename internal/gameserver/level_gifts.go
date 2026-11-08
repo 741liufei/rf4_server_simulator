@@ -15,7 +15,9 @@ import (
 	"fmt"
 	"strings"
 
+	"rf4server/internal/proto"
 	"rf4server/internal/store"
+	"rf4server/internal/wiregen"
 )
 
 // levelGift 礼物条目：计件物品按 Qty 精确发放（件），装备类 Qty 忽略（1 件）；
@@ -124,6 +126,41 @@ func (s *Server) notifyLevelUpGiftChat(uid, level, skillCat int64) {
 	for _, sess := range s.sessionsForUID(uid) {
 		sess.pushSystemChat(text)
 	}
+}
+
+// giftRows811Arg 把本次直发的礼物包装成 811(plhpmhpadcg) 礼物行数组，供
+// 807.f1（放流）与 801.f4（收鱼结算）携带：外层 args code 173（argcode_table
+// by_elem 811→173），单行 {f0=1(ehbdkjmbdee 新级别礼物), f1=最终等级,
+// f2=礼物物品树(args 61), f3=空物品数组}。客户端结算弹窗
+// kegidigbokk(source=1) 只从 811 数组取卡片渲染"新级别礼物"栈
+// （GameAssembly 0x180D4BD40 / 收集 0x180D48C90）；多级连升合并为一行，
+// 客户端对同 source 行取物品并集渲染单个礼物栈。无礼物时回 null
+// （官服未升级样本该槽位即为 null，见 monitor docs/LEVEL_UP_GIFT_CARDS.md）。
+func (s *Server) giftRows811Arg(ctx context.Context, newLevel int64, rows []*store.Item) (*proto.Value, error) {
+	if len(rows) == 0 {
+		return proto.Null(), nil
+	}
+	items := proto.Args(proto.S("61"))
+	for _, row := range rows {
+		if row == nil {
+			continue
+		}
+		tree, err := s.ItemToTree(ctx, row)
+		if err != nil {
+			return nil, err
+		}
+		items.Items = append(items.Items, tree)
+	}
+	line, err := wiregen.MakeObj("bkmnmjcfbic", map[int]*proto.Value{
+		0: proto.U32(1), // ehbdkjmbdee=1 新级别礼物：客户端 kegidigbokk 的匹配键
+		1: proto.U32(uint32(max64(0, newLevel))),
+		2: items,
+		3: proto.Args(proto.S("61")), // 恒空数组（红线：数组不发 null）
+	})
+	if err != nil {
+		return nil, err
+	}
+	return proto.Args(proto.S("173"), line), nil
 }
 
 // grantLevelUpGift 单级发放：幂等键与全部物品在同一事务内提交，先到先得。

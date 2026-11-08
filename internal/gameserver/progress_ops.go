@@ -413,12 +413,22 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 			grants.Items = append(grants.Items, tree)
 		}
 	}
+	// 升级礼物行：801.f4 = 811 数组（f0=1 新级别），客户端 GameResult 弹窗
+	// 从该数组渲染"新级别礼物"卡片栈；无礼物保持 null（官服未升级样本形态）。
+	giftRows := proto.Null()
+	if hasFish && res != nil && len(res.giftItems) > 0 {
+		if rows, rerr := s.giftRows811Arg(cctx, res.newLevel, res.giftItems); rerr != nil {
+			ctx.Log.Warn("升级礼物行构造失败（801.f4 置空）", "err", rerr)
+		} else {
+			giftRows = rows
+		}
+	}
 	obj801, err := wiregen.MakeObj("caagocpofin", map[int]*proto.Value{
 		0:  f0,
 		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
 		2:  proto.U32(f32Const801F2),
 		3:  build5003(),
-		4:  proto.Null(),
+		4:  giftRows,
 		5:  proto.Null(),
 		6:  f6,
 		7:  f7,

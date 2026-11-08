@@ -45,12 +45,20 @@ Comfort Telescopic 5 浮钓套。
   `settleCatchOnce`（14/4 收竿结算，钓法取本尾鱼 SkillID）与 `releaseCatchOnce`
   （14/6 放生，新增 rigType 参数取 `st.RigType`，bonus>0 时）；重放路径提前返回
   天然隔离。多级连升按 from+1..to 逐级各发一份。
+- 呈现层（官方"新级别礼物"卡片）：结算弹窗客户端只从响应内嵌的 **811 礼物行数组**
+  取卡片渲染（`kegidigbokk(source=1)`，GameAssembly 0x180D4BD40；依据见
+  monitor `docs/LEVEL_UP_GIFT_CARDS.md`）。礼物发放后按
+  `args(173)[ obj(811){f0=1, f1=最终等级, f2=礼物物品(args 61), f3=空} ]`
+  填 **807.f1（放流）** 与 **801.f4（收鱼结算）**；无礼物保持 null（官服未升级
+  样本形态）。礼物本体同时推 4/22。客户端实测（2026-11-08）：卡片栈出现，
+  物品与背包一致。
 - 开关：tunable `level_gifts_enabled`（默认 1；<=0 时整体跳过，旧行为）。
-- 不改协议响应形状、不改表结构、不加迁移。
+- 表结构、迁移：不变（811 行复用既有 wiregen 表与 argcode 表）。
 
 ## Testing Decisions
 
-- 测试层：存储/行为层（真实 SQLite，沿用 `newRigTestServer` 助手）。
+- 测试层：存储/行为层（真实 SQLite，沿用 `newRigTestServer` 助手）+ 协议响应层
+  （解码 801/807 body 断言 811 行形状与重放置空）。
 - 重写 `TestCatchAndReleaseLevelUpWithoutGoldOrGiftMail` 为两个用例：
   - `TestCatchAndReleaseLevelUpGrantsOfficialGifts`：9→10 结算直发 `naiad`×15
     （金币不变、无邮件）；同一尾鱼重放不重发；放生再回 10 级不重发；关闭
@@ -65,3 +73,6 @@ Comfort Telescopic 5 浮钓套。
 - 11 级以上（12+）的礼物；2~10 级礼物按钓法分套（官方画面为全服统一表）。
 - 升级发金币/技能点（官方升级奖励不含金币；技能点由既有技能系统处理）。
 - 邮件协议形状变更（`19/x` 维持现状）。
+- 独立于结算弹窗之外的全屏礼物展示页（club 渠道）；结算弹窗内的礼物卡片栈
+  已随 811 行实现。官方"升级时刻"的 807/801 报文样本仍缺，f0=1 行的 f1/f2/f3
+  细节如有出入以官服抓包为准再校准。

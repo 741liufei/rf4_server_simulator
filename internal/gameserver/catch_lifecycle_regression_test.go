@@ -150,6 +150,131 @@ func TestCatchAndReleaseLevelUpGrantsOfficialGifts(t *testing.T) {
 	}
 }
 
+// assertGiftRow 校验 811 礼物行数组的线型形状，返回行对象：
+// args(173)[ obj(tid=811){f0=1 新级别, f1=等级, f2=args(61)[物品...], f3=args(61)[]} ]。
+// 客户端 kegidigbokk(source=1)（GameAssembly 0x180D4BD40）只从该数组取卡片。
+func assertGiftRow(t *testing.T, v *proto.Value, wantLevel int64, wantItems int) *proto.Value {
+	t.Helper()
+	if v == nil || v.Kind != proto.KindArgs || v.ArgCodeStr() != "173" || v.ArgCount() != 1 {
+		t.Fatalf("礼物行应为 args(173)[1], 实得 kind=%s code=%q count=%d", v.Kind, v.ArgCodeStr(), v.ArgCount())
+	}
+	line := v.Items[0]
+	if line == nil || line.Kind != proto.KindObj || line.TypeID != 811 {
+		t.Fatalf("礼物行元素应为 tid=811 obj, 实得 kind=%s tid=%d", line.Kind, line.TypeID)
+	}
+	if got := u64Of(line.Fields[0].Num); got != 1 {
+		t.Fatalf("811.f0 应为 1(新级别), 实得 %d", got)
+	}
+	if got := u64Of(line.Fields[1].Num); got != uint64(wantLevel) {
+		t.Fatalf("811.f1 应为 %d, 实得 %d", wantLevel, got)
+	}
+	items := line.Fields[2].Val
+	if items == nil || items.Kind != proto.KindArgs || items.ArgCodeStr() != "61" || items.ArgCount() != wantItems {
+		t.Fatalf("811.f2 应为 args(61)[%d], 实得 kind=%s code=%q count=%d",
+			wantItems, items.Kind, items.ArgCodeStr(), items.ArgCount())
+	}
+	for _, it := range items.Items {
+		if it == nil || it.Kind != proto.KindObj {
+			t.Fatalf("礼物物品应为 obj, 实得 %v", it)
+		}
+	}
+	empty := line.Fields[3].Val
+	if empty == nil || empty.Kind != proto.KindArgs || empty.ArgCodeStr() != "61" || empty.ArgCount() != 0 {
+		t.Fatalf("811.f3 应为空 args(61), 实得 kind=%s code=%q count=%d",
+			empty.Kind, empty.ArgCodeStr(), empty.ArgCount())
+	}
+	return line
+}
+
+// 收鱼结算路径：升级时 801.f4 携带 811 礼物行；重放结算回 null 不再携带。
+func TestSettlementResponseCarriesLevelGiftRow(t *testing.T) {
+	s, db := newRigTestServer(t)
+	sess := newProbeSess(s)
+	uid := sess.Userid
+	if _, err := db.EnsureProfile(t.Context(), uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET level=9,xp=? WHERE uid=?`, baseXp(10)-1, uid); err != nil {
+		t.Fatal(err)
+	}
+	fish := &RolledFish{FishGUID: strings.Repeat("b", 32), Species: "perch", Grade: 2, WeightG: 642}
+	st := s.stateFor(uid)
+	st.mu.Lock()
+	st.Pending = fish
+	st.Hooked = true
+	st.mu.Unlock()
+
+	body, handled := s.fishingEndSettle(&Ctx{Sess: sess, CallID: 1, Main: 14, Sub: 4,
+		ExpectResponse: true, Log: logging.Discard()})
+	if !handled || len(body) == 0 {
+		t.Fatal("结算未正常返回")
+	}
+	dec, _, err := proto.DecodeValue(body, 0, sess.Table())
+	if err != nil || dec.Kind != proto.KindObj || dec.TypeID != 801 {
+		t.Fatalf("801 响应不可解码或类型不符: %v", err)
+	}
+	assertGiftRow(t, dec.Fields[4].Val, 10, 1)
+
+	// 同一尾鱼重放：礼物行不重复（801.f4 回 null）。
+	body2, handled2 := s.fishingEndSettle(&Ctx{Sess: sess, CallID: 2, Main: 14, Sub: 4,
+		ExpectResponse: true, Log: logging.Discard()})
+	if !handled2 || len(body2) == 0 {
+		t.Fatal("重放结算未正常返回")
+	}
+	dec2, _, err := proto.DecodeValue(body2, 0, sess.Table())
+	if err != nil || dec2.Kind != proto.KindObj || dec2.TypeID != 801 {
+		t.Fatalf("重放 801 响应不可解码: %v", err)
+	}
+	if f4 := dec2.Fields[4].Val; f4 == nil || f4.Kind != proto.KindNull {
+		t.Fatalf("重放结算 801.f4 应为 null, 实得 kind=%s", f4.Kind)
+	}
+}
+
+// 放生路径：升级时 807.f1 携带 811 礼物行（官方升级礼物主通道）；重放放生回 null。
+func TestReleaseResponseCarriesLevelGiftRow(t *testing.T) {
+	s, db := newRigTestServer(t)
+	sess := newProbeSess(s)
+	uid := sess.Userid
+	if _, err := db.EnsureProfile(t.Context(), uid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`UPDATE profile SET level=9,xp=?,gold=1234 WHERE uid=?`, baseXp(10)-1, uid); err != nil {
+		t.Fatal(err)
+	}
+	fishGUID := strings.Repeat("c", 32)
+	st := s.stateFor(uid)
+	st.mu.Lock()
+	st.Pending = &RolledFish{FishGUID: fishGUID, Species: "perch", XP: 100, Grade: 2, WeightG: 642}
+	st.Hooked = true
+	st.mu.Unlock()
+
+	capture := &ctxReplyCapture{}
+	body, handled := s.fishingRelease(&Ctx{Sess: sess, Tree: proto.Args524(proto.Guid(fishGUID)),
+		ExpectResponse: true, replyCapture: capture, Log: logging.Discard()})
+	if !handled || len(body) == 0 {
+		t.Fatal("放生未正常返回")
+	}
+	dec, _, err := proto.DecodeValue(body, 0, sess.Table())
+	if err != nil || dec.Kind != proto.KindObj || dec.TypeID != 807 {
+		t.Fatalf("807 响应不可解码或类型不符: %v", err)
+	}
+	assertGiftRow(t, dec.Fields[1].Val, 10, 1)
+
+	// 重放同一尾鱼：807.f1 回 null，不重复携带。
+	body2, handled2 := s.fishingRelease(&Ctx{Sess: sess, Tree: proto.Args524(proto.Guid(fishGUID)),
+		ExpectResponse: true, replyCapture: &ctxReplyCapture{}, Log: logging.Discard()})
+	if !handled2 || len(body2) == 0 {
+		t.Fatal("重放放生未正常返回")
+	}
+	dec2, _, err := proto.DecodeValue(body2, 0, sess.Table())
+	if err != nil || dec2.Kind != proto.KindObj || dec2.TypeID != 807 {
+		t.Fatalf("重放 807 响应不可解码: %v", err)
+	}
+	if f1 := dec2.Fields[1].Val; f1 == nil || f1.Kind != proto.KindNull {
+		t.Fatalf("重放放生 807.f1 应为 null, 实得 kind=%s", f1.Kind)
+	}
+}
+
 // 11 级礼物按升到该级最后一尾鱼的钓法分套：纺车（路亚）→ Arrow S60L + Hydra Smart 2 25S。
 func TestLevel11GiftVariesByRigType(t *testing.T) {
 	s, db := newRigTestServer(t)
