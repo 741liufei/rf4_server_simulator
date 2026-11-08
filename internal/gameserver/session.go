@@ -210,6 +210,9 @@ func (s *Server) nextCallID(token string) uint64 {
 func (s *Session) startKeepalive() {
 	s.updateDrinkBonuses(time.Now())
 	s.advanceGroundbaitClock()
+	// 状态条在线钟：登录/重连时冻结离线跨度（饱食度停扣、精力停恢复），
+	// 会话期间由每拍 pushKeepalive 的读路径按时间差推进。
+	s.Srv.resumePlayerConditionClock(s.pushCtx(), s.Userid)
 	interval := s.Srv.cfg.KeepaliveInterval()
 	go func() {
 		timer := time.NewTimer(500 * time.Millisecond)
