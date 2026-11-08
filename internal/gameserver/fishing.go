@@ -655,7 +655,7 @@ func (s *Server) rollFishForRig(ctx context.Context, uid int64, gearGUID, loc, b
 		if s.DB != nil && gearGUID != "" {
 			rigType = s.rigTypeForWrite(ctx, gearGUID)
 		}
-		if len(c.baits) > 0 && max(len(slotIndicesFor(rigType, catHook)), len(slotIndicesFor(rigType, catLure))) > 1 {
+		if len(c.baits) > 0 && hookPositionsFor(rigType) > 1 {
 			return nil
 		}
 		if capKg > 0 {

@@ -155,11 +155,11 @@ var rigSlotTemplates = map[int64][]rigSlotTemplate{
 	33: {{[]int64{11}, 0}, {[]int64{69}, 150}, {[]int64{70}, 151}, {[]int64{13}, 152}},                                           // （33 簇，海竿三钩位）
 	34: {{[]int64{47}, 100}, {[]int64{57}, 175}, {[]int64{29}, 200}, {[]int64{29}, 200}, {[]int64{13}, 150}, {[]int64{12}, 250}}, // （34 簇）
 	35: {{[]int64{13}, 150}},                                                                                                     // （35 簇）
-	50: {{[]int64{13}, 175}, {[]int64{12}, 250}},                                                                                 // 海竿
-	51: {{[]int64{13}, 175}, {[]int64{12}, 250}},
-	52: {{[]int64{13}, 175}, {[]int64{12}, 250}},
-	53: {{[]int64{13}, 175}},
-	54: {{[]int64{13}, 175}},
+	50: {{[]int64{13}, 175}, {[]int64{17}, 300}, {[]int64{17}, 325}, {[]int64{17}, 326}, {[]int64{12}, 250}},                     // 海竿：柳叶亮片 300 + 基本吸引成分 325 + 钓钩吸引成分 326
+	51: {{[]int64{13}, 175}, {[]int64{17}, 300}, {[]int64{17}, 325}, {[]int64{17}, 326}, {[]int64{12}, 250}},
+	52: {{[]int64{13}, 175}, {[]int64{17}, 300}, {[]int64{17}, 325}, {[]int64{17}, 326}, {[]int64{12}, 250}},
+	53: {{[]int64{13}, 175}, {[]int64{17}, 300}, {[]int64{17}, 325}, {[]int64{17}, 326}},
+	54: {{[]int64{13}, 175}, {[]int64{17}, 300}, {[]int64{17}, 325}, {[]int64{17}, 326}},
 	55: {{[]int64{13}, 175}, {[]int64{29}, 200}, {[]int64{13}, 150}, {[]int64{17}, 325}, {[]int64{12}, 250}, {[]int64{13}, 151}, {[]int64{17}, 326}, {[]int64{12}, 251}}, // 海竿双路亚
 	56: {{[]int64{13}, 175}, {[]int64{29}, 200}, {[]int64{13}, 150}, {[]int64{17}, 325}, {[]int64{12}, 250}, {[]int64{13}, 151}, {[]int64{17}, 326}, {[]int64{12}, 251}},
 	57: {{[]int64{13}, 175}, {[]int64{29}, 200}, {[]int64{17}, 325}, {[]int64{17}, 326}, {[]int64{17}, 327}, {[]int64{12, 17}, 252}},
@@ -1509,7 +1509,8 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 		}
 		return ordinal, comps[rigCompKey(slot, ordinal)].GUID
 	}
-	idxs := uniqueIndices(slotIndicesFor(s.rigTypeForWrite(ctx, parentGUID), slot))
+	rt := s.rigTypeForWrite(ctx, parentGUID)
+	idxs := uniqueIndices(slotIndicesFor(rt, slot))
 	limit := len(idxs)
 	if slot == catLure && limit < 2 {
 		if row, err := s.DB.GetItemByGUID(ctx, itemGUID); err == nil && row != nil {
@@ -1518,30 +1519,48 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 			}
 		}
 	}
-	if extra != 0 {
-		matched := make([]int, 0, len(idxs))
-		for pos, idx := range idxs {
-			if idx == extra {
-				matched = append(matched, pos)
-			}
-		}
-		for _, pos := range matched {
-			if _, ok := comps[rigCompKey(slot, int64(pos))]; !ok {
-				return int64(pos), ""
-			}
-		}
-		if len(matched) > 0 && limit <= len(idxs) {
-			pos := matched[0]
-			return int64(pos), comps[rigCompKey(slot, int64(pos))].GUID
-		}
-	}
 	if limit < 1 {
 		limit = 1
 	}
-	for ord := 0; ord < limit; ord++ {
-		if _, ok := comps[rigCompKey(slot, int64(ord))]; !ok {
-			return int64(ord), ""
+	// 统计同品类已装件数与已占用的序号。
+	// f5 数组顺序由规范索引决定，读回时 rigCompsOf 按同品类出现次序重新编号，
+	// 所以写入序号必须是「未被占用的最小序号」，不能直接用槽位在模板中的位置：
+	// 模板有空洞时（已有 300 与 326、缺 325），325 在模板里的位置是 1，
+	// 而读回给 326 的序号也是 1，于是 325 会被当成「同槽换件」把 326 顶掉——
+	// 基本吸引成分与钓钩吸引成分互相顶掉正是这样发生的。
+	count := 0
+	used := map[int64]bool{}
+	for key := range comps {
+		if rigCompCategory(key) != slot {
+			continue
 		}
+		count++
+		used[rigCompOrdinal(key)] = true
+	}
+	freeOrdinal := func() int64 {
+		for ord := int64(0); ; ord++ {
+			if !used[ord] {
+				return ord
+			}
+		}
+	}
+	if extra != 0 {
+		// 同一规范索引已装：走替换，保留其序号与原组件 GUID。
+		for key, c := range comps {
+			if rigCompCategory(key) != slot {
+				continue
+			}
+			if canonicalIndexForOrdinal(slot, c.Extra, rt, rigCompOrdinal(key)) == extra {
+				return rigCompOrdinal(key), c.GUID
+			}
+		}
+		// 空闲槽位：写入未占用的序号，实际索引仍由 extra 决定。
+		if extraIsTargetIndex(slot, extra, rt) && count < limit {
+			return freeOrdinal(), ""
+		}
+	}
+	if count < limit {
+		return freeOrdinal(), ""
 	}
 	// 没有空闲槽时替换序号 0。
 	return 0, comps[rigCompKey(slot, 0)].GUID
@@ -3089,6 +3108,21 @@ func hexHead(b []byte, n int) string {
 	return fmt.Sprintf("%x", b)
 }
 
+// baitSlotCount 返回补饵记录要遍历的饵位数量。
 func baitSlotCount(rigType int64) int {
 	return max(2, len(slotIndicesFor(rigType, catHook)))
+}
+
+// hookPositionsFor 返回钓组的钩位数量——决定挂饵是否按钩拆组。
+//
+// 只数 catHook 槽位。拟饵族（catLure=17）在同一品类下同时承载“亮片”和
+// “基本吸引成分/钓钩吸引成分/鱼片”这些挂件，海钓铁板族因此有 300+325+
+// 326+327 多个拟饵槽位，但钩位始终只有一个。把拟饵槽位数并进来会把单钩
+// 铁板竿误判成多钩：挂饵分组被拆碎，判鱼时每组各选一次。
+func hookPositionsFor(rigType int64) int {
+	n := len(slotIndicesFor(rigType, catHook))
+	if n < 1 {
+		return 1
+	}
+	return n
 }
