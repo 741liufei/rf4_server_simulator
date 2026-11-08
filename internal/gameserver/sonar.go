@@ -311,8 +311,6 @@ func synthesizeSonarSchools(systemID string, profile *sonarProfile, schools []so
 	}
 	cols, rows := sonarGridDimensions(grid)
 	cellCount := cols * rows
-	depthLow, depthHigh := sonarDepthRange(profile)
-
 	schoolAt := make(map[int]int)
 	for schoolIdx, school := range schools {
 		for dy := -school.radiusY; dy <= school.radiusY; dy++ {
@@ -346,7 +344,8 @@ func synthesizeSonarSchools(systemID string, profile *sonarProfile, schools []so
 				} else {
 					weightKg = sampleSonarSchoolWeightKg(rng, school, profile)
 					depthM = school.depthM + sonarUniform(rng, -school.depthJitterM, school.depthJitterM)
-					depthM = math.Max(depthLow, math.Min(depthHigh, depthM))
+					low, high := sonarEchoDepthBand(school)
+					depthM = math.Max(low, math.Min(high, depthM))
 				}
 				echo, err := makeSonarEcho(weightKg, depthM)
 				if err != nil {
@@ -557,6 +556,20 @@ func sonarSampleGradeGrams(rng *rand.Rand, lines cachedGradeLines, grade int64) 
 	return sonarTriangularLogRand(rng, low, high, mode)
 }
 
+func sonarSettlementGradeLines(statics [6]int64) cachedGradeLines {
+	val, trophy, blue := statics[0], statics[1], statics[2]
+	return cachedGradeLines{val: &val, trophy: &trophy, blue: &blue}
+}
+
+// sonarEchoDepthBand 保证同一鱼群的所有回波围绕学校主深度连续分布；
+// 不能再用 profile 默认值二次 clamp，否则无 sonar_profile 时会把深水回波
+// 压回浅水默认带。
+func sonarEchoDepthBand(school sonarSchool) (low, high float64) {
+	low = math.Max(0.1, school.depthM-school.depthJitterM)
+	high = math.Max(low, school.depthM+school.depthJitterM)
+	return low, high
+}
+
 func sampleSonarSchoolWeightKg(rng *rand.Rand, school sonarSchool, profile *sonarProfile) float64 {
 	if school.fishKey != "" {
 		grade := sonarGradeFromWeights(rng, school.gradeWeights, false)
@@ -577,7 +590,7 @@ func sampleSonarSchoolWeightKg(rng *rand.Rand, school sonarSchool, profile *sona
 
 // rosterSonarSchools 用与真实判鱼相同的静态鱼库生成鱼群：
 // 水域名册给鱼种与基础权重，spot_fish/生态条件微调，fish_ecology 给水层，
-// fish_grade_lines + 当前鱼猎阶段给体重档位。这里只读，不推进咬口或保底。
+// settleStatics + 当前鱼猎阶段给体重档位。这里只读，不推进咬口或保底。
 func (s *Server) rosterSonarSchools(ctx context.Context, systemID string, grid sonarGrid,
 	profile *sonarProfile, c fishRollContext, rng *rand.Rand) []sonarSchool {
 	if s == nil || s.DB == nil || rng == nil {
@@ -681,7 +694,7 @@ func (s *Server) rosterSonarSchools(ctx context.Context, systemID string, grid s
 		schools = append(schools, sonarSchool{
 			centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
 			depthM: depthM, depthJitterM: depthJitter, fishKey: key,
-			gradeWeights: gradeWeights, lines: s.cachedGradeLines(ctx, c, key),
+			gradeWeights: gradeWeights, lines: sonarSettlementGradeLines(s.cachedSettleStatics(ctx, c, key)),
 		})
 	}
 	return schools

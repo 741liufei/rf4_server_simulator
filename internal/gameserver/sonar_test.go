@@ -314,6 +314,11 @@ func TestSonarRosterSchoolsFollowZoneFishAndEcology(t *testing.T) {
 			if school.depthM <= 0 || school.depthJitterM <= 0 {
 				t.Fatalf("%s 深度无效: school=%+v", school.fishKey, school)
 			}
+			settle := srv.cachedSettleStatics(t.Context(), c, school.fishKey)
+			if school.lines.val == nil || school.lines.trophy == nil || school.lines.blue == nil ||
+				*school.lines.val != settle[0] || *school.lines.trophy != settle[1] || *school.lines.blue != settle[2] {
+				t.Fatalf("%s 声呐未使用结算档位线: school=%v settle=%v", school.fishKey, school.lines, settle)
+			}
 			// 没有 sonar_profile 时以钓点水深作水域总深；深度必须落在
 			// 0..总深内，并高于水面对应层。
 			if school.depthM < want*2 {
@@ -363,6 +368,45 @@ func TestSonarSynthesisCreatesAdjacentSchoolCells(t *testing.T) {
 	}
 	if adjacent < 8 {
 		t.Fatalf("连续鱼群格不足: 相邻非空格对=%d", adjacent)
+	}
+}
+
+func TestSonarSynthesisKeepsSchoolDepthBandWithoutProfile(t *testing.T) {
+	school := sonarSchool{
+		centerX: 5, centerY: 5, radiusX: 2, radiusY: 2,
+		depthM: 80, depthJitterM: 1, fishKey: "test",
+	}
+	obj, err := synthesizeSonarSchools("loc12_215", nil, []sonarSchool{school}, rand.New(rand.NewSource(7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := obj.Field(1).Val.Items
+	var depths []float64
+	for _, cell := range cells {
+		if cell == nil || cell.Kind == proto.KindNull || cell.Field(0).Val == nil {
+			continue
+		}
+		for _, echo := range cell.Field(0).Val.Items {
+			if echo == nil || echo.Field(1).Num == nil {
+				continue
+			}
+			depths = append(depths, float64(proto.F32FromBits(uint32(*echo.Field(1).Num))))
+		}
+	}
+	if len(depths) < 2 {
+		t.Fatalf("回声数量不足: %v", depths)
+	}
+	minDepth, maxDepth := depths[0], depths[0]
+	for _, depth := range depths {
+		if depth < minDepth {
+			minDepth = depth
+		}
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+	if maxDepth-minDepth > 2.1 {
+		t.Fatalf("同一鱼群深度带不连续: min=%.2f max=%.2f depths=%v", minDepth, maxDepth, depths)
 	}
 }
 

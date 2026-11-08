@@ -8,7 +8,7 @@ Status: done
 
 ## Solution
 
-海图声呐从当前海域真实鱼种名册生成 2-4 组连续椭圆鱼群。每组鱼群选择实际鱼种，按生态水层决定主线深度，按 `fish_grade_lines` 与当前海图狩猎阶段生成回波重量；客户端据此显示对应大小图标。声呐只读取饵、生态、声呐区和狩猎状态，不推进咬口、保底或真实待结算鱼。海图狩猎以声呐区号、Jig/拖钓/漂流动作、水深和鱼群习性计算独立阶段，区号变化会重置搜索进度。
+海图声呐从当前海域真实鱼种名册生成 2-4 组连续椭圆鱼群。每组鱼群选择实际鱼种，按生态水层决定主线深度，按 `settleStatics` 与当前海图狩猎阶段生成回波重量；客户端据此显示对应大小图标。声呐只读取饵、生态、声呐区和狩猎状态，不推进咬口、保底或真实待结算鱼。海图狩猎以声呐区号、Jig/拖钓/漂流动作、水深和鱼群习性计算独立阶段，区号变化会重置搜索进度。
 
 ## User Stories
 
@@ -20,7 +20,7 @@ Status: done
 
 ## Implementation Decisions
 
-- `internal/gameserver/sonar.go`：把回波对象 f0 明确为 kg 重量，使用客户端 3 kg / 10 kg 图标阈值；用椭圆鱼群代替离散热点。
+- `internal/gameserver/sonar.go`：把回波对象 f0 明确为 kg 重量，使用客户端 3 kg / 10 kg 图标阈值；用椭圆鱼群代替离散热点；重量采样使用与真实判档相同的 `settleStatics`，同一鱼群回波围绕学校主深度连续分布。
 - `internal/gameserver/fish_hunt.go`：新增海图狩猎模式、声呐区号、搜索动作、鱼群习性和区号变化重置；淡水仍使用窝料狩猎。
 - `internal/gameserver/fish_hunt.go`：未知位置只降低本次判定置信度，不抹掉上一次已知区号；下一次已知区号相同则续进度，不同才重置。
 - `internal/gameserver/protocol_dynamic_handlers.go`：1/10 声呐请求优先使用真实抛竿落点 `CastPos`，并与真实咬口共享当前竿位、鱼饵、钩型、技能、动作、水深、船况、天气和欢乐时光加成。
@@ -30,7 +30,7 @@ Status: done
 
 ## Testing Decisions
 
-- `sonar_test.go`：验证鱼群连续性、重量/深度范围、名册鱼种、阶段权重、空网格形状和图标阈值。
+- `sonar_test.go`：验证鱼群连续性、重量/深度范围、名册鱼种、阶段权重、空网格形状、图标阈值，以及声呐重量线与真实判档线一致。
 - `fish_hunt_test.go`：验证海图声呐区可建立狩猎状态且不依赖窝料。
 - `fish_hunt_test.go`：验证已知区号 → 未知位置 → 已知区号时，相同区号保留进度、不同区号才重置。
 - `protocol_dynamic_handlers_test.go`：验证声呐上下文优先使用 `CastPos` 并继承当前竿位与技能加成。
