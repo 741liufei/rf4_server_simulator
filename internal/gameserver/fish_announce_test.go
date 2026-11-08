@@ -3,6 +3,8 @@ package gameserver
 import (
 	"testing"
 	"time"
+
+	"rf4server/internal/proto"
 )
 
 // 颜色分档：25=蓝冠及以上、26=奖杯、3=达标；未达标不发模板。
@@ -23,6 +25,37 @@ func TestFishAnnouncementKind(t *testing.T) {
 				t.Fatalf("grade=%d: got %d, want %d", tc.grade, got, tc.want)
 			}
 		})
+	}
+}
+
+// 三档播报走各自 kind：25=蓝冠（深橘红）、26=奖杯（橘黄）、3=达标（蓝色，无前缀）。
+func TestFishLandedUsesGradeKind(t *testing.T) {
+	srv, sess, gc := newEscapeProbeServer(t)
+	srv.tunMu.Lock()
+	srv.tunCache = map[string]float64{"fish_tv_kv": 1}
+	srv.tunAt = time.Now()
+	srv.tunMu.Unlock()
+
+	for _, tc := range []struct {
+		grade int64
+		kind  uint64
+	}{
+		{4, 25},
+		{3, 26},
+		{2, 3},
+	} {
+		srv.notifyFishLanded(sess, &RolledFish{Species: "g_tench", Grade: tc.grade, WeightG: 4000}, false)
+		env := awaitPushEnvelope(t, gc)
+		if env.Main != 24 || env.Sub != 27 {
+			t.Fatalf("grade=%d 应走 24/27，实得 %d/%d", tc.grade, env.Main, env.Sub)
+		}
+		dec, _, err := proto.DecodeValue(env.Body, 0, srv.Table())
+		if err != nil {
+			t.Fatalf("grade=%d 推送不可解码: %v", tc.grade, err)
+		}
+		if f0 := dec.Items[0].Field(0).Num; f0 == nil || *f0 != tc.kind {
+			t.Fatalf("grade=%d 应用 kind%d，实得 %v", tc.grade, tc.kind, f0)
+		}
 	}
 }
 
