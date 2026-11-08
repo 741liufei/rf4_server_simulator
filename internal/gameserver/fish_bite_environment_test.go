@@ -316,3 +316,40 @@ func TestLoadFishSpotPreferenceMatchesChartZone(t *testing.T) {
 		t.Fatal("定位不到海图区号时不该启用钓点观测")
 	}
 }
+
+// 挪威海场景名要解析到海图 level key，否则海图区号定位不到，
+// 带“海图”前置条件的鱼种全被判不合格。
+func TestPrepareFishRollRuntimeResolvesChartFromSceneName(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	if _, err := db.SQL.Exec(
+		`INSERT OR REPLACE INTO loc_alias(alias,loc) VALUES('level_012_north_sea','挪威海')`); err != nil {
+		t.Fatal(err)
+	}
+	// 1300/100 落在 loc12_157 网格内（assets/sonar_grids_4_0_24799.json）。
+	c := &fishRollContext{loc: "loc12_157", x: 1300, z: 100, hasPos: true, rigType: 53}
+	srv.prepareFishRollRuntime(context.Background(), c, "挪威海")
+	if !c.runtime.chartKnown {
+		t.Fatal("挪威海场景名没能定位到海图，chartKnown 仍为 false")
+	}
+	if !c.runtime.zoneKnown || c.runtime.zone != 157 {
+		t.Fatalf("海图区号=%d known=%v，期望 157", c.runtime.zone, c.runtime.zoneKnown)
+	}
+}
+
+// 内陆湖没有声呐水域，解析到 level_002_kirzah_river 后 chartKnown 必须保持 false，
+// 不能因为换了 level key 解析就把内陆湖也当成海图。
+func TestPrepareFishRollRuntimeInlandHasNoChart(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	if _, err := db.SQL.Exec(
+		`INSERT OR REPLACE INTO loc_alias(alias,loc) VALUES('level_002_kirzah_river','惟有诺克河')`); err != nil {
+		t.Fatal(err)
+	}
+	c := &fishRollContext{loc: "lvl2_01", x: 100, z: 100, hasPos: true, rigType: 1}
+	srv.prepareFishRollRuntime(context.Background(), c, "惟有诺克河")
+	if c.runtime.chartKnown {
+		t.Fatal("内陆湖不该被判成有海图")
+	}
+	if c.runtime.zoneKnown {
+		t.Fatal("内陆湖不该定位出海图区号")
+	}
+}
