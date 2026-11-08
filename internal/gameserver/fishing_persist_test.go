@@ -77,6 +77,10 @@ func TestFishingStateRestorePendingNoReroll(t *testing.T) {
 		LocLevel: "level_019_american_pond",
 		NamedID:  "named-fish-1",
 		Name:     "Silver",
+		// 咬钩快照在搏鱼期间重启后必须原样恢复，资格判定不能退化为默认值。
+		DepthCM: 275, OnBoat: true, Drift: true,
+		QualBait: qualificationBait{ID: "worm_01", Cat: 27, Class: 6, Flavor: 25, LenCM: 3.5, SizeMM: 35},
+		CastM:    28.5, IsNight: true,
 	}
 
 	first := newFishingRecoveryServer(t, db)
@@ -87,6 +91,7 @@ func TestFishingStateRestorePendingNoReroll(t *testing.T) {
 	st.Loc = "level_019_american_pond"
 	st.Spot = 9876
 	st.DepthCM = 375
+	st.CastM = 28.5
 	st.CastActive = true
 	st.CastTs = castAt
 	st.FallSeen = true
@@ -114,11 +119,44 @@ func TestFishingStateRestorePendingNoReroll(t *testing.T) {
 	if !got.CastActive || !got.Hooked || !got.PushSent || got.Resolved {
 		t.Fatalf("恢复状态机标志不符: %+v", got)
 	}
+	if got.CastM != 28.5 {
+		t.Fatalf("CastM 未恢复: got=%g want=28.5", got.CastM)
+	}
 	if !got.BiteAt.Equal(biteAt) {
 		t.Fatalf("BiteAt 未恢复: got=%v want=%v", got.BiteAt, biteAt)
 	}
 	if !got.persist.recoverPending {
 		t.Fatal("从 DB 恢复 pending 后应标记需要重推同一尾鱼")
+	}
+}
+
+// 14/2 抛投后、咬钩前重启：本杆实际落点距离必须从 fishing_state.cast_m 恢复，
+// 否则「抛投 ≥N 米」会被当成 0m 而漏计。
+func TestFishingStateCastMSurvivesRestartBeforeBite(t *testing.T) {
+	db := connectTestDB(t)
+	uid := int64(1000001)
+	castAt := time.Now().Add(-2 * time.Second)
+
+	first := newFishingRecoveryServer(t, db)
+	st := first.stateFor(uid)
+	st.mu.Lock()
+	st.GearGuid = "33333333333333333333333333333333"
+	st.RigType = 5
+	st.Loc = "level_001_lake"
+	st.CastActive = true
+	st.CastTs = castAt
+	st.CastM = 42.5
+	st.mu.Unlock()
+
+	restarted := newFishingRecoveryServer(t, db)
+	got := restarted.stateFor(uid)
+	got.mu.Lock()
+	defer got.mu.Unlock()
+	if got.CastM != 42.5 {
+		t.Fatalf("抛投后咬钩前重启丢失实际距离: got=%g want=42.5", got.CastM)
+	}
+	if !got.CastActive || !got.CastTs.Equal(castAt) {
+		t.Fatalf("恢复状态不符: active=%v castTs=%v", got.CastActive, got.CastTs)
 	}
 }
 

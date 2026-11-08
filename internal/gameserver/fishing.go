@@ -27,15 +27,19 @@ type FishState struct {
 	Spot        uint64
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
 	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
-	CastActive  bool
-	InWater     bool
-	NeedBite    bool
-	PosX        float64
-	PosZ        float64
-	HasPos      bool
-	CastPosX    float64
-	CastPosZ    float64
-	HasCastPos  bool
+	// reelWear 是本竿搏鱼期间的渔轮磨损账（泄力打滑 + 锁轮过载）。仅进程内，
+	// 落库后清零；口径见 specs/changes/reel-friction-life-model/spec.md。
+	reelWear   fightReelWear
+	CastActive bool
+	CastM      float64 // 本杆 14/2 上报的实际落点距离（米），不是钓具理论最大值
+	InWater    bool
+	NeedBite   bool
+	PosX       float64
+	PosZ       float64
+	HasPos     bool
+	CastPosX   float64
+	CastPosZ   float64
+	HasCastPos bool
 	// BoatUntil 是船票租用有效的截止 unix，3/7 验票上船时写入。0 表示本次会话
 	// 还没有上船证据，判鱼对“已上船”条件保持中性。
 	BoatUntil int64
@@ -256,6 +260,20 @@ type RolledFish struct {
 	Force    float64 // obj27#08 拉力；0=按体重和已验证比例计算
 	NamedID  string  // 被命名鱼
 	Name     string
+	// DepthCM/OnBoat 是咬钩瞬间的钓深与船只状态，只供资格判定读取；随
+	// pending_json 持久化，重启恢复后仍按咬钩时条件判定。
+	DepthCM int64
+	OnBoat  bool
+	// Drift 记录咬钩瞬间钓组是否处于顺流移动（14/7 0x40），同样只供资格判定，
+	// 并随 pending_json 持久化。
+	Drift bool
+	// QualBait 是咬钩瞬间的饵属性快照。天然饵会在 14/11 被 consumeHookedBait
+	// 删除，14/4 再按 BaitGUIDs 反查只会得到空值，因此必须在咬钩时快照。
+	QualBait qualificationBait
+	// CastM / IsNight 同样是咬钩快照：抛投距离取本杆实际落点，夜间按咬钩
+	// 时刻判定，避免搏鱼跨过 06:00/19:00 后改用结算时间。
+	CastM   float64
+	IsNight bool
 }
 
 // stateFor 按 uid 取/建状态。
@@ -1594,6 +1612,11 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.FallSeen = false
 	st.RigSettled = false
 	st.TickSeen = false
+	// 上一竿的磨损账若还没落库（异常退出、断线等），先取走，解锁后补写。
+	pendingWear, hasPendingWear := st.reelWear.claimLocked()
+	st.reelWear.reset()
+	// 抛竿即算“下水使用”：这一竿即使没咬钩，轮内零件也要结算每竿基准与泡水。
+	st.reelWear.markRodUsedLocked(st.GearGuid)
 	if resetCast || st.CastTs.IsZero() {
 		st.CastTs = now
 	}
@@ -1606,6 +1629,9 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	delay := s.biteDelayInWeather(st, sess.weatherAt(st.Loc, now), now, bonus)
 	s.armBiteTimerLocked(sess.Userid, st, now.Add(time.Duration(delay*float64(time.Second))))
 	st.mu.Unlock()
+	if hasPendingWear {
+		s.applyFightReelWear(s.dbCtx(), sess.Userid, pendingWear, "14/7")
+	}
 	return true
 }
 
@@ -1694,6 +1720,19 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		f.HappyHour, f.HappyHourKnown = sess.currentHappyHour().Active, true
 		st.Armed = nil
 		f.LocLevel = s.currentLevel(uid)
+		f.DepthCM = st.effectiveBaitDepthCMLocked(now)
+		// 海钓的扬程由 17/12 设置的钓深表达，LureLayer 模型最大只有 5m。
+		if marineRigType(st.RigType) && st.DepthCM > 0 {
+			f.DepthCM = st.DepthCM
+		}
+		f.OnBoat, _ = st.onBoatLocked(now.Unix())
+		f.Drift = st.LureMotionMask&lureMotionDriftBit != 0
+		f.CastM = st.CastM
+		f.IsNight = worldIsNight(now.Unix())
+		if !f.BaitsKnown {
+			f.BaitGUIDs, f.BaitsKnown = s.biteBaitSnapshot(s.dbCtx(), st.GearGuid)
+		}
+		f.QualBait = s.qualificationMountedBait(s.dbCtx(), f.BaitGUIDs)
 		st.Pending = f
 		st.PendingRepush = 0
 		gear, generation := st.GearGuid, st.castGeneration
@@ -1748,6 +1787,15 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 	}
 	f.HappyHour, f.HappyHourKnown = sess.currentHappyHour().Active, true
 	f.LocLevel = s.currentLevel(uid)
+	f.DepthCM = baitDepthCM
+	if marineRigType(rigType) && st.DepthCM > 0 {
+		f.DepthCM = st.DepthCM
+	}
+	f.OnBoat = boatOn
+	f.Drift = lureMask&lureMotionDriftBit != 0
+	f.CastM = st.CastM
+	f.IsNight = worldIsNight(now.Unix())
+	f.QualBait = s.qualificationMountedBait(s.dbCtx(), f.BaitGUIDs)
 	st.Pending = f
 	st.PendingRepush = 0
 	gear, generation := st.GearGuid, st.castGeneration
