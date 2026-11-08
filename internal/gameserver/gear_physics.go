@@ -581,9 +581,7 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 	spec.RodPowerKg = applyDurability(rodPowerKg(load(ids.Rod)), ids.RodDurability)
 	s.logMissingRodPhysics(ids.Rod, load(ids.Rod))
 	spec.ReelPresent = strings.TrimSpace(ids.Reel) != ""
-	if spec.ReelPresent {
-		spec.ReelDragKg = reelDragMaxKg(load(ids.Reel)) * reelLockMultiplier(ids.ReelDurability)
-	}
+	spec.ReelDragKg = s.reelLockedDragForSpec(ctx, ids, load(ids.Reel))
 	lineDef := load(ids.Line)
 	spec.LineStrengthKg = applyDurability(lineStrengthKg(lineDef), ids.LineDurability)
 	spec.LineStretch = lineStretch(lineDef)
@@ -599,6 +597,23 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 	spec.LeadcoreStrengthKg = applyDurability(itemDefF32(load(ids.Leadcore), gearAttrMaxLoad), ids.LeadcoreDurability)
 	spec.ConnectorStrengthKg = applyDurability(itemDefF32(load(ids.Connector), gearAttrMaxLoad), ids.ConnectorDurability)
 	return spec
+}
+
+// reelLockedDragForSpec 给搏鱼与抛投裁决取渔轮此刻的锁轮承力：优先读实例（已磨损的摩擦片
+// 与当前零件耐久），读不到才退回定义制动力 x 本体耐久倍率。定义值不反映磨损，直接用它
+// 会留下"摩擦片磨了但力度上限不动"的两套数字，满红不爆只修好一半。
+func (s *Server) reelLockedDragForSpec(ctx context.Context, ids rigGearIDs, def *store.ItemDef) float64 {
+	if strings.TrimSpace(ids.Reel) == "" {
+		return 0
+	}
+	if ids.ReelGUID != "" {
+		if row, err := s.DB.GetItemByGUID(ctx, ids.ReelGUID); err == nil && row != nil {
+			if locked := s.reelLockedDragFromRow(ctx, row); locked > 0 {
+				return locked
+			}
+		}
+	}
+	return reelDragMaxKg(def) * reelLockMultiplier(ids.ReelDurability)
 }
 
 // loadGearSpecForRig 在竿/轮/线/前导之外读取当前线末端鱼钩。

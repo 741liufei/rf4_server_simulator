@@ -24,16 +24,18 @@ type settleXpResult struct {
 	droppedCardGUID string
 	premiumXP       int64
 	replayed        bool
-	baseXP          int64   // 技能倍率后的裸经验（分解中的"基础经验"）
-	totalXP         int64   // 310.f0 = 本条鱼总经验
-	silver          int64   // 展示用银价（catch_silver_cents 口径，不入账）
-	prevBest        int64   // 该鱼种已有纪录重量（813.f6）
-	newLevel        int64   // grant 后等级
-	totalXp         int64   // grant 后累计经验
-	levelsGained    int64   // 本次升级数（310.f1）
-	isRecord        bool    // 是否破个人纪录
-	skillID         int64   // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
-	skillGain       float64 // 310.f3 本次实际熟练度增量
+	baseXP          int64                              // 技能倍率后的裸经验（分解中的"基础经验"）
+	totalXP         int64                              // 310.f0 = 本条鱼总经验
+	silver          int64                              // 展示用银价（catch_silver_cents 口径，不入账）
+	prevBest        int64                              // 该鱼种已有纪录重量（813.f6）
+	newLevel        int64                              // grant 后等级
+	totalXp         int64                              // grant 后累计经验
+	levelsGained    int64                              // 本次升级数（310.f1）
+	isRecord        bool                               // 是否破个人纪录
+	skillID         int64                              // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
+	skillGain       float64                            // 310.f3 本次实际熟练度增量
+	giftItems       []*store.Item                      // 本次结算直发的升级礼物（仅非重放；挂 801 f8 奖励列表）
+	qualChanges     map[int64]store.QualificationState // 本尾鱼带来的资格变化（重放时从回执还原）
 }
 
 // grantXpMonotonic 增加累计经验并重算等级，保证等级不下降。
@@ -67,16 +69,23 @@ func (s *Server) grantXpMonotonic(ctx context.Context, uid, xpGain int64) (int64
 // settleCatchXP 计算并持久化一条钓获的经验、熟练度、纪录和装备磨损。
 // 经验依次经过技能倍率和单调入账；prevBest 在写入 catch_log 前读取。
 func (s *Server) settleCatchXP(ctx context.Context, uid int64, f *RolledFish, rigType int64) *settleXpResult {
-	r, err := s.settleCatchOnce(ctx, uid, f, rigType)
+	r, _ := s.settleCatchXPWithQualifications(ctx, uid, f, rigType, nil)
+	return r
+}
+
+// settleCatchXPWithQualifications 在成功结算时一并返回本尾鱼的资格变化。
+// ev 为 nil 时跳过资格判定（普通结算调用方）。
+func (s *Server) settleCatchXPWithQualifications(ctx context.Context, uid int64, f *RolledFish, rigType int64, ev *qualificationEvent) (*settleXpResult, map[int64]store.QualificationState) {
+	r, err := s.settleCatchOnceWithQualification(ctx, uid, f, rigType, ev)
 	if err != nil {
 		s.log.Warn("钓获结算未保存", "err", err)
-		return nil
+		return nil, nil
 	}
 	st := s.fishingStateForFish(uid, f)
 	st.mu.Lock()
 	f.XP, f.Silver = r.totalXP, r.silver
 	st.mu.Unlock()
-	return r
+	return r, r.qualChanges
 }
 
 // 磨损槽位使用 item category，而不是客户端序号。鱼线与前导按承力线计算，
@@ -336,12 +345,17 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	hooked := st.Hooked
 	rigType := st.RigType
 	gearGUID := st.GearGuid
+	bait := st.Bait
 	st.mu.Unlock()
+	// 收竿即终局：先把这一竿累计的渔轮磨损落库。
+	s.settleFightReelWearState(s.dbCtx(), st, uid, "14/4")
 
 	cctx := ctx.Sess.pushCtx()
+	castProf := s.castDistanceForRig(cctx, uid, gearGUID, rigType)
 	var stats813 *proto.Value
 	var profileTree *proto.Value
 	var skill312 *proto.Value
+	var qualChanges map[int64]store.QualificationState
 	hasFish := pending != nil && hooked
 
 	if pending != nil && !hooked {
@@ -353,7 +367,10 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	}
 	var res *settleXpResult
 	if hasFish {
-		res = s.settleCatchXP(cctx, uid, pending, rigType)
+		// 资格事件在结算前用咬钩快照装配；判定与经验/回执在同一事务提交。
+		// 达标当尾的结算响应即带完成（增量下发），重放从回执还原同一增量。
+		ev := s.qualificationEventForCatch(cctx, pending, rigType)
+		res, qualChanges = s.settleCatchXPWithQualifications(cctx, uid, pending, rigType, &ev)
 		if res == nil {
 			ctx.ReplyFailure("System.IO.IOException", "钓获结算未能保存，请重试")
 			return nil, true
@@ -383,9 +400,20 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	if hasFish && profileTree != nil {
 		f7 = profileTree
 	}
-	// 801 继承的 f8 是本次获得的物品。仅发送 4/22 不会把卡片
-	// 加入钓获结果的奖励列表；重放已入册的卡片也不能把它移回散卡库存。
+	// 801 继承的 f8 是本次获得的物品。仅发送 4/22 不会把物品加入钓获结果的
+	// 奖励列表；重放已入册的卡片也不能把它移回散卡库存。
+	// 升级礼物与钓获卡片同列：礼物行来自结算直发（非重放才有）。
 	grants := proto.Args(proto.S("61"))
+	if hasFish && res != nil {
+		for _, row := range res.giftItems {
+			if row == nil {
+				continue
+			}
+			if tree, terr := s.ItemToTree(cctx, row); terr == nil {
+				grants.Items = append(grants.Items, tree)
+			}
+		}
+	}
 	if hasFish && res.droppedCardGUID != "" {
 		card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID)
 		if err != nil {
@@ -401,12 +429,22 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 			grants.Items = append(grants.Items, tree)
 		}
 	}
+	// 升级礼物行：801.f4 = 811 数组（f0=1 新级别），客户端 GameResult 弹窗
+	// 从该数组渲染"新级别礼物"卡片栈；无礼物保持 null（官服未升级样本形态）。
+	giftRows := proto.Null()
+	if hasFish && res != nil && len(res.giftItems) > 0 {
+		if rows, rerr := s.giftRows811Arg(cctx, res.newLevel, res.giftItems); rerr != nil {
+			ctx.Log.Warn("升级礼物行构造失败（801.f4 置空）", "err", rerr)
+		} else {
+			giftRows = rows
+		}
+	}
 	obj801, err := wiregen.MakeObj("caagocpofin", map[int]*proto.Value{
 		0:  f0,
-		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
+		1:  proto.U32(proto.F32Bits(float32(castProf.DistanceM))),
 		2:  proto.U32(f32Const801F2),
-		3:  build5003(),
-		4:  proto.Null(),
+		3:  build5003FromStates(qualChanges),
+		4:  giftRows,
 		5:  proto.Null(),
 		6:  f6,
 		7:  f7,
@@ -431,10 +469,31 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	if hasFish && !res.replayed {
 		ctx.Sess.Push2_1()
 	}
+	// 上鱼事件交给成就规则判断一次；2/8 弹窗排在 801 应答之后。
+	if hasFish {
+		s.evaluateAchievements(ctx, achievementEvent{
+			Kind: evFishLanded, WeightG: pending.WeightG, RigType: rigType, Bait: bait,
+		})
+	}
 	if hasFish && res.droppedCardGUID != "" {
 		if card, err := s.DB.GetItemByGUID(cctx, res.droppedCardGUID); err == nil && card.UID == uid && card.Container == tradingCardContainer {
-			ctx.AfterResponse(func() { s.pushItemUpdate(uid, card) })
+			// 单条 4/22 增量不足以刷新开着的卡牌列表（upsert 不替换本地已有
+			// 物品、视图重建滞后一代，2026-11-08 实机）：改走收藏册全量先删
+			// 后推两代重同步（见 trading_card_sync.go）。
+			sess := ctx.Sess
+			ctx.AfterResponse(func() { s.resyncTradingCardsTwice(sess, uid) })
 		}
+	}
+	// 礼物 4/22 与卡片同步：801 响应发送后再更新背包缓存，避免与结算快照竞态。
+	if hasFish && res != nil && len(res.giftItems) > 0 {
+		gifts := res.giftItems
+		ctx.AfterResponse(func() {
+			for _, row := range gifts {
+				if row != nil {
+					s.pushItemUpdate(uid, row)
+				}
+			}
+		})
 	}
 	// 收竿时补挂同种库存，供客户端校验下一次抛竿；搏鱼中不补挂。
 	// 补挂后的钓组和背包数量在 801 响应发送后同步，避免结算覆盖数量更新。

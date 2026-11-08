@@ -260,7 +260,17 @@ func TestReelPartSnapshotWorkshop(t *testing.T) {
 			if snapshotFloat(repairTree.Fields, repairTree.Class, csDurability) != 1 {
 				t.Fatal("reel repair response durability")
 			}
-			assertReelSnapshot(t, srv, reel.GUID, "rgm_ef_spark10021", drag)
+			// 进店修理是整机大保养：轮内烧掉、磨旧的件一并恢复，否则本体修回 1.0
+			// 也收不了线。所以修完之后根受力回到当前安装摩擦片的额定值。
+			repairedRow := mustItem(t, db, reel.GUID)
+			ratedDrag, ratedOK := srv.reelWasherRatedFromRow(ctx, repairedRow)
+			if !ratedOK || ratedDrag <= 0 {
+				t.Fatal("installed washer rated drag after repair")
+			}
+			if repairedRow.Durability != 1 {
+				t.Fatalf("reel durability after repair=%v", repairedRow.Durability)
+			}
+			assertReelSnapshot(t, srv, reel.GUID, "rgm_ef_spark10021", ratedDrag)
 		})
 	}
 }
@@ -671,6 +681,10 @@ func TestReelDegradePersistsRoot(t *testing.T) {
 				afterWasher, _ := snapshotPart(t, srv, fields, 9)
 				unchanged := append([]proto.Field(nil), afterWasher.Fields...)
 				setWireFloat(unchanged, afterWasher.Class, fieldIdxByCS(afterWasher.Class, csDragForce), current)
+				// 磨损还会把摩擦片耐久写成制动力剩余比例的镜像（背包与工坊靠它看损耗%），
+				// 比对时一并还原，确认其余身份字段没被动过。
+				setWireFloat(unchanged, afterWasher.Class, fieldIdxByCS(afterWasher.Class, csDurability),
+					snapshotFloat(washer.Fields, washer.Class, csDurability))
 				if snapshotJSON(t, unchanged) != washerBefore {
 					t.Fatal("wear changed washer identity, condition or other fields")
 				}
@@ -705,8 +719,18 @@ func TestReelDegradePersistsRoot(t *testing.T) {
 				if snapshotFloat(decoded.Fields, decoded.Class, csStrength) != force {
 					t.Fatal("encoded worn root mismatch")
 				}
-				if fresh.Durability != reel.Durability {
-					t.Fatal("wear changed reel durability")
+				// 本体耐久是轮内零件的综合：磨薄摩擦片它就得降（只降不升），
+				// 烧穿时熔断到 0，客户端才会红框、才修不好就收不了线。
+				if fresh.Durability > reel.Durability {
+					t.Fatalf("wear raised reel durability: %v -> %v", reel.Durability, fresh.Durability)
+				}
+				if path == "slip" {
+					if wearOut != (fresh.Durability == 0) {
+						t.Fatalf("reel durability must follow washer wear: worn=%t durability=%v", wearOut, fresh.Durability)
+					}
+				} else if fresh.Durability != reel.Durability {
+					// 只磨零件字段的入口不负责本体：聚合发生在结算与伤害入口。
+					t.Fatalf("bare washer degradation must not touch reel durability: %v -> %v", reel.Durability, fresh.Durability)
 				}
 				perf, err := srv.syncReelPerformance(ctx, fresh)
 				if err != nil {

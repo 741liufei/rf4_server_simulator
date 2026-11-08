@@ -11,17 +11,29 @@ import (
 
 // 档案、技能树与推送树构造。
 
-// 通行证与赛季使用的固定时间常量。
+// 通行证使用的固定时间常量。
 const (
 	pass745F2                       = uint64(131765184000000000)
-	season5013F1                    = uint64(134238816000000000)
-	season5013F2                    = uint64(134265924000000000)
 	f32Const801F2                   = uint32(1092571843) // 801.f2 位型
 	castDepthBits                   = uint32(1091032928) // 158.f2 = f32 8.4900818
 	profileFlags                    = uint32(17 | 0x100) // 0x100：跳过绑定邮箱提示
 	defaultPlayerConditionPrimary   = store.DefaultPlayerConditionPrimary
 	defaultPlayerConditionSecondary = store.DefaultPlayerConditionSecondary
 )
+
+// seasonBounds 返回当前赛季的起止 FILETIME。
+// 以每月 22 日 00:00 UTC 为起点滚动到下月 22 日 09:00 UTC，保证时段覆盖当前时刻；
+// 5013 时段过期会让客户端把资格节点判为锁定。
+func seasonBounds() (uint64, uint64) {
+	n := time.Now().UTC()
+	year, month, day := n.Date()
+	start := time.Date(year, month, 22, 0, 0, 0, 0, time.UTC)
+	if day < 22 {
+		start = start.AddDate(0, -1, 0)
+	}
+	end := start.AddDate(0, 1, 0).Add(9 * time.Hour)
+	return uint64(proto.UnixToFiletime(start.Unix())), uint64(proto.UnixToFiletime(end.Unix()))
+}
 
 // BuildPose308 玩家姿态块（2/2 与 307.f12 共用；f7=世界时钟 FILETIME）。
 func BuildPose308() *proto.Value {
@@ -91,11 +103,15 @@ func build745() *proto.Value {
 }
 
 // build5013 构造赛季起止时段。
+// Idx0 是赛季阶段（0=无/哨兵，5=新年活动，6=生日/周年活动）。这里必须发 0：
+// 发 6 会让客户端在主菜单点亮「周年纪念任务」入口；资格分支本身不需要活动阶段，
+// 只需一个覆盖当前时刻的时间窗来避免节点被判过期。
 func build5013() *proto.Value {
+	start, end := seasonBounds()
 	return wiregen.MustMakeObj("nkakjeigjla", map[int]*proto.Value{
-		0: proto.U32(6),
-		1: proto.U64(season5013F1),
-		2: proto.U64(season5013F2),
+		0: proto.U32(0),
+		1: proto.U64(start),
+		2: proto.U64(end),
 		3: proto.U32(0),
 		4: proto.U64(0),
 		5: proto.Null(),

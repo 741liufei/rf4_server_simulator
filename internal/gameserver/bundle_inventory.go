@@ -67,12 +67,17 @@ func bundleQuantityLimit(class string) int64 {
 }
 
 // prepareBundleItems 只展开类别 55 的组合包，数量表示包数；计件内含物沿用定义单位量，
-// 非计件内含物逐个创建。嵌套包和超大实例列表直接拒绝，避免循环或无界分配。
+// 非计件内含物逐个创建。条目 mlapkoadfnh=true 时数量为绝对个数，不再乘子物定义
+// 默认量（官服客户端 ahoacflhhno.ekfefhbgegl 的双语义：flag 真则直接返回条目数，
+// 否则乘 def ljnnpokapig——实机 box_worm_asurv_100 曾因此误发 30×100）。
+// 嵌套包和超大实例列表直接拒绝，避免循环或无界分配。
 // 此函数只构造内存对象，必须在开启库存事务之前调用。
 //
 // prepareBundleItems expands only category 55 bundles, with packs denoting bundle count.
 // Countable contents use definition units, while non-countable contents get separate instances.
-// Nested bundles and oversized instance lists are rejected to prevent cycles or unbounded allocation.
+// An entry with mlapkoadfnh=true carries an absolute count and skips the definition-unit
+// multiplication, mirroring the official client's dual-semantics helper. Nested bundles
+// and oversized instance lists are rejected to prevent cycles or unbounded allocation.
 // This function only prepares in-memory objects and must run before the inventory transaction.
 func (s *Server) prepareBundleItems(ctx context.Context, uid int64, itemID, container string, packs int64) ([]*store.Item, error) {
 	if packs <= 0 {
@@ -94,8 +99,9 @@ func (s *Server) prepareBundleItems(ctx context.Context, uid int64, itemID, cont
 		return nil, fmt.Errorf("组合包没有内含物: %s", itemID)
 	}
 	type contentPlan struct {
-		def   *store.ItemDef
-		units int64
+		def      *store.ItemDef
+		units    int64
+		absolute bool
 	}
 	plans := make([]contentPlan, 0, len(contents))
 	instances := int64(0)
@@ -105,6 +111,7 @@ func (s *Server) prepareBundleItems(ctx context.Context, uid int64, itemID, cont
 		if inner == "" {
 			return nil, fmt.Errorf("组合包内含物缺少 item_id: %s", itemID)
 		}
+		absolute, _ := entry[csQtyAbsolute].(bool)
 		quantity, err := bundlePositiveQuantity(entry[csQty])
 		if err != nil {
 			return nil, fmt.Errorf("组合包 %s 内含物 %s: %w", itemID, inner, err)
@@ -131,7 +138,7 @@ func (s *Server) prepareBundleItems(ctx context.Context, uid int64, itemID, cont
 			return nil, fmt.Errorf("组合包实例数超过上限 %d: %s", maxBundlePreparedItems, itemID)
 		}
 		instances += count
-		plans = append(plans, contentPlan{def: child, units: units})
+		plans = append(plans, contentPlan{def: child, units: units, absolute: absolute})
 	}
 
 	items := make([]*store.Item, 0, int(instances))
@@ -160,10 +167,19 @@ func (s *Server) prepareBundleItems(ctx context.Context, uid int64, itemID, cont
 			}
 			if countableCategories[plan.def.Category] {
 				limit := bundleQuantityLimit(it.WireClass)
-				if it.Qty <= 0 || it.Qty > limit/plan.units {
-					return nil, fmt.Errorf("组合包内含物单位换算溢出: %s", it.ItemID)
+				var quantity int64
+				if plan.absolute {
+					// 绝对个数条目：units 即最终件数，不乘子物定义默认量。
+					quantity = plan.units
+					if quantity > limit {
+						return nil, fmt.Errorf("组合包内含物数量超过数量槽上限: %s", it.ItemID)
+					}
+				} else {
+					if it.Qty <= 0 || it.Qty > limit/plan.units {
+						return nil, fmt.Errorf("组合包内含物单位换算溢出: %s", it.ItemID)
+					}
+					quantity = it.Qty * plan.units
 				}
-				quantity := it.Qty * plan.units
 				if totals[it.ItemID] > limit-quantity {
 					return nil, fmt.Errorf("组合包内含物总量溢出: %s", it.ItemID)
 				}

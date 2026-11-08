@@ -132,7 +132,7 @@ func (s *Server) fishingEnd(ctx *Ctx) ([]byte, bool) {
 		0:  f0,
 		1:  proto.U32(s.castDistanceBitsForRig(cctx, uid, gearGUID, rigType)),
 		2:  proto.U32(f32Const801F2),
-		3:  build5003(),
+		3:  s.build5003(cctx, uid),
 		4:  proto.Null(),
 		5:  proto.Null(),
 		6:  f6,
@@ -214,15 +214,6 @@ func stLastSkill(s *Server, uid int64) int64 {
 func (s *Server) buildSingleSkill312(ctx context.Context, uid, catID int64) *proto.Value {
 	effects, _ := s.effectiveFishingSkills(ctx, uid)
 	return s.skillCategory312(catID, effects)
-}
-
-// build5003 5012 赛季块（801.f3）。
-func build5003() *proto.Value {
-	return wiregen.MustMakeObj("fopkeoppndn", map[int]*proto.Value{
-		0: build5012(),
-		1: proto.Null(),
-		2: proto.Null(),
-	})
 }
 
 // buildPending25 由 RolledFish 构造 25 条目（14/5 回包与 813.f9 共用）。
@@ -318,6 +309,10 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		if err2 != nil {
 			return nil, false
 		}
+		// 入护后 catch_log 才写入本次鱼获，诱饵广度类成就在这一刻判定。
+		s.evaluateAchievements(ctx, achievementEvent{
+			Kind: evFishKept, DistinctBaits: s.distinctCatchBaits(cctx, uid),
+		})
 		return body, true
 	}
 	st.mu.Unlock()
@@ -374,8 +369,11 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	loc := st.Loc
+	rigType := st.RigType
 	st.mu.Unlock()
 
+	// 807.f1 的 811 礼物行：仅在本次放生真实升级且发放了礼物时非 null。
+	giftRows := proto.Null()
 	if pending != nil {
 		cctx := ctx.Sess.pushCtx()
 		// 只有蓝冠鱼可以命名，已命名的鱼不能改名。
@@ -407,7 +405,7 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 		}
 		ratio := s.tunableF("release_xp_ratio", 0.5)
 		bonus := int64(math.Round(float64(base) * ratio))
-		result, replayed, err := s.releaseCatchOnce(cctx, uid, pending.FishGUID, bonus)
+		result, gifts, replayed, err := s.releaseCatchOnce(cctx, uid, pending.FishGUID, bonus, rigType)
 		if err != nil {
 			ctx.Log.Warn("放生保存失败", "err", err)
 			ctx.ReplyFailure("System.IO.IOException", "放生未能保存，请重试")
@@ -430,16 +428,35 @@ func (s *Server) fishingRelease(ctx *Ctx) ([]byte, bool) {
 				ctx.Sess.Push2_6(max64(1, result.Level-1))
 			}
 		}
+		// 放生路径的升级礼物：礼物本体推 4/22 同步背包（与该路径既有
+		// Push2_9/Push2_1 同一时机）；礼物行随 807.f1（811 数组）下发，
+		// 客户端结算弹窗据此渲染"新级别礼物"卡片栈。
+		for _, row := range gifts {
+			if row != nil {
+				s.pushItemUpdate(uid, row)
+			}
+		}
+		if len(gifts) > 0 {
+			if rows, rerr := s.giftRows811Arg(cctx, result.Level, gifts); rerr != nil {
+				ctx.Log.Warn("升级礼物行构造失败（807.f1 置空）", "err", rerr)
+			} else {
+				giftRows = rows
+			}
+		}
 		s.notifyFishReleased(ctx.Sess, pending)
+		s.evaluateAchievements(ctx, achievementEvent{
+			Kind: evFishReleased, Grade: pending.Grade,
+		})
 	}
-	// 响应 807：{null, null, 307, null, null, null}
+	// 响应 807：{null, [811礼物行], 307, null, null, null}；未升级时 f1=null
+	//（官服未升级放流样本形态，见 monitor docs/LEVEL_UP_GIFT_CARDS.md）。
 	profileTree, err := s.BuildProfile307W(ctx.Sess.pushCtx(), uid, worldTotalGameMin(time.Now()))
 	if err != nil {
 		profileTree = proto.Null()
 	}
 	obj807, err := wiregen.MakeObj("gnilpafigmn", map[int]*proto.Value{
 		0: proto.Null(),
-		1: proto.Null(),
+		1: giftRows,
 		2: profileTree,
 		3: proto.Null(),
 		4: proto.Null(),

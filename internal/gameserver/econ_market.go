@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"path/filepath"
@@ -139,6 +140,7 @@ func marketRatePerG(species string, grade int64) float64 {
 // 无可用数据或倍率未登记时返回 0，调用方回退到基础速率。
 func marketSilverPerKgOverlay(mapKey, fishKey string, grade int64) float64 {
 	overlayOnce.Do(loadMarketOverlay)
+	mapKey = normalizeMarketMapKey(mapKey)
 	if marketPriceTable == nil || len(marketPriceTable) == 0 {
 		return 0
 	}
@@ -206,6 +208,34 @@ func loadMarketOverlay() {
 	}
 }
 
+// normalizeMarketMapKey 把客户端的鱼市场景键（如 level_004_fishmarket）归一到
+// 价格表中的地图键（level_004_torfyanoe_ozero），否则覆盖价查不到会回退基础速率。
+func normalizeMarketMapKey(mapKey string) string {
+	if _, ok := marketPctTable[mapKey]; ok {
+		return mapKey
+	}
+	// 形如 level_004_fishmarket：地图键在前，场景后缀在后。
+	if strings.HasSuffix(mapKey, "_fishmarket") {
+		base := strings.TrimSuffix(mapKey, "_fishmarket")
+		for m := range marketPctTable {
+			if m == base || strings.HasPrefix(m, base+"_") {
+				return m
+			}
+		}
+		return mapKey
+	}
+	// 形如 fishmarket_012：编号在前，映射到 level_012_* 的地图键。
+	if strings.HasPrefix(mapKey, "fishmarket_") {
+		num := strings.TrimPrefix(mapKey, "fishmarket_")
+		for m := range marketPctTable {
+			if strings.HasPrefix(m, "level_"+num+"_") {
+				return m
+			}
+		}
+	}
+	return mapKey
+}
+
 // marketMapPct 返回水域鱼市价格倍率；未登记时返回 0。
 func marketMapPct(mapKey string) float64 {
 	overlayOnce.Do(loadMarketOverlay)
@@ -214,6 +244,30 @@ func marketMapPct(mapKey string) float64 {
 
 // marketPriceCentsForMap 计算单条鱼的鱼市报价（银币分）。
 // 优先使用水域覆盖价，未命中时使用基础速率，两者都乘以新鲜度。
+// marketDayForced 允许用环境变量 RF4_MARKET_DAY 覆盖鱼市日期（yyyyMMdd），
+// 仅用于验证每日价格波动；空值时使用真实 UTC 日期。读取发生在包初始化，
+// 计价路径不做文件 I/O。
+var marketDayForced = os.Getenv("RF4_MARKET_DAY")
+
+func marketDay(now float64) string {
+	if marketDayForced != "" {
+		return marketDayForced
+	}
+	return time.Unix(int64(now), 0).UTC().Format("20060102")
+}
+
+// dailyMarketFactor 返回按 UTC 日期与鱼种确定的每日价格系数，范围 0.95–1.05。
+// 同一鱼种在同一天内稳定，跨天重新取值，用于模拟鱼市日价波动。
+func dailyMarketFactor(species string, now float64) float64 {
+	day := marketDay(now)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(day))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(species))
+	r := float64(h.Sum32()%10000) / 9999.0
+	return 0.95 + 0.10*r
+}
+
 func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) int64 {
 	w := e.WeightG
 	if w < 1 {
@@ -224,10 +278,11 @@ func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) i
 		grade = 1
 	}
 	fresh := freshnessFactor(e.TS, now)
+	factor := dailyMarketFactor(e.Species, now)
 	if perKg := marketSilverPerKgOverlay(mapKey, e.Species, grade); perKg > 0 {
-		return int64(math.Max(1, math.Round(perKg*(float64(w)/1000.0)*100*fresh)))
+		return int64(math.Max(1, math.Round(perKg*factor*(float64(w)/1000.0)*100*fresh)))
 	}
-	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*float64(w)*100*fresh)))
+	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*factor*float64(w)*100*fresh)))
 }
 
 // marketPriceCents 在未指定地图时计算报价，地图路径应使用 marketPriceCentsForMap。
@@ -269,6 +324,7 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 	uid := ctx.Sess.Userid
 	cctx := ctx.Sess.pushCtx()
 	now := float64(time.Now().Unix())
+	sellMapKey := srv.currentLevel(uid)
 	out := proto.Args(proto.S("111"))
 	rotten := 0
 	locked := srv.openMarketOfferFishSet(cctx, uid)
@@ -285,8 +341,8 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 			flag = 1
 			rotten++
 		}
-		mapKey := srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		price := marketPriceCentsForMap(e, now, mapKey)
+		// 鱼市按卖鱼时所在水域计价：同一批鱼在不同地图卖出，价格随该图倍率变化。
+		price := marketPriceCentsForMap(e, now, sellMapKey)
 		out.Items = append(out.Items, wiregen.MustMakeObj("jpmlmnfkbfn", map[int]*proto.Value{
 			0: proto.Guid(g),
 			1: proto.U64(uint64(price)),
@@ -318,12 +374,8 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 	guids := uniqueStrings(deepGUIDs(ctx.Tree))
 
 	// 地图解析使用连接池，必须在事务前完成；事务内只重读护网行并核价。
-	levels := map[string]string{}
-	if list, err := srv.DB.KeepnetList(cctx, uid); err == nil {
-		for _, e := range list {
-			levels[e.EchoGUID] = srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		}
-	}
+	// 鱼市按卖鱼时所在水域计价，与鱼的钓获地图无关。
+	sellMapKey := srv.currentLevel(uid)
 
 	type soldPair struct {
 		guid  string
@@ -366,10 +418,7 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 			ctx.Log.Warn("20/2 读取挂单锁失败", "guid", g, "err", err)
 			return []byte{0x0F}, true
 		}
-		mapKey := levels[g]
-		if mapKey == "" && e.KeepLevel != "" {
-			mapKey = e.KeepLevel
-		}
+		mapKey := sellMapKey
 		price := marketPriceCentsForMap(e, now, mapKey)
 		sold = append(sold, soldPair{guid: g, price: price})
 		total += price
@@ -1291,6 +1340,9 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 		if cerr != nil || child == nil {
 			continue
 		}
+		// 全新件必须写满耐久：轮内零件耐久会聚合成本体那一格，换上去就缺耐久
+		// 等于给玩家装了一只坏件，本体永远抬不回来。
+		setReelChildDurability(child, 1)
 		fields[idx].Val = child
 		ps, pg := srv.partPrice(cctx, o.SysID, def.Category)
 		silver += ps
@@ -1347,6 +1399,10 @@ func hWorkshopOrder(ctx *Ctx) ([]byte, bool) {
 	}
 	row.FieldsJSON = fj
 	if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+		// 本体那一格是轮内零件的综合：换掉烧穿的摩擦片必须能把它抬回来，
+		// 否则“换件修好”永远修不好。抬完本体再写物理参数表，表里的承力与
+		// 抛投摩擦才不会慢一拍，停在磨损前的旧值上。
+		srv.recalcReelBodyDurability(cctx, row)
 		if _, perr := srv.syncReelPerformance(cctx, row); perr != nil {
 			ctx.Log.Warn("工坊换件：轮子物理参数保存失败", "guid", shortGUID(row.GUID), "err", perr)
 		}
@@ -1431,6 +1487,15 @@ func hWorkshopRepair(useGold bool) Handler {
 			}
 			return body, true
 		}
+		// 渔轮是机械总成：先把里面烧掉的摩擦片与磨旧零件一并恢复，只把本体写回
+		// 1.0 的话制动力还是 0，轮子照样收不了线。恢复不进来就不扣钱也不写本体，
+		// 免得出现“外表修好了但摩擦片仍是 0”的状态。
+		if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+			if _, ierr := srv.restoreReelInternals(cctx, row); ierr != nil {
+				ctx.Log.Warn("修理：轮内零件恢复失败，本次修理未生效", "guid", shortGUID(guid), "err", ierr)
+				return nil, false
+			}
+		}
 		// 扣费 + 流水
 		if useGold {
 			_ = srv.DB.UpdateBalance(cctx, ctx.Sess.Userid, p.Silver, p.Gold-cost, p.Bank)
@@ -1441,11 +1506,18 @@ func hWorkshopRepair(useGold bool) Handler {
 		}
 		// 恢复耐久，保留工艺质量。
 		beforeDurability := row.Durability
+
 		if err := srv.DB.SetItemDurability(cctx, guid, 1.0); err != nil {
 			ctx.Log.Warn("修理耐久写库失败", "guid", shortGUID(guid), "err", err)
 			return nil, false
 		}
 		row.Durability = 1.0
+		if def, derr := srv.itemDefForRow(cctx, row); derr == nil && def != nil && def.Category == gearCatReel {
+			// 物理参数表也要跟着回满：搏鱼结算优先读这张表，它不刷新就会继续按磨损后的承力裁决。
+			if _, perr := srv.syncReelPerformance(cctx, row); perr != nil {
+				ctx.Log.Warn("修理：轮子物理参数保存失败", "guid", shortGUID(row.GUID), "err", perr)
+			}
+		}
 		if err := srv.DB.AddItemDamageLog(cctx, store.ItemDamageLog{
 			UID: ctx.Sess.Userid, ItemGUID: guid, ItemID: row.ItemID, Event: damageEventRepair,
 			BeforeDurability: ptrFloat64(beforeDurability), AfterDurability: ptrFloat64(1.0),
@@ -1645,6 +1717,12 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 	if srv.DB != nil && !srv.setOwnedRodSetting(ctx.Sess.pushCtx(), ctx.Sess.Userid,
 		rodGUID, reelDragSettingKey, value, 6) {
 		ctx.Log.Warn("17/14 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
+	}
+	// 摩擦档位变了：本竿缓存的泄力/锁轮承力必须重取，当前锁轮过载段也从头重新爬升。
+	if st := srv.fishingStateForRod(ctx.Sess.Userid, rodGUID); st != nil {
+		st.mu.Lock()
+		st.reelWear.invalidate()
+		st.mu.Unlock()
 	}
 	return nil, true
 }

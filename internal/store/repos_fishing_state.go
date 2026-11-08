@@ -27,6 +27,18 @@ type FishingFish struct {
 	LocLevel       string  `json:"loc_level"`
 	NamedID        string  `json:"named_id"`
 	Name           string  `json:"name"`
+	// 咬钩快照：天然饵在 14/11 被消耗删除，重启后也不能再按 GUID 反查。
+	QualBaitID     string  `json:"qual_bait_id,omitempty"`
+	QualBaitCat    int64   `json:"qual_bait_cat,omitempty"`
+	QualBaitClass  int64   `json:"qual_bait_class,omitempty"`
+	QualBaitFlavor int64   `json:"qual_bait_flavor,omitempty"`
+	QualBaitLenCM  float64 `json:"qual_bait_len_cm,omitempty"`
+	QualBaitSizeMM float64 `json:"qual_bait_size_mm,omitempty"`
+	CastM          float64 `json:"cast_m,omitempty"`
+	IsNight        bool    `json:"is_night,omitempty"`
+	DepthCM        int64   `json:"depth_cm,omitempty"`
+	OnBoat         bool    `json:"on_boat,omitempty"`
+	Drift          bool    `json:"drift,omitempty"`
 }
 
 // FishingState 是 FishState 的可持久化子集。Keepnet 是 DB 权威缓存，
@@ -39,6 +51,7 @@ type FishingState struct {
 	Loc            string
 	Spot           uint64
 	DepthCM        int64
+	CastM          float64
 	CastActive     bool
 	CastTS         time.Time
 	FallTS         time.Time
@@ -62,7 +75,7 @@ type FishingState struct {
 
 const fishingStateCols = `
 		uid, COALESCE(gear_guid,''), COALESCE(rig_type,0), COALESCE(loc,''),
-		COALESCE(spot,0), COALESCE(depth_cm,0), COALESCE(cast_active,0),
+		COALESCE(spot,0), COALESCE(depth_cm,0), COALESCE(cast_m,0), COALESCE(cast_active,0),
 		COALESCE(cast_ts_ns,0), COALESCE(fall_ts_ns,0), COALESCE(fall_seen,0),
 		COALESCE(rig_settled,0), COALESCE(tick_seen,0), COALESCE(tick_seq,0),
 		COALESCE(last_anim,0),
@@ -115,7 +128,7 @@ func scanFishingState(row interface{ Scan(...any) error }) (*FishingState, error
 		resolved int64
 	)
 	err := row.Scan(
-		&st.UID, &st.GearGUID, &st.RigType, &st.Loc, &spot, &st.DepthCM, &cast,
+		&st.UID, &st.GearGUID, &st.RigType, &st.Loc, &spot, &st.DepthCM, &st.CastM, &cast,
 		&castNS, &fallNS, &fallSeen, &settled, &tickSeen, &tickSeq, &st.LastAnim,
 		&pushSent, &hooked, &resolved, &pending, &st.Bait, &st.LastSkill, &armed,
 		&st.BiteSpeed, &st.TrophyLuck, &st.FightTolerance, &biteNS, &st.RodGUID,
@@ -170,18 +183,19 @@ func (d *DB) SaveFishingState(ctx context.Context, st *FishingState) error {
 	}
 	_, err = d.SQL.ExecContext(ctx, `
 		INSERT INTO fishing_state(
-			uid, gear_guid, rig_type, loc, spot, depth_cm, cast_active,
+			uid, gear_guid, rig_type, loc, spot, depth_cm, cast_m, cast_active,
 			cast_ts_ns, fall_ts_ns, fall_seen, rig_settled, tick_seen,
 			tick_seq, last_anim, push_sent, hooked, resolved, pending_json, bait,
 			last_skill, armed_json, bite_speed, trophy_luck, fight_tolerance,
 			bite_at_ns, updated_ts, rod_guid
-		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(uid,rod_guid) DO UPDATE SET
 			gear_guid=excluded.gear_guid,
 			rig_type=excluded.rig_type,
 			loc=excluded.loc,
 			spot=excluded.spot,
 			depth_cm=excluded.depth_cm,
+			cast_m=excluded.cast_m,
 			cast_active=excluded.cast_active,
 			cast_ts_ns=excluded.cast_ts_ns,
 			fall_ts_ns=excluded.fall_ts_ns,
@@ -202,7 +216,7 @@ func (d *DB) SaveFishingState(ctx context.Context, st *FishingState) error {
 			fight_tolerance=excluded.fight_tolerance,
 			bite_at_ns=excluded.bite_at_ns,
 			updated_ts=excluded.updated_ts`,
-		st.UID, st.GearGUID, st.RigType, st.Loc, int64(st.Spot), st.DepthCM,
+		st.UID, st.GearGUID, st.RigType, st.Loc, int64(st.Spot), st.DepthCM, st.CastM,
 		fishingBoolInt(st.CastActive), fishingTimeNS(st.CastTS),
 		fishingTimeNS(st.FallTS), fishingBoolInt(st.FallSeen),
 		fishingBoolInt(st.RigSettled), fishingBoolInt(st.TickSeen), int64(st.TickSeq), st.LastAnim,

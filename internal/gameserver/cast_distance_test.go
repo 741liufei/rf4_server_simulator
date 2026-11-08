@@ -28,15 +28,21 @@ func TestCastBaseDistanceProfiles(t *testing.T) {
 }
 
 func TestReelCastFrictionImprovesWithBearingOilAndDurability(t *testing.T) {
-	wornBasic := reelCastFriction(10, 15, 0.4)
-	newBasic := reelCastFriction(10, 15, 1.0)
-	premium := reelCastFriction(100, 100, 1.0)
+	wornBasic := reelCastFriction(10, 1, 15, 1, 0.4)
+	newBasic := reelCastFriction(10, 1, 15, 1, 1.0)
+	premium := reelCastFriction(100, 1, 100, 1, 1.0)
 	if !(wornBasic > newBasic && newBasic > premium) {
 		t.Fatalf("摩擦系数应随轴承/油品/耐久改善而下降: worn=%f basic=%f premium=%f",
 			wornBasic, newBasic, premium)
 	}
 	if math.Abs(premium-0.05) > 1e-9 {
 		t.Fatalf("满品质轮子摩擦=%f，期望0.05", premium)
+	}
+	// 零件自身磨旧也要体现在抛投手感上：油干了、轴承旧了都更甩不出去。
+	dryOil := reelCastFriction(100, 1, 100, 0, 1.0)
+	wornBearing := reelCastFriction(100, 0, 100, 1, 1.0)
+	if !(dryOil > premium && wornBearing > premium) {
+		t.Fatalf("轮油干涸或轴承磨旧应更难抛: 干油=%f 旧轴承=%f 全新=%f", dryOil, wornBearing, premium)
 	}
 }
 
@@ -261,6 +267,12 @@ func TestCastDistanceUsesMountedReelAndClip(t *testing.T) {
 		p.PlayerPrimary <= 0 || p.PlayerSecondary <= 0 {
 		t.Fatalf("竿长/锥度/Test/主线/线组/饵/玩家状态/技能数据未完整进入模型: %+v", p)
 	}
+	if p.SpoolCapacityM <= 0 || p.SpoolFill <= 0 || p.SpoolFill > 1 {
+		t.Fatalf("spool capacity/fill missing: capacity=%.3f fill=%.3f", p.SpoolCapacityM, p.SpoolFill)
+	}
+	if want := math.Min(p.LineLengthM, p.SpoolCapacityM); math.Abs(p.LineLimitM-want) > 1e-9 {
+		t.Fatalf("line limit should be capped by spool capacity: line=%.3f capacity=%.3f limit=%.3f want=%.3f", p.LineLengthM, p.SpoolCapacityM, p.LineLimitM, want)
+	}
 	perf, err := db.GetReelPerformance(ctx, reel.GUID)
 	if err != nil {
 		t.Fatal(err)
@@ -282,5 +294,45 @@ func TestCastDistanceUsesMountedReelAndClip(t *testing.T) {
 	clipped := srv.castDistanceForRig(ctx, uid, rod.GUID, 16)
 	if math.Abs(clipped.DistanceM-18) > 1e-6 || clipped.ClipLimitM != 18 {
 		t.Fatalf("卡线夹未限制抛投距离: %+v", clipped)
+	}
+}
+
+// TestReelSpoolCapacityMatchesGameData 用游戏内“线轴容量”读数锁定容量拟合式。
+// 2000 杯容量系数 100，4000 杯按 180。
+func TestReelSpoolCapacityMatchesGameData(t *testing.T) {
+	cases := []struct {
+		name     string
+		coef     float64
+		diameter float64
+		want     float64
+	}{
+		{"2000/0.14", 100, 0.14, 234},
+		{"2000/0.18", 100, 0.18, 154},
+		{"2000/0.22", 100, 0.22, 111},
+		{"4000/0.20", 180, 0.20, 245},
+		{"4000/0.24", 180, 0.24, 181},
+		{"4000/0.26", 180, 0.26, 168},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reelSpoolCapacityM(tc.coef, tc.diameter)
+			if math.Abs(got-tc.want)/tc.want > 0.10 {
+				t.Fatalf("容量 %.1fm，期望 %.0fm（误差>10%%）", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestSpoolFillCapsAtCapacity 锁定：整盘线长超过杯容量时按容量计，
+// 短于容量时按实际线长计。
+func TestSpoolFillCapsAtCapacity(t *testing.T) {
+	if got := spoolFillRatio(600, 17); got != 1 {
+		t.Fatalf("600m 盘装 17m 杯，上杯率应为 1，实得 %.3f", got)
+	}
+	if got := spoolFillRatio(8.5, 17); math.Abs(got-0.5) > 1e-9 {
+		t.Fatalf("8.5m/17m 上杯率应为 0.5，实得 %.3f", got)
+	}
+	if got := spoolFillRatio(0, 17); got != 0 {
+		t.Fatalf("无对应为 0，实得 %.3f", got)
 	}
 }
