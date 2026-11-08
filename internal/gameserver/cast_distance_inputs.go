@@ -387,13 +387,32 @@ func (s *Server) castReelSpoolStats(ctx context.Context, reel *store.Item, lineI
 	if diameter <= 0 {
 		return reelType, spoolSize, 0
 	}
-	// 客户端对低轮廓/鼓轮与固定线杯轮使用不同的容量常数。
-	k := 0.16588345
-	if reelType == 2 || reelType == 3 {
-		k = 0.10153155
-	}
-	capacityM = math.Max(k*coef/diameter, 5)
+	// 客户端容量表标定：2000 杯（系数 100）0.14mm≈234m、0.18mm≈154m、
+	// 0.22mm≈111m；4000 杯（系数 180）0.20mm≈245m。
+	// 拟合式 C ≈ 0.093 × 系数 / 线径^1.65，误差 ≤8%。
+	capacityM = reelSpoolCapacityM(coef, diameter)
 	return reelType, spoolSize, capacityM
+}
+
+// reelSpoolCapacityM 按线径估算线杯容量（米）。
+// 数据来源：游戏内“线轴容量”读数（2000/4000 杯各三个线径）。
+func reelSpoolCapacityM(coef, diameterMM float64) float64 {
+	if coef <= 0 || diameterMM <= 0 {
+		return 0
+	}
+	return math.Max(0.093*coef/math.Pow(diameterMM, 1.65), 5)
+}
+
+// spoolFillRatio 计算线杯上杯率。线长是整盘标称长度，超过杯容量时按容量
+// 截断——600m 线盘装在只能装 17m 的小杯上，杯上并不会真有 600m。
+func spoolFillRatio(lineLengthM, capacityM float64) float64 {
+	if lineLengthM <= 0 || capacityM <= 0 {
+		return 0
+	}
+	if lineLengthM > capacityM {
+		lineLengthM = capacityM
+	}
+	return lineLengthM / capacityM
 }
 
 func nestedInt(m map[string]any, key string) int64 {
