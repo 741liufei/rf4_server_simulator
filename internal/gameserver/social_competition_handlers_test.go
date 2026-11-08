@@ -72,6 +72,7 @@ func decodeWrappedBytes(t *testing.T, v *proto.Value) *proto.Value {
 }
 
 func TestAchievementsAndFishTrophiesAreDynamic(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 42)
 	registerAchievementHandlers(env.srv.dispatch)
 	ctx := context.Background()
@@ -142,6 +143,7 @@ func TestAchievementsAndFishTrophiesAreDynamic(t *testing.T) {
 }
 
 func TestSocialHandlersUseRequestedUIDAndWater(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 100)
 	registerSocialHandlers(env.srv.dispatch)
 	ctx := context.Background()
@@ -226,6 +228,7 @@ func mustHex(t *testing.T, h string) []byte {
 }
 
 func TestCompetitionHandlerLifecycleAndResults(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 1)
 	registerCompetitionHandlers(env.srv.dispatch)
 	ctx := context.Background()

@@ -42,6 +42,7 @@ func legacyFallbackItem(t *testing.T, guid string, def *store.ItemDef, qty int64
 // 数量写进该族的两个数量槽（f13 dnmfciolgep + f1 ljnnpokapig），状态位保留，
 // 父实例 guid（f0 hmfmpbemjkg）保持为空。
 func TestReclassifyDipFromFallback(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -111,6 +112,7 @@ func TestReclassifyDipFromFallback(t *testing.T) {
 
 // TestReclassifyRodPodFromFallback 存量竿架（79 有映射但迁移集此前没包含它）。
 func TestReclassifyRodPodFromFallback(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -158,6 +160,7 @@ func TestReclassifyRodPodFromFallback(t *testing.T) {
 // TestPrepareNewDipUsesFamilyClass 新购提取物直接落在正确的实例类上，
 // 数量 = 定义份数（100）× 购买单位。
 func TestPrepareNewDipUsesFamilyClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -194,6 +197,7 @@ func TestPrepareNewDipUsesFamilyClass(t *testing.T) {
 // nledogicnfe 失败（InvalidCastException 'pphmpibfgea'->'nledogicnfe'，
 // 鱼饵筛选/两份小药必现）。启动迁移必须把这类行改写到 bpmmimcmpof/721。
 func TestReclassifyDipFromRodPodVariant(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -266,6 +270,7 @@ func TestReclassifyDipFromRodPodVariant(t *testing.T) {
 // （DTO ifgjaajoofo : aklijhgdgbh<bmalnngjeho>）。香精的香味强度/剂量在
 // def 模板上，wire 只带身份+数量+状态位。
 func TestReclassifyFlavorFromFallback(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -366,6 +371,7 @@ func poisonGroundbaitFlavor(t *testing.T, guid string, def *store.ItemDef, qty i
 // 上的 19 类液体小料（fplt_* 与 feedadds_* 都一样）必须迁到 deckldefiap/125。
 // 2026-11-05 隔离实验：feedadds 落 cilmgoaoofg 单独毒死鱼饵页，与 fplt 同罪。
 func TestReclassifyFlavorFromGroundbaitClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -441,6 +447,7 @@ func TestReclassifyFlavorFromGroundbaitClass(t *testing.T) {
 // TestPrepareNewFlavorUsesFlavorClass 新购 cat 19 香精直接落在 ifgjaajoofo 实例类上；
 // cat 20 添加剂由独立测试覆盖，应落 kgjoemjjadb。
 func TestPrepareNewFlavorUsesFlavorClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -529,6 +536,7 @@ func wrongClassMetaQtyRow(t *testing.T, guid string, def *store.ItemDef, qty int
 // 扫货 aroma/cb_attr/op_attr 后鱼饵页复现转圈的根因。数量写 14 字段布局的
 // f12 dnmfciolgep + f0 ljnnpokapig。
 func TestReclassifyAdditiveFromFlavorClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -583,6 +591,7 @@ func TestReclassifyAdditiveFromFlavorClass(t *testing.T) {
 
 // TestPrepareNewAdditiveUsesAdditiveClass 新购添加剂直接落 dpghngjmnap/126。
 func TestPrepareNewAdditiveUsesAdditiveClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -616,6 +625,7 @@ func TestPrepareNewAdditiveUsesAdditiveClass(t *testing.T) {
 // （nledogicnfe 实为 cat 58 提取物的 DTO）必须迁到 pcngolccead/144——
 // 分发表 case 43 期望 bebejlknhka，商店渲染 box_hvz_pva_* 礼盒必炸。
 func TestReclassifyPVAFromDipClass(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 
@@ -702,6 +712,7 @@ func assertDipQtyFields(t *testing.T, it *store.Item, want int64) {
 }
 
 func TestDipFactoryAndStackKeepQuantityFields(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	it, err := srv.CreateItem(ctx, 1000004, "dip_hvz_se", "backpack", 1)
@@ -725,6 +736,7 @@ func TestDipFactoryAndStackKeepQuantityFields(t *testing.T) {
 }
 
 func TestDipExactCountKeepsQuantityFields(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	it, err := srv.prepareNewItemWithCount(context.Background(), 1000004, "dip_hvz_se", "backpack", 7, "")
 	if err != nil {

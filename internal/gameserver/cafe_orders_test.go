@@ -14,6 +14,7 @@ import (
 )
 
 func TestCafeGenerationUsesWaterRosterAndSparseLargeOrders(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	importFishStaticForProbe(t, db)
 	ctx := context.Background()
@@ -101,6 +102,7 @@ func TestCafeGenerationUsesWaterRosterAndSparseLargeOrders(t *testing.T) {
 }
 
 func TestCafeNativeFlowPaysAndPushesRemoval(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	defer db.Close()
 	importFishStaticForProbe(t, db)
@@ -173,6 +175,7 @@ func TestCafeNativeFlowPaysAndPushesRemoval(t *testing.T) {
 }
 
 func TestCafeAndFishMarketKeepPlayerTradeLocks(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	const uid = int64(3202)

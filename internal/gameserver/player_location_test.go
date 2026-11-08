@@ -48,6 +48,7 @@ func decodeLocator(t *testing.T, srv *Server, body []byte) (level, scene string)
 // 首次玩家没有位置记录时必须回出生图；1/14 成功后，同进程重连和
 // 进程重启式新 Server 都要从 profile 恢复上次地图。
 func TestPlayerLocationFirstLoginTravelReconnectAndRestart(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000001
 	srv := newLocationTestServer(t, db)
@@ -120,6 +121,7 @@ func TestPlayerLocationFirstLoginTravelReconnectAndRestart(t *testing.T) {
 
 // 切图必须按目标地图所需银币扣款，同图重入与免费地图不重复收费。
 func TestTravelDeductsMapSilver(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000002
 	srv := newLocationTestServer(t, db)
@@ -180,6 +182,7 @@ func TestTravelDeductsMapSilver(t *testing.T) {
 
 // 银币不足时回业务失败，既不扣款也不切图。
 func TestTravelInsufficientSilverStaysOnMap(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000003
 	srv := newLocationTestServer(t, db)
@@ -214,6 +217,7 @@ func TestTravelInsufficientSilverStaysOnMap(t *testing.T) {
 
 // 1/13 带地图 key 同样算一次切图，也要扣该地图的银币。
 func TestEnterMapWithKeyDeductsSilver(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000005
 	srv := newLocationTestServer(t, db)
@@ -255,6 +259,7 @@ func TestEnterMapWithKeyDeductsSilver(t *testing.T) {
 
 // 已金币买断（无限通行）的地图切图不再收银币。
 func TestTravelBuyoutPlaceIsFree(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000004
 	srv := newLocationTestServer(t, db)
@@ -288,6 +293,7 @@ func TestTravelBuyoutPlaceIsFree(t *testing.T) {
 
 // 数据库中的地图 key 无效时，1/13 必须返回出生图并修正记录。
 func TestPlayerLocationInvalidMapFallsBackToSpawn(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000001
 	if err := db.SetPlayerLocation(context.Background(), uid, "level_does_not_exist", "bad_scene", 7); err != nil {
@@ -351,6 +357,7 @@ func travelTestTxns(t *testing.T, db *store.DB, uid int64) int {
 
 // 位置写入失败时，钱包扣款、流水与切图必须一起回滚（审查意见 P1）。
 func TestTravelLocationFailureRollsBackCharge(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000006
 	srv := newLocationTestServer(t, db)
@@ -391,6 +398,7 @@ func TestTravelLocationFailureRollsBackCharge(t *testing.T) {
 
 // PR #171 合并后，有效钓鱼游期间前往该地图不再收普通切图门票；到期后恢复收费。
 func TestTravelActiveTripIsFree(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000007
 	srv := newLocationTestServer(t, db)
@@ -454,6 +462,7 @@ func TestTravelActiveTripIsFree(t *testing.T) {
 
 // 房契（place_access kind='house'）同样免普通切图门票。
 func TestTravelHouseAccessIsFree(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000008
 	srv := newLocationTestServer(t, db)
@@ -479,6 +488,7 @@ func TestTravelHouseAccessIsFree(t *testing.T) {
 
 // 同一玩家两个并发 1/14：事务写锁 + 事务内同图判定，只允许扣一次旅费。
 func TestConcurrentTravelChargesOnce(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000009
 	srv := newLocationTestServer(t, db)
@@ -542,6 +552,7 @@ func travelTestProfileSilver(t *testing.T, srv *Server, body []byte) int64 {
 
 // 1/14 响应内的档案 307 必须是扣款后的余额，不能用预构造的旧档案覆盖客户端。
 func TestTravelResponseBodyHasChargedSilver(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	const uid int64 = 1000010
 	srv := newLocationTestServer(t, db)

@@ -61,6 +61,7 @@ func backpackDownloadDetails(t *testing.T, srv *Server, uid int64) []*proto.Valu
 }
 
 func TestBackpackLegacyBundleRecoveryKeepsInventoryDownloadComplete(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid int64 = 4201
@@ -133,6 +134,7 @@ func TestBackpackLegacyBundleRecoveryKeepsInventoryDownloadComplete(t *testing.T
 }
 
 func TestBackpackDownloadAfterDiscardingStarterRodAndRestart(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)

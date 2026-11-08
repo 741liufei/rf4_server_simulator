@@ -128,6 +128,9 @@ func TestBaitWeightCombinationUsesEvidenceAndExistingParameters(t *testing.T) {
 }
 
 func TestBaitWeightReadsLivePrimaryAndSecondaryBaits(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short 模式跳过实时饵位统计抽样")
+	}
 	for _, strict := range []string{"0", "1"} {
 		t.Run("rules="+strict, func(t *testing.T) {
 			t.Setenv("GODEBUG", "randseednop=0")

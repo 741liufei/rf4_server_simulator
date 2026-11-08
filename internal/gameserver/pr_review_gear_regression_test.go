@@ -49,7 +49,8 @@ func storedFieldsOf(t *testing.T, srv *Server, ctx context.Context, guid string)
 // slipUntilWorn 连续泄力打滑直到摩擦片磨穿，返回打滑次数。
 func slipUntilWorn(t *testing.T, srv *Server, ctx context.Context, uid int64, rodGUID, reelGUID string) int {
 	t.Helper()
-	for i := 1; i <= 200; i++ {
+	seedFrictionWasherNearWorn(t, srv, ctx, reelGUID)
+	for i := 1; i <= 2; i++ {
 		out, err := srv.damageReelSlip(ctx, uid, rodGUID, reelGUID)
 		if err != nil {
 			t.Fatalf("第 %d 次打滑失败: %v", i, err)
@@ -58,7 +59,7 @@ func slipUntilWorn(t *testing.T, srv *Server, ctx context.Context, uid int64, ro
 			return i
 		}
 	}
-	t.Fatal("连续打滑 200 次摩擦片仍未磨穿")
+	t.Fatal("预置两次磨损后摩擦片仍未磨穿")
 	return 0
 }
 
@@ -76,9 +77,46 @@ func newSlipRig(t *testing.T, srv *Server, ctx context.Context, uid int64) (rodG
 	return rod.GUID, reel.GUID
 }
 
+// seedFrictionWasherNearWorn 把摩擦片预置到只差两次打滑就磨穿，
+// 避免每个用例真实循环约 50 次写库。后续仍走 damageReelSlip 的真实磨损链。
+func seedFrictionWasherNearWorn(t *testing.T, srv *Server, ctx context.Context, reelGUID string) {
+	t.Helper()
+	row, err := srv.DB.GetItemByGUID(ctx, reelGUID)
+	if err != nil || row == nil {
+		t.Fatalf("读取轮子失败: %+v %v", row, err)
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	washer, def, _, ok := srv.selectedReelPart(ctx, fields, 9)
+	if !ok || washer == nil || def == nil {
+		t.Fatal("轮子缺少摩擦片子实例")
+	}
+	maxDrag := itemDefF32(def, gearAttrDragMax) * row.Workmanship
+	if maxDrag <= 0 {
+		t.Fatal("摩擦片额定制动力无效")
+	}
+	step := maxDrag * reelSlipWear
+	setWireFloat(washer.Fields, washer.Class, fieldIdxByCS(washer.Class, csDragForce), step*1.5)
+	row.FieldsJSON, err = FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.canonicalizeReelStrength(ctx, row, fields)
+	row.FieldsJSON, err = FieldsToJSON(fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.DB.UpdateItemFields(ctx, row.GUID, row.FieldsJSON, row.Qty, row.Durability, row.Workmanship, row.RigGUID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // P1：磨穿后再打滑一次，制动力不能从 0 复活到额定值。
 func TestFrictionWasherWornStateSurvivesSlip(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 	rodGUID, reelGUID := newSlipRig(t, srv, ctx, uid)
@@ -108,7 +146,8 @@ func TestFrictionWasherWornStateSurvivesSlip(t *testing.T) {
 
 // P1：单次磨损必须穿过 ItemToTree 下发，并且经启动修复/重启不回满值。
 func TestFrictionWearSurvivesItemTreeAndRestart(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 	rodGUID, reelGUID := newSlipRig(t, srv, ctx, uid)
@@ -152,7 +191,8 @@ func TestFrictionWearSurvivesItemTreeAndRestart(t *testing.T) {
 
 // P1：轮子零件槽重建（启动修复/工坊兼容修复）不能把磨损刷回满值。
 func TestFrictionWearSurvivesReelComponentRepair(t *testing.T) {
-	srv, _ := newRigTestServer(t)
+	t.Parallel()
+	srv, _ := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 	rodGUID, reelGUID := newSlipRig(t, srv, ctx, uid)
@@ -173,7 +213,8 @@ func TestFrictionWearSurvivesReelComponentRepair(t *testing.T) {
 
 // P1：存量零值只迁移一次；迁移后新语义里的 0 是权威的磨穿状态。
 func TestLegacyZeroDragForceMigrationRunsOnce(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 	rodGUID, reelGUID := newSlipRig(t, srv, ctx, uid)
@@ -220,7 +261,8 @@ func TestLegacyZeroDragForceMigrationRunsOnce(t *testing.T) {
 
 // P1：真实 lc_40246 铅芯前导装配后，上报 17/9 不能被"断件类型不支持"拒绝。
 func TestLeadcoreBreakReportAcceptedOnRealRig(t *testing.T) {
-	srv, _ := newRigTestServer(t)
+	t.Parallel()
+	srv, _ := newStaticRigTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)
 	uid := sess.Userid
@@ -262,7 +304,8 @@ func TestLeadcoreBreakReportAcceptedOnRealRig(t *testing.T) {
 
 // 客户端上报钩断时，按上报件摘钩；即使钩强于主线，也不改判成断线。
 func TestReportedHookBreakDetachesHookEvenIfLineWeaker(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 
@@ -314,6 +357,7 @@ func TestReportedHookBreakDetachesHookEvenIfLineWeaker(t *testing.T) {
 
 // P2：按断件位置取下游集合，子线/连接件断裂不能删掉上游铅芯。
 func TestDownstreamLossKeepsUpstreamLeadcore(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name     string
 		rigType  int64
@@ -345,7 +389,8 @@ func TestDownstreamLossKeepsUpstreamLeadcore(t *testing.T) {
 
 // P2 集成：真实装配铅芯 + 子线，断子线后铅芯仍留在主线上。
 func TestLeaderBreakKeepsMountedLeadcore(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)
 	uid := sess.Userid

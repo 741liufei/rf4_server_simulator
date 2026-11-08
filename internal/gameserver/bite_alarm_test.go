@@ -9,6 +9,7 @@ import (
 )
 
 func TestBiteAlarmUsesNativeItemAndBottomSlot(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -77,6 +78,7 @@ func TestBiteAlarmUsesNativeItemAndBottomSlot(t *testing.T) {
 }
 
 func TestRepairLegacyBiteAlarmPreservesAttachedIdentity(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -121,6 +123,7 @@ func TestRepairLegacyBiteAlarmPreservesAttachedIdentity(t *testing.T) {
 }
 
 func TestRepairLegacyBiteAlarmDoesNotRestoreBrokenOrExhaustedItem(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	def, err := db.GetItemDefByItemID(ctx, "feeder_bell")

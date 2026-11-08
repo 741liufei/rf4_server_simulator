@@ -23,6 +23,7 @@ func newProgressSrv(t *testing.T) (*Server, *store.DB) {
 
 // TestXpMonotonicLevel 验证等级只升不降，并验证管理端修改等级时 xp 会回填到等级门槛。
 func TestXpMonotonicLevel(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	ctx := context.Background()
 	uid := int64(1000001)
@@ -105,6 +106,7 @@ func TestXpMonotonicLevel(t *testing.T) {
 
 // 没有有效会员或竿体加成时，实际入账和原生经验块保持基础值。
 func TestSettleWithoutXPBonusSources(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	ctx := context.Background()
 
@@ -184,6 +186,7 @@ func TestSettleWithoutXPBonusSources(t *testing.T) {
 
 // 结算尺优先沿用内置值；其他鱼种使用尺上的补全分界。
 func TestGradeLinesFollowSettlementRuler(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	ctx := srv.dbCtx()
 
@@ -250,6 +253,7 @@ func TestGradeLinesFollowSettlementRuler(t *testing.T) {
 }
 
 func TestPersonalRecordFollowsKeptWeight(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

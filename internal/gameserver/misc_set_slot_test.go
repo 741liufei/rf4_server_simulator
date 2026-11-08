@@ -9,6 +9,7 @@ import (
 )
 
 func TestSetSlotUnbindsPreviousOwner(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	a, _ := srv.CreateItem(ctx, 1000001, "worm_01", "backpack", 1)

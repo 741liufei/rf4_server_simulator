@@ -72,8 +72,8 @@ func TestWeatherBrokenHookDoesNotStopOtherHealthyHooks(t *testing.T) {
 		t.Fatal("one broken hook stopped a healthy baited hook")
 	}
 	assertRetry(true)
-	if fish := s.rollFishForRig(ctx, uid, rod.GUID, "unknown-map", "worm_01", neutralFishingSkillBonus(),
-		fishRollContext{biteRoll: func() float64 { return 0 }}); fish == nil {
+	alwaysBite := fishRollContext{biteRoll: func() float64 { return 0 }}
+	if fish := s.rollFishForRig(ctx, uid, rod.GUID, "unknown-map", "worm_01", neutralFishingSkillBonus(), alwaysBite); fish == nil {
 		t.Fatal("one broken hook globally blocked actual roll")
 	}
 	if err := db.SetItemDurability(ctx, hooks[1], 0); err != nil {
@@ -83,8 +83,7 @@ func TestWeatherBrokenHookDoesNotStopOtherHealthyHooks(t *testing.T) {
 		t.Fatal("all broken hooks kept fishing")
 	}
 	assertRetry(false)
-	if fish := s.rollFishForRig(ctx, uid, rod.GUID, "unknown-map", "worm_01", neutralFishingSkillBonus(),
-		fishRollContext{biteRoll: func() float64 { return 0 }}); fish != nil {
+	if fish := s.rollFishForRig(ctx, uid, rod.GUID, "unknown-map", "worm_01", neutralFishingSkillBonus(), alwaysBite); fish != nil {
 		t.Fatal("all broken hooks issued a fish")
 	}
 	if err := db.SetItemDurability(ctx, hooks[1], 1); err != nil {

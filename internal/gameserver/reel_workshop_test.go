@@ -32,6 +32,7 @@ func reelPartByCategory(t *testing.T, srv *Server, rowGUID string, category int6
 }
 
 func TestWorkshopExposesAllCompatibleReelParts(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	if n, _, err := srv.LoadCompatTable(); err != nil || n < 1000 {
 		t.Fatalf("兼容表未完整加载: alternatives=%d err=%v", n, err)
@@ -66,6 +67,7 @@ func TestWorkshopExposesAllCompatibleReelParts(t *testing.T) {
 }
 
 func TestWorkshopOrderRefreshesDragVersionAndPerformance(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -145,6 +147,7 @@ func TestWorkshopOrderRefreshesDragVersionAndPerformance(t *testing.T) {
 }
 
 func TestReelWorkshopStatsSurviveRelogTreeBuild(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -223,6 +226,7 @@ func TestReelWorkshopStatsSurviveRelogTreeBuild(t *testing.T) {
 }
 
 func TestReelOverloadUsesDurabilityStages(t *testing.T) {
+	t.Parallel()
 	for durability, want := range map[float64]float64{
 		1.0: 1.4, 0.8: 1.3, 0.6: 1.2, 0.4: 1.1, 0.2: 1.0,
 	} {
@@ -302,6 +306,7 @@ func TestReelOverloadUsesDurabilityStages(t *testing.T) {
 // TestReelSlipDegradesFrictionWasherByStep 验证单次泄力打滑让摩擦片制动力
 // 按 reelSlipWear 比例衰减，且与轮油无关（摩擦片发热磨损，油润滑齿轮不润滑摩擦片）。
 func TestReelSlipDegradesFrictionWasherByStep(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -333,6 +338,7 @@ func TestReelSlipDegradesFrictionWasherByStep(t *testing.T) {
 }
 
 func TestHandRodIgnoresBackpackReel(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

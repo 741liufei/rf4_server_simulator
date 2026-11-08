@@ -54,6 +54,7 @@ func lineLengthOfTestItem(t *testing.T, srv *Server, guid string) int64 {
 }
 
 func TestWeakestLeaderBreaksAndKeepsMainLine(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -167,6 +168,7 @@ func TestWeakestLeaderBreaksAndKeepsMainLine(t *testing.T) {
 }
 
 func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -214,6 +216,7 @@ func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
 }
 
 func TestBrokenRodPersistsZeroDurabilityAndCannotMount(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -298,6 +301,7 @@ func TestBrokenRodPersistsZeroDurabilityAndCannotMount(t *testing.T) {
 }
 
 func TestWearAddsHistoryAndWearsRodBody(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -337,6 +341,7 @@ func TestWearAddsHistoryAndWearsRodBody(t *testing.T) {
 }
 
 func TestLineBreakExhaustsAndDeletesLine(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -384,6 +389,7 @@ func TestLineBreakExhaustsAndDeletesLine(t *testing.T) {
 }
 
 func TestBrokenHandRodDeletesFloat(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -430,6 +436,7 @@ func TestBrokenHandRodDeletesFloat(t *testing.T) {
 // 裁决为断钩时组件耐久归零并离竿，竿本体与承力线不受影响。
 // （回归：旧的"无条件采信钩断"实现会跳过这条物理裁决。）
 func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -510,6 +517,7 @@ func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
 // rig_component 投影、f5 未同步"时断裂也会清掉投影，避免拿一个不再属于该
 // 路径的品类来断言旧行为。
 func TestTerminalComponentProjectionOnlyBreakCleansProjection(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -547,6 +555,7 @@ func TestTerminalComponentProjectionOnlyBreakCleansProjection(t *testing.T) {
 }
 
 func TestInvalidBreakReportPreservesCatchAndEquipment(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)
@@ -620,6 +629,7 @@ func TestInvalidBreakReportPreservesCatchAndEquipment(t *testing.T) {
 }
 
 func TestBreakReportAcceptsMountedLoadComponents(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)
@@ -681,6 +691,7 @@ func TestBreakReportAcceptsMountedLoadComponents(t *testing.T) {
 }
 
 func TestTerminalComponentBreakRechecksAttachment(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	sess := newProbeSess(srv)
@@ -703,6 +714,7 @@ func TestTerminalComponentBreakRechecksAttachment(t *testing.T) {
 // 断竿后果：竿子断梢——竿本体（0 耐久）和竿上的渔轮保留，主线与挂线配件
 // 全部丢失销毁，销毁件进 11028 移除列表让客户端清掉线组 UI。
 func TestRodBreakDestroysRigGearKeepsBrokenRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -792,6 +804,7 @@ func TestRodBreakDestroysRigGearKeepsBrokenRod(t *testing.T) {
 // 断竿不可抛投（回归：客户端不理会 17/7 拒取仍持竿直发 14/2，
 // 线上日志确认断竿 7 秒后仍抛竿成功）。
 func TestBrokenRodCannotCast(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -867,6 +880,7 @@ func TestBrokenRodCannotCast(t *testing.T) {
 
 // 断竿不可组装配件（回归：此前只拦"耐久 0 配件上竿"，没拦"往断竿上装配件"）。
 func TestBrokenRodRejectsComponentMount(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -906,6 +920,7 @@ func TestBrokenRodRejectsComponentMount(t *testing.T) {
 }
 
 func TestRodBreakKeepsReelMounted(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -986,6 +1001,7 @@ func setTestLineLengthM(t *testing.T, db *store.DB, guid string, meters int64) {
 // TestCutLineLosesReportedMetersAndTerminalTackle 回归：17/10 rod/cutline 过去
 // 只回一个容器快照，既不扣主线长度也不删钩组，实机表现为"按 X 线没断、饵还在"。
 func TestCutLineLosesReportedMetersAndTerminalTackle(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -1139,6 +1155,7 @@ func TestCutLineLosesReportedMetersAndTerminalTackle(t *testing.T) {
 // TestCutLineExhaustsLineAndDeletesIt 剪掉的米数超过主线剩余长度时，
 // 主线整条消失并断开竿上的引用，同时留 line_exhausted 记录。
 func TestCutLineExhaustsLineAndDeletesIt(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -1196,6 +1213,7 @@ func TestCutLineExhaustsLineAndDeletesIt(t *testing.T) {
 // TestCutLineWithoutCastKeepsTackle 没有放线时（放线米数为 0 且不在钓组入水状态）
 // 不接受剪线，避免误触把整套钩组清空。
 func TestCutLineWithoutCastKeepsTackle(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -1240,6 +1258,7 @@ func TestCutLineWithoutCastKeepsTackle(t *testing.T) {
 
 // TestCutLineWithZeroLengthRejectedInWater 防止异常零米报文在入水状态清空钩组。
 func TestCutLineWithZeroLengthRejectedInWater(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -1284,6 +1303,7 @@ func TestCutLineWithZeroLengthRejectedInWater(t *testing.T) {
 // TestMainLineLossCategoriesCoverRigComponents 主线断/剪的丢失集合必须来自槽位表，
 // 铅坠、食笼、底钓组主体、铅芯前导这些挂在线上的东西不能漏。
 func TestMainLineLossCategoriesCoverRigComponents(t *testing.T) {
+	t.Parallel()
 	for _, cat := range []int64{catHook, catLead, catLeaderLock, catWireLeader, catLure,
 		catBait, catFloat, 29, 31, 33, 35, 44, 47, 57, 18, 19, 20, 30, 38, 46} {
 		if !mainLineLossCategories[cat] {
@@ -1301,6 +1321,7 @@ func TestMainLineLossCategoriesCoverRigComponents(t *testing.T) {
 // 沉子和钩饵都要随线消失，回包按 800 的三段语义把移除 GUID 放进 f2，
 // 而不是把整个背包塞进 f0（那会让配件重新入库甚至落进背包）。
 func TestCutLineBottomRigDeletesSinkerAndReportsRemovals(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -1383,6 +1404,7 @@ func TestCutLineBottomRigDeletesSinkerAndReportsRemovals(t *testing.T) {
 // TestCutLineSplitChildRefreshesSourceStack 覆盖逐份挂饵的旧存档：
 // 钩上只有 1 份饵，剩余饵仍在原背包堆；剪线后客户端必须收到来源堆的新数量。
 func TestCutLineSplitChildRefreshesSourceStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

@@ -11,6 +11,7 @@ import (
 // TestRepairItemPhysics 验证物理字段修复会写回数据库，
 // 包括顶层强度、刹车力、容器枚举和钓组模板。
 func TestRepairItemPhysics(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

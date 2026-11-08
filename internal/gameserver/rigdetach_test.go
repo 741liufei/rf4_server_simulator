@@ -106,6 +106,7 @@ func assertBackpackRow(t *testing.T, db *store.DB, guid, rodGUID string) *store.
 }
 
 func TestDetachReturnsToBackpack(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -257,6 +258,7 @@ func mustItem(t *testing.T, db *store.DB, guid string) *store.Item {
 
 // TestRig157Completeness 验证全装竿在 14/1 建档后，14/2 返回完整的 157 钓组对象。
 func TestRig157Completeness(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
