@@ -558,3 +558,29 @@ func TestTravelResponseBodyHasChargedSilver(t *testing.T) {
 		t.Fatalf("1/14 档案余额未反映扣款: f7=%d want=%d", got, start-cost)
 	}
 }
+
+// 登录恢复（1/13 空请求）不应因钓鱼游失效被强制送回出生图：玩家上次
+// 停在付费地图时，位置照常保留，由钓鱼入口再做资格判断。
+func TestLoginRestoreKeepsLastPaidMap(t *testing.T) {
+	db := connectTestDB(t)
+	const uid int64 = 1000011
+	target := "level_012_north_sea"
+	if _, ok := placeTripPrices[target]; !ok {
+		t.Fatalf("测试地图未配置钓鱼游价: %s", target)
+	}
+	if err := db.SetPlayerLocation(context.Background(), uid, target, "", 0); err != nil {
+		t.Fatal(err)
+	}
+	srv := newLocationTestServer(t, db)
+	body, ok := hEnterMap(locationTestCtx(locationTestSession(srv, uid), proto.Args524()))
+	if !ok {
+		t.Fatal("登录恢复 1/13 未处理")
+	}
+	level, _ := decodeLocator(t, srv, body)
+	if level != target {
+		t.Fatalf("登录恢复回 %q，期望保留 %q", level, target)
+	}
+	if got := srv.currentLevel(uid); got != target {
+		t.Fatalf("currentLevel=%q，期望 %q", got, target)
+	}
+}

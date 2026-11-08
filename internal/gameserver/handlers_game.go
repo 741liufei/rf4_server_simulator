@@ -621,7 +621,7 @@ func hEnterMap(ctx *Ctx) ([]byte, bool) {
 	}
 	// 钓鱼游/买断已失效的付费地图不能作为出生地图（钓鱼游到期即失去
 	// 进入资格），回退出生地图，避免到期后重连仍留在原地图。
-	if srv.tripLevelLocked(sess.pushCtx(), uid, level) {
+	if charge && srv.tripLevelLocked(sess.pushCtx(), uid, level) {
 		ctx.Log.Info("1/13 目标地图无有效钓鱼游，回出生地图", "level", level)
 		level, scene, spot = spawnLevelKey, sceneForLevel(spawnLevelKey), 0
 	}
