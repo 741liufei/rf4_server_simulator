@@ -232,6 +232,11 @@ func applyHookBiteQuality(f *RolledFish, spec gearPhysicsSpec) {
 	}
 }
 
+func hookRetentionFails(f *RolledFish) bool {
+	return f != nil && !f.LuckProtected && f.BiteQuality == "solid" &&
+		f.HookHoldP > 0 && rand.Float64() > f.HookHoldP
+}
+
 func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
 	out := fishHuntReadiness{Stage: fishHuntDaily}
 	if h == nil || s.DB == nil || !s.groundbaitEnabled() {
@@ -286,18 +291,6 @@ func fishHuntWeights(stage int, h *fishHuntState, trophyLuck, hookMatch float64,
 	default:
 		w1, w2, w3, w4 = 74.7, 24, 1, .3
 	}
-	// 蓝冠 w4 不参与钩型偏置：蓝冠是纯运气鱼，任何钩型概率相同。
-	// 小钩只压低普通入口里的奖杯权重，大钩只提高奖杯权重。
-	hookMatch = groundbaitClamp(hookMatch, 0, 1)
-	if hookMatch < .5 {
-		t := (.5 - hookMatch) / .5
-		w1 *= 1 + .15*t
-		w3 *= 1 - .35*t
-	} else if hookMatch > .5 {
-		t := (hookMatch - .5) / .5
-		w1 *= 1 - .20*t
-		w3 *= 1 + .30*t
-	}
 	if stage > fishHuntDaily && h != nil {
 		switch {
 		case h.Pity >= 50:
@@ -314,6 +307,26 @@ func fishHuntWeights(stage int, h *fishHuntState, trophyLuck, hookMatch float64,
 		}
 		if h.Pity >= 60 || h.BigMiss >= 2 {
 			forceTrophy = true
+		}
+	}
+	// 小钩只改变普通入口内部的奖杯占比，不能顺带改变蓝冠的绝对概率。
+	// 非硬保底时按非蓝冠总权重同比缩放 w4；硬保底只比较奖杯/蓝冠，
+	// 因此直接跳过钩型偏置，保持原奖杯与蓝冠比例。
+	if !forceTrophy {
+		baseNonBlue := w1 + w2 + w3
+		hookMatch = groundbaitClamp(hookMatch, 0, 1)
+		if hookMatch < .5 {
+			t := (.5 - hookMatch) / .5
+			w1 *= 1 + .15*t
+			w3 *= 1 - .35*t
+		} else if hookMatch > .5 {
+			t := (hookMatch - .5) / .5
+			w1 *= 1 - .20*t
+			w3 *= 1 + .30*t
+		}
+		biasedNonBlue := w1 + w2 + w3
+		if baseNonBlue > 0 && biasedNonBlue > 0 {
+			w4 *= biasedNonBlue / baseNonBlue
 		}
 	}
 	return
@@ -366,13 +379,10 @@ func triangularLog(lo, hi, mode float64) float64 {
 	}
 }
 
-func (s *Server) sampleHuntBand(ctx context.Context, key string, grade int64, scale, capG float64, c fishRollContext) int64 {
-	lines := s.cachedSettleStatics(ctx, c, key)
-	q, t, b := float64(lines[0]), float64(lines[1]), float64(lines[2])
+func huntBandBounds(q, t, b float64, grade int64) (lo, hi, mode float64, ok bool) {
 	if q <= 0 || t <= q || b <= t {
-		return 0
+		return 0, 0, 0, false
 	}
-	var lo, hi, mode float64
 	switch grade {
 	case 1:
 		lo, hi, mode = math.Max(1, .15*q), .98*q, .45*q
@@ -382,6 +392,31 @@ func (s *Server) sampleHuntBand(ctx context.Context, key string, grade int64, sc
 		lo, hi, mode = 1.02*t, .98*b, math.Min(1.15*t, .92*b)
 	default:
 		lo, hi, mode = 1.02*b, 1.60*b, 1.10*b
+	}
+	return lo, hi, mode, true
+}
+
+func clampHuntBandWeight(weight, low, high, modeMult, capG float64) float64 {
+	if modeMult > 1 {
+		weight *= math.Min(modeMult, 2)
+	}
+	if weight < low {
+		weight = low
+	}
+	if weight > high {
+		weight = high
+	}
+	if capG > 0 && weight > capG {
+		weight = capG
+	}
+	return weight
+}
+
+func (s *Server) sampleHuntBand(ctx context.Context, key string, grade int64, modeMult, scale, capG float64, c fishRollContext) int64 {
+	lines := s.cachedSettleStatics(ctx, c, key)
+	lo, hi, mode, ok := huntBandBounds(float64(lines[0]), float64(lines[1]), float64(lines[2]), grade)
+	if !ok {
+		return 0
 	}
 	if capG > 0 {
 		cap := capG / math.Max(scale, .0001)
@@ -399,9 +434,7 @@ func (s *Server) sampleHuntBand(ctx context.Context, key string, grade int64, sc
 	if w < 1 {
 		w = 1
 	}
-	if capG > 0 && w > capG {
-		w = capG
-	}
+	w = clampHuntBandWeight(w, lo*scale, hi*scale, modeMult, capG)
 	return int64(math.Round(w))
 }
 
@@ -421,20 +454,24 @@ func (s *Server) sampleHuntWeight(ctx context.Context, key string, modeMult, sca
 	}
 	grade := chooseHuntGrade(w1, w2, w3, w4, force)
 	weight := int64(0)
+	selectedGrade := grade
 	for _, candidate := range []int64{grade, 3, 2, 1} {
 		if candidate > grade {
 			continue
 		}
-		if weight = s.sampleHuntBand(ctx, key, candidate, scale, capG, c); weight > 0 {
+		if weight = s.sampleHuntBand(ctx, key, candidate, modeMult, scale, capG, c); weight > 0 {
+			selectedGrade = candidate
 			break
 		}
 	}
 	if weight <= 0 {
 		// 档位线缺失时仍保留旧模型，避免未知鱼种完全不咬钩。
-		weight = s.sampleWeightDB(ctx, key, 1, scale, capG, c)
-	}
-	if modeMult > 1 {
-		weight = int64(math.Round(float64(weight) * math.Min(modeMult, 2.0)))
+		fallbackMult := 1.0
+		if modeMult > 1 {
+			fallbackMult = math.Min(modeMult, 2)
+		}
+		weight = s.sampleWeightDB(ctx, key, fallbackMult, scale, capG, c)
+		selectedGrade = s.rollGradeForRoll(ctx, key, weight, c)
 	}
 	lines := s.cachedSettleStatics(ctx, c, key)
 	if weight > 0 && lines[2] > 0 {
@@ -445,8 +482,7 @@ func (s *Server) sampleHuntWeight(ctx context.Context, key string, modeMult, sca
 	if capG > 0 && weight > int64(capG) {
 		weight = int64(capG)
 	}
-	grade = s.rollGradeForRoll(ctx, key, weight, c)
-	return weight, grade, readiness
+	return weight, selectedGrade, readiness
 }
 
 func (s *Server) recordHuntBite(ctx context.Context, h *fishHuntState) {
@@ -467,10 +503,10 @@ func (s *Server) recordHuntCatch(ctx context.Context, uid int64, loc string, spo
 		return
 	}
 	h.LastCatchGUID = f.FishGUID
+	consumeFishHuntCompensation(h, time.Now().Unix())
 	if f.Grade >= 3 {
 		h.Pity = 0
 		h.BigMiss = 0
-		h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0
 		if f.Grade >= 4 {
 			h.ActiveSeconds *= .2
 			h.ValidBites = int64(float64(h.ValidBites) * .2)
@@ -478,7 +514,7 @@ func (s *Server) recordHuntCatch(ctx context.Context, uid int64, loc string, spo
 			h.ActiveSeconds *= .5
 			h.ValidBites = int64(float64(h.ValidBites) * .5)
 		}
-	} else {
+	} else if f.HuntStageKnown && f.HuntStage >= fishHuntGather {
 		h.Pity++
 	}
 	s.saveFishHuntState(ctx, h)
@@ -499,6 +535,20 @@ func (s *Server) recordHuntEscape(ctx context.Context, uid int64, loc string, sp
 	s.saveFishHuntState(ctx, h)
 	s.log.Info("大鱼脱钩补偿", "uid", uid, "loc", loc, "spot", spot,
 		"grade", f.Grade, "big_miss", h.BigMiss, "until", h.CompUntil)
+}
+
+func consumeFishHuntCompensation(h *fishHuntState, now int64) {
+	if h == nil || h.CompFish <= 0 {
+		return
+	}
+	if h.CompUntil <= float64(now) {
+		h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0
+		return
+	}
+	h.CompFish--
+	if h.CompFish <= 0 {
+		h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0
+	}
 }
 
 func fishHuntStageName(stage int) string {

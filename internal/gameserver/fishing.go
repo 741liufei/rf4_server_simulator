@@ -251,6 +251,9 @@ type RolledFish struct {
 	BiteQuality    string  // solid / nibble
 	HookHoldP      float64 // 钩型保持率；蓝冠天命鱼固定 1
 	LuckProtected  bool    // 蓝冠天命保护
+	HookConfirmed  bool    // 本尾鱼已经通过首次中钩确认，后续重放不再抽样/扣饵
+	HuntStage      int     // 发鱼时的鱼猎阶段；用于结算保底，不随入护时状态变化
+	HuntStageKnown bool
 
 	FishGUID string
 	Species  string
@@ -904,6 +907,10 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			Grade:    grade,
 			WeightG:  w,
 			LengthM:  length,
+		}
+		if s.fishHuntEnabled() && c.uid > 0 {
+			f.HuntStage = huntReady.Stage
+			f.HuntStageKnown = true
 		}
 		applyHookBiteQuality(f, c.hook)
 		if baitHit {
