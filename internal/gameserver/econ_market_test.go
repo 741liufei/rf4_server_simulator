@@ -39,6 +39,7 @@ func importFishStaticForProbe(t *testing.T, db *store.DB, tables ...string) {
 // TestRollFishUsesStaticTables 验证静态鱼库优先，鱼种来自地点名册并覆盖内置池；
 // 无数据地点仍回退内置池。
 func TestRollFishUsesStaticTables(t *testing.T) {
+	t.Parallel()
 	db, err := store.Open(filepath.Join(t.TempDir(), "roll.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +118,7 @@ func TestRollFishUsesStaticTables(t *testing.T) {
 // TestFishMarketFlow 验证钓获、14/4 结算和 20/2 卖鱼的完整流程：
 // 结算只发经验；卖鱼按 20/1 报价入账一次，并删除护网行、发送 2/1 和 4/21 推送。
 func TestFishMarketFlow(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	defer db.Close()
 	// 缩短咬钩等待（tunables 优先，tunableF 首读进缓存——必须在第一杆前写入）
@@ -314,6 +316,7 @@ func TestFishMarketFlow(t *testing.T) {
 
 // TestMarketPricingModel 验证新鲜度、腐败和鱼市计价。
 func TestMarketPricingModel(t *testing.T) {
+	t.Parallel()
 	now := float64(time.Now().Unix())
 	// 新鲜度阶梯（FRESHNESS_TIERS）
 	cases := []struct {
@@ -354,6 +357,7 @@ func TestMarketPricingModel(t *testing.T) {
 
 // TestWorkshopRepairCost 验证修理费用公式。
 func TestWorkshopRepairCost(t *testing.T) {
+	t.Parallel()
 	if got := repairCost(0, false, 1.0, 1.0); got != 300 {
 		t.Errorf("银修（1 槽全额磨损）= %d want 300", got)
 	}
@@ -371,6 +375,7 @@ func TestWorkshopRepairCost(t *testing.T) {
 // TestWorkshopRepairMapAndBrandMultiplier 验证地图倍率、品牌覆盖、
 // 店铺地图优先级和未知数据回退。
 func TestWorkshopRepairMapAndBrandMultiplier(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		mapKey  string
@@ -408,6 +413,7 @@ func TestWorkshopRepairMapAndBrandMultiplier(t *testing.T) {
 // TestWorkshopRepairFallbackUsesStoreMapAndBrand 21/3 在客户端报价=0 时，
 // fallback 必须走店铺所属地图/品牌倍率，而不是恒定 1.0。
 func TestWorkshopRepairFallbackUsesStoreMapAndBrand(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx0 := context.Background()
 	const uid = int64(3301)
@@ -459,6 +465,7 @@ func TestWorkshopRepairFallbackUsesStoreMapAndBrand(t *testing.T) {
 
 // TestFishNameValidation 验证蓝冠鱼命名规则。
 func TestFishNameValidation(t *testing.T) {
+	t.Parallel()
 	ok := []string{"Big Fish", "Karp-1", "Лещ_2", "a.b_c d9"}
 	bad := map[string]string{
 		"":         "空名字",
@@ -488,6 +495,7 @@ func TestFishNameValidation(t *testing.T) {
 
 // TestLevelKeyOfLoc 地点解析（fishing.level_of 口径）。
 func TestLevelKeyOfLoc(t *testing.T) {
+	t.Parallel()
 	db, err := store.Open(filepath.Join(t.TempDir(), "loc.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -516,6 +524,7 @@ func TestLevelKeyOfLoc(t *testing.T) {
 // TestRepairFlow 银修理闭环：磨损 → 21/3 按客户端报价扣费 → 耐久回 1.0 →
 // 4/5 重建树耐久字段同步（durability 生命周期最小模型）。
 func TestRepairFlow(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "repair"}}, logging.Discard(), nil)

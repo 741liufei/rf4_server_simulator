@@ -11,6 +11,7 @@ import (
 // 客户端 UI 显示 1~30，17/14 上报 0~29（UI = 线上值 + 1）。17/9 上报渔轮断件时，
 // 服务端按上报件损坏渔轮本体，不再改判成“无损坏的泄力打滑”，也不改断最弱的竿身。
 func TestReportedReelBreakDamagesReel(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -74,6 +75,7 @@ func TestReportedReelBreakDamagesReel(t *testing.T) {
 // TestReelDragWireZeroIsValidSetting 锁定 0 基映射：客户端 UI 1 上报线上 0，
 // 这是有效的最小泄力档，不能当成“没有设置”而回退到锁轮。
 func TestReelDragWireZeroIsValidSetting(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -110,6 +112,7 @@ func TestReelDragWireZeroIsValidSetting(t *testing.T) {
 // TestReelSettingsDefaultWhenMissing 锁定：没有 17/14/17/15 记录时按线上 15
 // （UI 16）兜底，不能当成锁轮；默认档位不把渔轮加进最弱环候选。
 func TestReelSettingsDefaultWhenMissing(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -146,6 +149,7 @@ func TestReelSettingsDefaultWhenMissing(t *testing.T) {
 // TestLineBreakReportHonoredBelowLockDrag 锁定：客户端明确上报断线时，
 // 摩擦 23/24/28 档不能被否决成“泄力打滑”；服务端只按最弱环决定断哪一件。
 func TestLineBreakReportHonoredBelowLockDrag(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -189,6 +193,7 @@ func TestLineBreakReportHonoredBelowLockDrag(t *testing.T) {
 }
 
 func TestReelDragWorkmanshipAppliedOnce(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	reel, err := srv.CreateItem(ctx, 1000001, "spin_5820", "backpack", 1)

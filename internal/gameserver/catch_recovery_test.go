@@ -62,6 +62,7 @@ func completedRecoveryFish(t *testing.T, srv *Server, sess *Session, guids ...st
 }
 
 func TestCompletedCatchRecoveryFlagDoesNotAffectNextOnlineFish(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	first := recoveryLogin(t, srv, 871)
 	if err := db.KVSet(context.Background(), "native-import:1000001:inventory", `{"countsByKind":{"5":{"a":0,"b":0}}}`); err != nil {
@@ -108,6 +109,7 @@ func assertRecoveredCatch(t *testing.T, srv *Server, fish *store.FishingFish, xp
 }
 
 func TestCompletedCatchNormalChoiceAndReconnectAutoKeep(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	first := recoveryLogin(t, srv, 801)
 	saved, xp := completedRecoveryFish(t, srv, first)
@@ -132,6 +134,7 @@ func TestCompletedCatchNormalChoiceAndReconnectAutoKeep(t *testing.T) {
 }
 
 func TestCompletedCatchRestartAutoKeepsOriginalTimestamp(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	sess := recoveryLogin(t, srv, 811)
 	saved, xp := completedRecoveryFish(t, srv, sess)
@@ -163,6 +166,7 @@ func TestCompletedCatchRestartAutoKeepsOriginalTimestamp(t *testing.T) {
 }
 
 func TestCompletedCatchFullKeepnetBlocksCastUntilSpaceFreed(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	first := recoveryLogin(t, srv, 821)
 	if err := db.KVSet(context.Background(), "native-import:1000001:inventory", `{"countsByKind":{"5":{"a":1,"b":2}}}`); err != nil {
@@ -199,6 +203,7 @@ func TestCompletedCatchFullKeepnetBlocksCastUntilSpaceFreed(t *testing.T) {
 }
 
 func TestCompletedCatchRecoveryFailurePreservesPendingAndRetries(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	sess := recoveryLogin(t, srv, 831)
 	saved, xp := completedRecoveryFish(t, srv, sess)
@@ -221,6 +226,7 @@ func TestCompletedCatchRecoveryFailurePreservesPendingAndRetries(t *testing.T) {
 }
 
 func TestCompletedCatchRecoveryNeverRevivesKeptSoldOrReleasedFish(t *testing.T) {
+	t.Parallel()
 	for _, decision := range []string{"kept", "sold", "released"} {
 		t.Run(decision, func(t *testing.T) {
 			srv, db := newDetachTestServer(t)
@@ -253,6 +259,7 @@ func TestCompletedCatchRecoveryNeverRevivesKeptSoldOrReleasedFish(t *testing.T) 
 }
 
 func TestUnsettledPendingIsNeverAutoRewardedOrKept(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	sess := recoveryLogin(t, srv, 851)
 	st := srv.fishingState(recoveryUID)
@@ -274,6 +281,7 @@ func TestUnsettledPendingIsNeverAutoRewardedOrKept(t *testing.T) {
 }
 
 func TestKeepnetCapacityUsesCurrentMembershipForManualAndAutomaticKeep(t *testing.T) {
+	t.Parallel()
 	for _, premium := range []string{"active", "expired", "permanent"} {
 		t.Run(premium, func(t *testing.T) {
 			srv, db := newDetachTestServer(t)

@@ -10,6 +10,7 @@ import (
 )
 
 func TestCraftedStackSingleSlotReusable(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -76,6 +77,7 @@ func TestCraftedStackSingleSlotReusable(t *testing.T) {
 
 // 挖取入包必须并入已有堆：230 个蚯蚓挖到 4 个后只剩一个图鉴、数量 234。
 func TestDugBaitStackMergesToSingleEntry(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -129,6 +131,7 @@ func TestDugBaitStackMergesToSingleEntry(t *testing.T) {
 
 // PVA 每组独立占一格后，挂载拆分必须退回原堆，不能串到同种的其他批次。
 func TestPvaSplitRefundsToOriginStack(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

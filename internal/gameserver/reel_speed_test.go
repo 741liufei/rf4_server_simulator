@@ -14,6 +14,7 @@ import (
 )
 
 func TestRodSetSpeedPersists17_15(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -64,6 +65,7 @@ func TestRodSetSpeedPersists17_15(t *testing.T) {
 
 // 外玩家竿 GUID 的 17/15 不得产生任何写入（竿设置、f5.f7、会话状态）。
 func TestRodSetSpeedRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -96,6 +98,7 @@ func TestRodSetSpeedRejectsForeignRod(t *testing.T) {
 
 // 外玩家竿 GUID 的 17/14 同样不得写入摩擦档位。
 func TestRodSetDragRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -121,6 +124,7 @@ func TestRodSetDragRejectsForeignRod(t *testing.T) {
 
 // 没有 17/15 保存记录时，14/1 的会话速度应跟新竿 f5.f7 的默认值 15 一致。
 func TestCastPrepareDefaultsReelSpeedWithoutSavedSetting(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "tele_10012_tl16", "backpack", 1)
@@ -161,6 +165,7 @@ func storedRigField(t *testing.T, db *store.DB, guid string, idx int) uint32 {
 }
 
 func TestBuildRig153LikePreservesReelSettings(t *testing.T) {
+	t.Parallel()
 	src := buildRig153Full("rig_Lure", 5, nil, 0, 0, 0, 0)
 	src.Fields[6] = proto.Field{Op: "U32", Num: ptrU64(24)}
 	src.Fields[7] = proto.Field{Op: "U32", Num: ptrU64(41)}
@@ -176,6 +181,7 @@ func TestBuildRig153LikePreservesReelSettings(t *testing.T) {
 
 // 存量竿没有 f5 时，登录会走 defaultRig153；已保存的摩擦/速度也要回填。
 func TestDefaultRig153RestoresSavedReelSettings(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	seedShopRodDef(t, db)

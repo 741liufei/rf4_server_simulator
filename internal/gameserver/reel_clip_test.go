@@ -9,6 +9,7 @@ import (
 )
 
 func TestReelClipDefaultsOff(t *testing.T) {
+	t.Parallel()
 	rig := buildRig153("rig_FloatSimple", 1, nil, 100)
 	if got := rigClipOf(rig); got != 0 {
 		t.Fatalf("默认轮管卡应为关闭，实得 %d", got)
@@ -16,6 +17,7 @@ func TestReelClipDefaultsOff(t *testing.T) {
 }
 
 func TestReelClipRoundTrip(t *testing.T) {
+	t.Parallel()
 	rig := buildRig153WithClip("rig_FloatSimple", 1, nil, 100, 42)
 	if got := rigClipOf(rig); got != 42 {
 		t.Fatalf("轮管卡读取失败，实得 %d", got)
@@ -26,6 +28,7 @@ func TestReelClipRoundTrip(t *testing.T) {
 }
 
 func TestParseRodGuidIntClipOff(t *testing.T) {
+	t.Parallel()
 	tree := proto.Args(proto.S("524"), proto.Guid("10000000000000000000000000000001"), proto.U32(0))
 	guid, value := parseRodGuidInt(tree)
 	if guid == "" || value != 0 {
@@ -34,6 +37,7 @@ func TestParseRodGuidIntClipOff(t *testing.T) {
 }
 
 func TestReelClipRodSetting(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	srv := &Server{DB: db}
 	guid := "10000000000000000000000000000001"
@@ -47,6 +51,7 @@ func TestReelClipRodSetting(t *testing.T) {
 }
 
 func TestReelClipRestoresMissingRigState(t *testing.T) {
+	t.Parallel()
 	db := connectTestDB(t)
 	srv := &Server{DB: db}
 	seedShopRodDef(t, db)

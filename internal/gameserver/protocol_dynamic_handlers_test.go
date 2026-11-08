@@ -19,6 +19,7 @@ func dynamicTestCtx(srv *Server, tree *proto.Value) *Ctx {
 }
 
 func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	for _, k := range []key2{{13, 5}, {13, 6}, {17, 9}, {17, 10}, {17, 11}, {3, 40}, {3, 41}, {1, 10}} {
@@ -131,6 +132,7 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 }
 
 func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -282,6 +284,7 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 // 所以这一发的飞行距离只能由服务端下发的 805.f0 决定。
 // 缺省 0=沿用客户端值；给正值时 f0 覆盖为服务端距离，扣料仍是每发 1 份。
 func TestDynamicHanditemThrowDistanceForceOverridesClientDistance(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -335,6 +338,7 @@ func TestDynamicHanditemThrowDistanceForceOverridesClientDistance(t *testing.T) 
 // 投掷很可能又是 call=35。撞键会被幂等静默吞掉——饵照扣、窝一格没记
 // （实机 13:10 三发 call=35/36/37 就是这样一笔都没进账）。
 func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	setWeatherTestTunable(t, srv, "groundbait_enabled", "1")
@@ -390,6 +394,7 @@ func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
 }
 
 func TestDynamicEquippedItemsUsesRigRows(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -423,6 +428,7 @@ func TestDynamicEquippedItemsUsesRigRows(t *testing.T) {
 // 这里钉三件事：开开关后 f2 前三位是「玩家沿抛竿方向前进 dist 米」的坐标；
 // 方向取玩家→上次抛竿落点；关掉开关原样退回体力姿态块。
 func TestDynamicHanditemThrowLandingOverridesPoseBlock(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -521,6 +527,7 @@ func TestDynamicHanditemThrowLandingOverridesPoseBlock(t *testing.T) {
 // TestDynamicHanditemThrowLandingCell 锁 handitem_throw_land_cell：
 // 开开关后窝账格子跟着真实落点走，不再是上次抛竿的落点格。
 func TestDynamicHanditemThrowLandingCell(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	setWeatherTestTunable(t, srv, "groundbait_enabled", "1")

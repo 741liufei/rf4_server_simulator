@@ -45,6 +45,7 @@ func testConditionParams() conditionParams {
 // 手算样例：0.5h → 饱食 1.00-0.24*0.5=0.88；
 // 精力因子 = 0.25+0.75*0.88 = 0.91，恢复 0.5*0.91*0.5 = 0.2275。
 func TestAdvancePlayerConditionHandComputed(t *testing.T) {
+	t.Parallel()
 	cur := store.PlayerCondition{Primary: 0.10, Secondary: 1.0, Comfort: 1.0, UpdatedTS: 1000}
 	next := advancePlayerCondition(cur, 1000+1800, testConditionParams(), conditionEnv{})
 	if math.Abs(next.Secondary-0.88) > 1e-9 {
@@ -59,6 +60,7 @@ func TestAdvancePlayerConditionHandComputed(t *testing.T) {
 }
 
 func TestAdvancePlayerConditionClampsAndCaps(t *testing.T) {
+	t.Parallel()
 	p := testConditionParams()
 	// 安全阀：单次推进跨度封顶 12h（会话钟停滞兜底），饱食触底，精力恢复到上限。
 	cur := store.PlayerCondition{Primary: 0.10, Secondary: 1.0, UpdatedTS: 0}
@@ -77,6 +79,7 @@ func TestAdvancePlayerConditionClampsAndCaps(t *testing.T) {
 }
 
 func TestAdvancePlayerConditionDisabledIsPassthrough(t *testing.T) {
+	t.Parallel()
 	p := testConditionParams()
 	p.Enabled = false
 	cur := store.PlayerCondition{Primary: 0.3, Secondary: 0.4, UpdatedTS: 100}
@@ -88,6 +91,7 @@ func TestAdvancePlayerConditionDisabledIsPassthrough(t *testing.T) {
 
 // 懒计算读取口：会话内的在线跨度推进并写回。
 func TestCurrentPlayerConditionAdvancesAndPersists(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -112,6 +116,7 @@ func TestCurrentPlayerConditionAdvancesAndPersists(t *testing.T) {
 
 // 离线停扣：登录冻结状态钟，只推 updated_ts，不改状态值。
 func TestResumePlayerConditionClockSwallowsOfflineGap(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -136,6 +141,7 @@ func TestResumePlayerConditionClockSwallowsOfflineGap(t *testing.T) {
 
 // 总开关关闭：读口回协议默认常量且不改写库存值。
 func TestCurrentPlayerConditionGateOffUsesDefaults(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -159,6 +165,7 @@ func TestCurrentPlayerConditionGateOffUsesDefaults(t *testing.T) {
 
 // 3/13 进食：饱食度恢复 1.0（官服抓包口径），响应 null，补推 2/2 且 f1=1.0。
 func TestKitchenEatRestoresHungerAndPushes(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx0 := context.Background()
 	const uid = int64(1000001)
@@ -228,6 +235,7 @@ func f32Field(obj *proto.Value, idx int) float32 {
 
 // 精力闸门：低于阈值拒绝；高于阈值放行。
 func TestConditionAllowsCastThreshold(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -252,6 +260,7 @@ func TestConditionAllowsCastThreshold(t *testing.T) {
 
 // 动作扣减：直接落库（读满值 0.85 封顶后扣 0.10）。
 func TestSpendEnergyConsumesAndPersists(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -270,6 +279,7 @@ func TestSpendEnergyConsumesAndPersists(t *testing.T) {
 // 舒适度环境漂移：雨天均衡点 1−0.35=0.65，1h 漂移 0.5 触底；
 // 篝火抵消雨天；晒阳精力恢复乘 1.25、均衡点 1.0+0.1 钳回 1.0。
 func TestAdvancePlayerConditionComfortDriftAndSun(t *testing.T) {
+	t.Parallel()
 	p := testConditionParams()
 	cur := store.PlayerCondition{Primary: 0.85, Secondary: 1.0, Comfort: 1.0, UpdatedTS: 1000}
 	next := advancePlayerCondition(cur, 1000+3600, p, conditionEnv{Rain: true})
@@ -295,6 +305,7 @@ func TestAdvancePlayerConditionComfortDriftAndSun(t *testing.T) {
 // 装备被动加成：attrs_json 携带 oiicogcccao/oodjilnjeen 时按竿解析
 // （静态库当前不带这些值，标定写入后同源生效）。
 func TestRigEnergyBonusesFromAttrs(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -335,6 +346,7 @@ func TestRigEnergyBonusesFromAttrs(t *testing.T) {
 
 // 307/档案响应里的 308 只读，不推进在线钟。
 func TestBuildPose308DoesNotAdvanceCondition(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -357,6 +369,7 @@ func TestBuildPose308DoesNotAdvanceCondition(t *testing.T) {
 
 // 篝火舒适度只对同一地点/钓点生效。
 func TestConditionEnvCampfireRequiresSameLocation(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	sess := newProbeSess(srv)
 	st := srv.stateFor(sess.Userid)
@@ -387,6 +400,7 @@ func TestConditionEnvCampfireRequiresSameLocation(t *testing.T) {
 // 免费餐冷却：同游戏日首次进食恢复并落日号，同日二次进食回官服结果码 16
 // 且不改状态；游戏日翻天后恢复可用。
 func TestKitchenEatFreeMealCooldown(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx0 := context.Background()
 	const uid = int64(1000001)

@@ -23,6 +23,7 @@ func lureTestHooks(t *testing.T, s *Server, lureGUID string) []string {
 // 15/1 换钩必须改拟饵实例 f0：钩要挂上去、旧钩让位、钩本体离开背包。
 // 旧实现把钩写进竿式 f5/rig_component，拟饵 f0 不变，客户端看不到换钩效果。
 func TestLureHookSwapRewritesFactoryHookList(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	lure, err := s.CreateItem(t.Context(), 1000001, "spinnerbaits_1244", "backpack", 1)
 	if err != nil {
@@ -72,6 +73,7 @@ func TestLureHookSwapRewritesFactoryHookList(t *testing.T) {
 
 // 15/2 拆钩要把钩从 f0 摘掉并退回背包。
 func TestLureHookRemoveReturnsHookToBackpack(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	lure, err := s.CreateItem(t.Context(), 1000001, "spinnerbaits_1244", "backpack", 1)
 	if err != nil {
@@ -114,6 +116,7 @@ func TestLureHookRemoveReturnsHookToBackpack(t *testing.T) {
 
 // 拟饵钩位不应在 rig_component 留下行：旧实现残留的幽灵行必须被清掉。
 func TestLureHookSwapLeavesNoRigComponentRow(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	lure, err := s.CreateItem(t.Context(), 1000001, "spinnerbaits_1244", "backpack", 1)
 	if err != nil {
@@ -143,6 +146,7 @@ func TestLureHookSwapLeavesNoRigComponentRow(t *testing.T) {
 
 // 拟饵与鱼钩都必须属于当前玩家；否则可直接操作别人的物品。
 func TestLureHookRejectsForeignItems(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	const owner, stranger = int64(1000001), int64(1000002)
 
@@ -181,6 +185,7 @@ func TestLureHookRejectsForeignItems(t *testing.T) {
 // 竿上拟饵的 bait_hook 关联以竿 GUID 为行、key=bait_hook:<拟饵GUID>；
 // 换钩要改成新钩，拆钩要删除旧关联。
 func TestLureHookSelectionTracksSwapAndRemove(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	const uid = int64(1000001)
 	lure, err := s.CreateItem(t.Context(), uid, "spinnerbaits_1244", "backpack", 1)

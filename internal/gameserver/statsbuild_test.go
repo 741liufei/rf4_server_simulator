@@ -10,6 +10,7 @@ import (
 
 // TestFishStats321FromCatchLog 验证 3/2 统计由玩家 catch_log 实时生成。
 func TestFishStats321FromCatchLog(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -128,6 +129,7 @@ func TestFishStats321FromCatchLog(t *testing.T) {
 }
 
 func TestRecordCardDefaultsAndCategory81(t *testing.T) {
+	t.Parallel()
 	// category 81 只有 rengine_1/rengine_2（渔轮电机）。渔轮 DTO 里 f14
 	// dfjpnambjcj 声明的类型是 odlknjlbooh，对应 wire 类 kbpmmclfipg/1470；
 	// 原来的 dbjjakbbbfc/12601 会让客户端解出未知类型，电机槽无法使用。

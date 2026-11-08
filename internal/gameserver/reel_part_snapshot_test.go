@@ -110,9 +110,11 @@ func snapshotWorkshopRequest(guid, id string) *proto.Value {
 }
 
 func TestReelPartSnapshotWorkshop(t *testing.T) {
+	t.Parallel()
 	for _, drag := range []float64{2.25, 0} {
 		t.Run(fmt.Sprintf("drag_%g", drag), func(t *testing.T) {
-			srv, db := newRigTestServer(t)
+			t.Parallel()
+			srv, db := newStaticRigTestServer(t)
 			defer db.Close()
 			ctx := t.Context()
 			const uid = int64(1000001)
@@ -276,9 +278,11 @@ func TestReelPartSnapshotWorkshop(t *testing.T) {
 }
 
 func TestReelPartSnapshotStartup(t *testing.T) {
+	t.Parallel()
 	for _, drag := range []float64{2.25, 0} {
 		t.Run(fmt.Sprintf("drag_%g", drag), func(t *testing.T) {
-			srv, db := newRigTestServer(t)
+			t.Parallel()
+			srv, db := newStaticRigTestServer(t)
 			defer db.Close()
 			ctx := t.Context()
 			reel, err := srv.CreateItem(ctx, 1000001, "spin_5354", "backpack", 1)
@@ -314,11 +318,7 @@ func TestReelPartSnapshotStartup(t *testing.T) {
 					if err := db.Close(); err != nil {
 						t.Fatal(err)
 					}
-					db, err = store.Open(path)
-					if err != nil {
-						t.Fatal(err)
-					}
-					t.Cleanup(func() { _ = db.Close() })
+					db = openStaticDBAtPath(t, path)
 					srv = NewServer(srv.cfg, logging.Discard(), nil)
 					srv.SetDB(db)
 				}
@@ -354,9 +354,11 @@ func TestReelPartSnapshotStartup(t *testing.T) {
 }
 
 func TestReelPartSnapshotBatchAndUnrelatedParts(t *testing.T) {
+	t.Parallel()
 	for _, drag := range []float64{2.25, 0} {
 		t.Run(fmt.Sprintf("drag_%g", drag), func(t *testing.T) {
-			srv, db := newRigTestServer(t)
+			t.Parallel()
+			srv, db := newStaticRigTestServer(t)
 			defer db.Close()
 			ctx := t.Context()
 			const uid = int64(1000001)
@@ -496,9 +498,11 @@ func TestReelPartSnapshotBatchAndUnrelatedParts(t *testing.T) {
 }
 
 func TestReelZeroDragRootPaths(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"tree", "repair", "workshop"} {
 		t.Run(path, func(t *testing.T) {
-			srv, db := newRigTestServer(t)
+			t.Parallel()
+			srv, db := newStaticRigTestServer(t)
 			defer db.Close()
 			ctx := t.Context()
 			const uid = int64(1000001)
@@ -558,6 +562,7 @@ func TestReelZeroDragRootPaths(t *testing.T) {
 }
 
 func TestReelDragFieldPresenceAndFallback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		value   float64
@@ -567,7 +572,8 @@ func TestReelDragFieldPresenceAndFallback(t *testing.T) {
 		{"positive", 2.25, true, 2.25}, {"zero", 0, true, 0}, {"missing", 0, false, 3.5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, db := newRigTestServer(t)
+			t.Parallel()
+			srv, db := newStaticRigTestServer(t)
 			defer db.Close()
 			ctx := t.Context()
 			row, err := srv.CreateItem(ctx, 1000001, "spin_5354", "backpack", 1)
@@ -632,10 +638,12 @@ func TestReelDragFieldPresenceAndFallback(t *testing.T) {
 }
 
 func TestReelDegradePersistsRoot(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"degrade", "slip"} {
 		for _, wearOut := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/worn_%t", path, wearOut), func(t *testing.T) {
-				srv, db := newRigTestServer(t)
+				t.Parallel()
+				srv, db := newStaticRigTestServer(t)
 				defer db.Close()
 				ctx := t.Context()
 				const uid = int64(1000001)

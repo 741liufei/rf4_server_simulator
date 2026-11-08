@@ -12,6 +12,7 @@ import (
 // TestKeepnetThrowRemovesFish 4/7（扔回水里）：容器=5 时按 keepnet 回显 GUID
 // 删除护内鱼；此前按 item 表删除会静默无操作，鱼护里的鱼扔不出去。
 func TestKeepnetThrowRemovesFish(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

@@ -197,6 +197,7 @@ func progressCatchSkillGain(t *testing.T, result *proto.Value) float64 {
 }
 
 func TestProgressNotificationsRequireRealLevelChange(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name                          string
 		oldLevel, oldXP, weight, gain int64
@@ -238,6 +239,7 @@ func TestProgressNotificationsRequireRealLevelChange(t *testing.T) {
 }
 
 func TestProgressNotificationsAccumulateAndDoNotReplayLevelUp(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	progressNotificationProfile(t, srv, 5, baseXp(5))
 	sess, received := progressNotificationSession(t, srv, 1702)
@@ -282,6 +284,7 @@ func TestProgressNotificationsAccumulateAndDoNotReplayLevelUp(t *testing.T) {
 }
 
 func TestProgressNotificationsPersonalRecordDoesNotMeanLevelUp(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		previousBest int64
@@ -312,6 +315,7 @@ func TestProgressNotificationsPersonalRecordDoesNotMeanLevelUp(t *testing.T) {
 }
 
 func TestProgressNotificationsAdminSkillRefreshIsSilent(t *testing.T) {
+	t.Parallel()
 	srv, _ := newProgressSrv(t)
 	progressNotificationProfile(t, srv, 5, baseXp(5))
 	sess, received := progressNotificationSession(t, srv, 1705)
@@ -326,6 +330,7 @@ func TestProgressNotificationsAdminSkillRefreshIsSilent(t *testing.T) {
 }
 
 func TestFishingEndSettleAtMaxSkillSendsNoProficiencyGain(t *testing.T) {
+	t.Parallel()
 	srv, db := newProgressSrv(t)
 	progressNotificationProfile(t, srv, 5, baseXp(5))
 	sess, received := progressNotificationSession(t, srv, 1707)

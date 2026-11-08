@@ -12,6 +12,7 @@ import (
 
 // TestDuplicateRigIndexIsReturnedByProjection 验证历史重复索引在投影重建时收敛。
 func TestDuplicateRigIndexIsReturnedByProjection(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -78,6 +79,7 @@ func TestDuplicateRigIndexIsReturnedByProjection(t *testing.T) {
 
 // TestRigTypeSwitchDedupesSameIndex 验证换钓组类型时同索引组件被收敛。
 func TestRigTypeSwitchDedupesSameIndex(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -132,6 +134,7 @@ func TestRigTypeSwitchDedupesSameIndex(t *testing.T) {
 // TestRigDedupeAcrossMutuallyExclusiveCategories 复现审查 P2：rig57 模板把钩(12)
 // 和拟饵(17)声明为同一槽位 252 的互斥替代项，两者同时挂载应被去重，而不是共存。
 func TestRigDedupeAcrossMutuallyExclusiveCategories(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -197,6 +200,7 @@ func TestRigDedupeAcrossMutuallyExclusiveCategories(t *testing.T) {
 // 同品类两个组件规范化到同一索引时，保留 Extra 已是模板合法索引的那个，
 // 并通过收集器上报退回去向（审查补充建议：退回物品必须能进响应快照）。
 func TestDedupeRigComponentsKeepsTargetValid(t *testing.T) {
+	t.Parallel()
 	srv, _ := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -240,6 +244,7 @@ func TestDedupeRigComponentsKeepsTargetValid(t *testing.T) {
 // TestRigMountReplacesCrossCategorySharedSlot 验证正常装配时最后一次装配生效：
 // rig57 的钩(12)与拟饵(17)共用槽位252，先装钩再装拟饵后，应保留拟饵并把钩退回背包。
 func TestRigMountReplacesCrossCategorySharedSlot(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

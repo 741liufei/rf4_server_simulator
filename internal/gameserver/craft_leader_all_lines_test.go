@@ -148,7 +148,8 @@ func assertCraftedLeaderUsable(
 // TestRepresentativeLinesCanCraftCraftedLeader 抽样走真实 9/1 制作：
 // 覆盖不同线种、材质和拉力区间，验证成品模型、强度、入包和重新下发。
 func TestRepresentativeLinesCanCraftCraftedLeader(t *testing.T) {
-	db := openRecipeTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	const uid = int64(2000043)
@@ -171,7 +172,7 @@ func TestRepresentativeLinesCanCraftCraftedLeader(t *testing.T) {
 		}
 	}
 
-	for _, itemID := range representativeLeaderCraftItems {
+	for _, itemID := range sampleForShort(t, representativeLeaderCraftItems, 4) {
 		def := defs[itemID]
 		if def == nil {
 			t.Fatalf("抽样线材 %s 不在目录中", itemID)
@@ -197,7 +198,8 @@ func TestRepresentativeLinesCanCraftCraftedLeader(t *testing.T) {
 // TestLeaderWireMappingCoversEveryLine 是 -short 也跑的快速版本：
 // 只验证目录里每一根线都能选到一根像样的前导线定义。
 func TestLeaderWireMappingCoversEveryLine(t *testing.T) {
-	db := openRecipeTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 
@@ -212,6 +214,8 @@ func TestLeaderWireMappingCoversEveryLine(t *testing.T) {
 	if len(lineDefs) == 0 || len(wireDefs) == 0 {
 		t.Fatal("测试库缺少线材或前导线目录")
 	}
+	lineDefs = sampleForShort(t, lineDefs, 12)
+	wireDefs = sampleForShort(t, wireDefs, 12)
 	for _, def := range append(append([]*store.ItemDef{}, lineDefs...), wireDefs...) {
 		wireDef, err := srv.leaderWireDefForLine(ctx, def)
 		if err != nil {
@@ -234,7 +238,8 @@ func TestLeaderWireMappingCoversEveryLine(t *testing.T) {
 // 用目录里没有孪生前导线的 60kg 编织线做一根引线，装到海钓钓组的前导槽，
 // 钓组必须把它当成真前导。
 func TestCraftedLeaderFromUnmappedLineEquipsIntoRig(t *testing.T) {
-	db := openRecipeTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
 	const uid = int64(2000044)

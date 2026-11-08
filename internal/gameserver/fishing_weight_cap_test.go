@@ -18,6 +18,7 @@ import (
 
 // TestDispatchCapDefaultIsOff 未配置时派鱼不截断：任何钓具组合都是一样的口径。
 func TestDispatchCapDefaultIsOff(t *testing.T) {
+	t.Parallel()
 	s, _ := newDetachTestServer(t)
 	if got := s.tunableF("fish_weight_cap", 0); got != 0 {
 		t.Fatalf("未配置时 fish_weight_cap = %v, want 0（承力不参与派鱼）", got)
@@ -38,6 +39,7 @@ func TestDispatchCapDefaultIsOff(t *testing.T) {
 
 // TestFishWeightCapInvalidValueFallsBack 非法配置值回退到默认（0）。
 func TestFishWeightCapInvalidValueFallsBack(t *testing.T) {
+	t.Parallel()
 	s, db := newDetachTestServer(t)
 	for _, key := range []string{"fish_weight_cap", "hook_entry_cap"} {
 		if err := db.TunableSet(context.Background(), key, "abc", "test"); err != nil {
@@ -52,6 +54,7 @@ func TestFishWeightCapInvalidValueFallsBack(t *testing.T) {
 
 // TestDispatchIgnoresGearAndHook 是策略本身的行为锁：同一条鱼，换线、换钩都不改变派鱼口径。
 func TestDispatchIgnoresGearAndHook(t *testing.T) {
+	t.Parallel()
 	s, db := newDetachTestServer(t)
 	weak := gearPhysicsSpec{RodPowerKg: 3, LineStrengthKg: 1, HookPresent: true, HookLengthMM: 2, HookSize: 2}
 	strong := gearPhysicsSpec{RodPowerKg: 80, LineStrengthKg: 100, HookPresent: true, HookLengthMM: 76, HookSize: 33}

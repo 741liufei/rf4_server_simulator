@@ -9,6 +9,7 @@ import (
 )
 
 func TestItemRemoveCannotDeleteOtherUsersItem(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	it, err := srv.CreateItem(ctx, 1000001, "worm_01", "backpack", 1)

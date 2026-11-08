@@ -10,6 +10,7 @@ import (
 
 // TestReelMaterializesKnobs 验证渔轮 f5 摇柄子实例存在，并且其字段可被客户端使用。
 func TestReelMaterializesKnobs(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 
@@ -87,6 +88,7 @@ func TestReelMaterializesKnobs(t *testing.T) {
 // TestRodFactoryPartsCarryCondition 验证竿坯、手柄和导环继承母竿的工艺与耐久，
 // 且容器枚举为 rig(4)。
 func TestRodFactoryPartsCarryCondition(t *testing.T) {
+	t.Parallel()
 	srv, _ := newDetachTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, 1000001, "feeder_10126_FD390", "backpack", 1)
@@ -122,6 +124,7 @@ func TestRodFactoryPartsCarryCondition(t *testing.T) {
 
 // TestForcePartsStrengthRendered 验证线、前导和钩的 U32 字段按 F32 位型承载强度。
 func TestForcePartsStrengthRendered(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	for _, itemID := range []string{"mono_15097", "sh_leader_40815", "clas_20163"} {
@@ -166,6 +169,7 @@ func TestForcePartsStrengthRendered(t *testing.T) {
 // TestMountedRootItemContainerEnum 验证根物品的 wire 容器枚举仍为 0；
 // 只有母物品内部嵌套子实例才使用 4。
 func TestMountedRootItemContainerEnum(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -204,6 +208,7 @@ func TestMountedRootItemContainerEnum(t *testing.T) {
 }
 
 func TestLureFactoryHooksHaveStrength(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, 1000001, "spin_10032_S60L", "backpack", 1)

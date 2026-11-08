@@ -25,6 +25,15 @@ func newRigTestServer(t *testing.T) (*Server, *store.DB) {
 	return srv, db
 }
 
+// newStaticRigTestServer 复用只读静态资料库，适合只写玩家表的钓组/装备用例。
+func newStaticRigTestServer(t *testing.T) (*Server, *store.DB) {
+	t.Helper()
+	db := openStaticTestDB(t)
+	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "rig"}}, logging.Discard(), nil)
+	srv.SetDB(db)
+	return srv, db
+}
+
 // rigRequestTree 构造请求树，并走与 dispatch 相同的编码解码路径。
 func rigRequestTree(t *testing.T, items ...*proto.Value) *proto.Value {
 	t.Helper()
