@@ -31,11 +31,6 @@ func TestFishAnnouncementKind(t *testing.T) {
 // 三档播报走各自 kind：25=蓝冠（深橘红）、26=奖杯（橘黄）、3=达标（蓝色，无前缀）。
 func TestFishLandedUsesGradeKind(t *testing.T) {
 	srv, sess, gc := newEscapeProbeServer(t)
-	srv.tunMu.Lock()
-	srv.tunCache = map[string]float64{"fish_tv_kv": 1}
-	srv.tunAt = time.Now()
-	srv.tunMu.Unlock()
-
 	for _, tc := range []struct {
 		grade int64
 		kind  uint64

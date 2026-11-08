@@ -2177,11 +2177,11 @@ func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) 
 	if sess == nil || f == nil {
 		return
 	}
-	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数；KV 未启用
-	// （fish_tv_kv=0）时客户端解析模板缺参会抛异常断连（回登录界面）。此时
-	// 退化为已验证的普通系统文本播报，保留提示且不掉线。
+	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数，默认启用。
+	// 管理员显式设置 fish_tv_kv=0 时退化为普通系统文本播报，避免客户端
+	// 解析模板缺参导致断连。
 	kind := fishAnnouncementKind(f.Grade)
-	if kind != 0 && s.tunableF("fish_tv_kv", 0) != 0 {
+	if kind != 0 && s.tunableF("fish_tv_kv", 1) != 0 {
 		sess.pushChatProbe(27, kind, "", s.fishLandedKV(f))
 		return
 	}
