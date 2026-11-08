@@ -14,6 +14,7 @@ Status: done
 - `store.CatchCountAtLeastGrade`（`COUNT(*)`）更名为 `RareSpeciesCount`，SQL 改为 `COUNT(DISTINCT fish_key)`。
 - 两个发放点同步切换：307.f16（`profilebuild.go`）与 24/19.f5（`social_handlers.go`，原为全量拉取 catch_log 后内存循环计数，一并改为复用 store 函数）。
 - 统计页 3/2 的逐鱼种 f9/f10/f11（总钓获/奖杯/超稀有条数）**不动**——那是另一口径，官方亦按条数。
+- 实时刷新补推送：客户端唯一写星号的路径是「收到新档案」（`hncnmlgnhjm` 把 307 的 `kgpgemhhiik` 拷进 `ifbfdldbana.gebeadddmlp`），从不本地自增。14/4 结算卡 f7 的档案快照早于 catch_log 落库（鱼还在 Pending），不含本尾鱼；因此 14/5 入护后补推一次 `Push2_1()`（econ.go），14/6 放生既有 `Push2_1()` 从「奖励>0」条件放宽为所有真实放生。推送走既有 2/1 通道（args 524 包 307），会员购买/卖鱼等路径已长期使用。
 
 ## User Stories
 
@@ -29,6 +30,7 @@ Status: done
 ## Testing Decisions
 
 - 扩展 `profilebuild_rare_test.go`：同一鱼种插两条 grade 3 + 其他鱼种 grade 2/3/4 + 他账号数据，断言 `RareSpeciesCount=3`（按条数会得 4，能区分新旧口径）且 307.f16=3。
+- 新增 `catch_profile_push_test.go`：入护一条 grade 3 鱼后断言收到 2/1 推送且其档案 f16=1（修复前无推送，判别有效）。
 - 回滚后本测试变红，属预期。
 
 ## Further Notes
