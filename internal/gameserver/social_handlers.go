@@ -86,12 +86,10 @@ func hSocialUserCard(ctx *Ctx) ([]byte, bool) {
 			level = p.Level
 			role = p.Role
 			region = socialRegionCode(p.Region)
-			if rows, err := ctx.Sess.Srv.DB.PlayerCatchRecords(ctx.Sess.Srv.dbCtx(), uid); err == nil {
-				for _, r := range rows {
-					if r.Grade >= 3 {
-						trophies++
-					}
-				}
+			// f5 与 profile f16 同落客户端 ifbfdldbana.gebeadddmlp（等级旁
+			// 星号同一字段），官服按鱼种去重计，不按稀有渔获条数。
+			if n, err := ctx.Sess.Srv.DB.RareSpeciesCount(ctx.Sess.Srv.dbCtx(), uid, 3); err == nil {
+				trophies = n
 			}
 		}
 	}

@@ -217,13 +217,14 @@ func (s *Server) BuildProfile307W(ctx context.Context, uid int64, wNow int64) (*
 		}))
 	}
 
-	// f16=kgpgemhhiik 是资料页奖杯数（trophy/trph），不是布尔值。客户端
-	// hnocpfeadfc 把 f16 映射到 ifbfdldbana.gebeadddmlp；RUIUserInfoWidget
-	// 的 m_trph 和 ddkpcmhdfdb.fgnijlofipp 都显示该值，24/19 的 f5 也同口径。
-	// 因此按 catch_log 中 grade>=3 的条数统计，与 24/19 玩家卡保持一致。
-	rareCatches, rareErr := s.DB.CatchCountAtLeastGrade(ctx, uid, 3)
+	// f16=kgpgemhhiik 是资料页奖杯鱼种数（trophy/trph），不是布尔值。客户端
+	// 把 f16 拷进 ifbfdldbana.gebeadddmlp；RUIUserInfoWidget（等级旁星号）
+	// 和 ddkpcmhdfdb.fgnijlofipp 都显示该值，24/19 的 f5 是同一字段。官服
+	// 语义按鱼种去重：钓到过 grade>=3（重量稀有/超稀有）的鱼种各计一次，
+	// 不等于统计页 3/2 按条数的稀有渔获计数。
+	rareCatches, rareErr := s.DB.RareSpeciesCount(ctx, uid, 3)
 	if rareErr != nil {
-		s.log.Warn("稀有鱼计数读取失败，按 0 下发", "uid", uid, "err", rareErr)
+		s.log.Warn("奖杯鱼种数读取失败，按 0 下发", "uid", uid, "err", rareErr)
 	}
 
 	return wiregen.MakeObj("ghfbofgdflm", map[int]*proto.Value{

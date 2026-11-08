@@ -248,12 +248,14 @@ func (d *DB) KeepnetDelete(ctx context.Context, uid int64, echoGUIDs []string) e
 
 // ---- 钓获日志 ----
 
-// CatchCountAtLeastGrade 统计玩家 grade≥minGrade 的钓获条数。
-// 稀有鱼（奖杯）按 grade>=3 计，与统计页和玩家卡片的计数口径一致。
-func (d *DB) CatchCountAtLeastGrade(ctx context.Context, uid, minGrade int64) (int64, error) {
+// RareSpeciesCount 统计玩家钓到过 grade≥minGrade（重量稀有/超级稀有）的
+// 鱼种数，按 fish_key 去重。面板等级旁星号与 24/19 玩家卡共用该口径
+// （客户端两路同落 ifbfdldbana.gebeadddmlp）；统计页 3/2 的逐鱼种条数
+// 是另一口径，不经此函数。
+func (d *DB) RareSpeciesCount(ctx context.Context, uid, minGrade int64) (int64, error) {
 	var n int64
 	err := d.SQL.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM catch_log WHERE uid=? AND COALESCE(grade,0)>=?`, uid, minGrade).Scan(&n)
+		`SELECT COUNT(DISTINCT fish_key) FROM catch_log WHERE uid=? AND COALESCE(grade,0)>=?`, uid, minGrade).Scan(&n)
 	return n, err
 }
 
