@@ -3,7 +3,9 @@ package gameserver
 import (
 	"context"
 	"crypto/md5"
+	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"time"
 
@@ -455,22 +457,41 @@ func qualificationCountedGUID(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// evaluateQualifications 是唯一的判定入口，由 14/4 上鱼结算在成功路径上调用一次。
-// 返回本次真正发生变化的任务（供 14/4 增量下发）；已达标的任务封顶不再计数，
-// 因此完成后后续鱼不会重发其计数器，客户端不会重复弹完成窗。集合达到目标值时
-// 记下完成时刻，该时刻一旦置位保持稳定（客户端按 0→>0 边沿触发完成弹窗）。
+// evaluateQualifications 是测试与独立调用入口：在自己的事务里判定并写入。
+// 14/4 结算走 evaluateQualificationsTx，与经验/回执同一事务提交。
 func (s *Server) evaluateQualifications(ctx *Ctx, ev qualificationEvent) map[int64]store.QualificationState {
 	changed := make(map[int64]store.QualificationState)
 	if ctx == nil || ctx.Sess == nil || s.DB == nil {
 		return changed
 	}
 	uid := ctx.Sess.Userid
-	states, err := s.DB.QualificationStates(s.dbCtx(), uid)
+	tx, err := beginEconomyTx(s.dbCtx(), s.DB)
 	if err != nil {
-		ctx.Log.Error("资格状态读取失败", "uid", uid, "err", err)
+		ctx.Log.Error("资格进度事务开启失败", "uid", uid, "err", err)
 		return changed
 	}
-	now := float64(time.Now().Unix())
+	defer tx.Rollback()
+	out, err := evaluateQualificationsTx(s.dbCtx(), tx, uid, ev, float64(time.Now().Unix()))
+	if err != nil {
+		ctx.Log.Error("资格进度判定失败", "uid", uid, "err", err)
+		return changed
+	}
+	if err := tx.Commit(); err != nil {
+		ctx.Log.Error("资格进度提交失败", "uid", uid, "err", err)
+		return changed
+	}
+	return out
+}
+
+// evaluateQualificationsTx 在调用方事务内判定并写入全部变化。
+// 任一条写失败都返回错误，由调用方回滚整笔结算，重放时再补记；
+// 每尾鱼的去重键保证重复判定不会重复计数。
+func evaluateQualificationsTx(ctx context.Context, tx *sql.Tx, uid int64, ev qualificationEvent, now float64) (map[int64]store.QualificationState, error) {
+	changed := make(map[int64]store.QualificationState)
+	states, err := store.QualificationStatesTx(ctx, tx, uid)
+	if err != nil {
+		return nil, err
+	}
 	for _, r := range qualificationRules {
 		if r.Event != ev.Kind {
 			continue
@@ -499,13 +520,52 @@ func (s *Server) evaluateQualifications(ctx *Ctx, ev qualificationEvent) map[int
 		if uint32(len(st.Counted)) >= qualificationTarget(uint64(r.ID)) {
 			st.CompletedTS = now
 		}
-		if err := s.DB.UpsertQualificationState(s.dbCtx(), uid, st); err != nil {
-			ctx.Log.Error("资格进度写入失败", "uid", uid, "id", r.ID, "err", err)
-			continue
+		if err := store.UpsertQualificationStateTx(ctx, tx, uid, st); err != nil {
+			return nil, fmt.Errorf("资格进度写入失败 id=%d: %w", r.ID, err)
 		}
 		changed[r.ID] = st
 	}
-	return changed
+	return changed, nil
+}
+
+// worldIsNight 按世界时钟判断夜间（19:00–06:00）。资格事件在咬钩时快照，
+// 不能等 14/4 结算时再取当前时间，否则跨昼夜搏鱼会判错。
+func worldIsNight(unix int64) bool {
+	_, hour := worldDayAndHour(unix)
+	return hour >= 19 || hour < 6
+}
+
+// qualificationEventForCatch 用咬钩快照装配 14/4 上鱼事件。
+// 饵属性、抛投距离、夜间标记和竿型都取本尾鱼咬钩时的值；竿/线从原竿
+//（f.GearGUID）读取，避免玩家中途换竿后把新竿条件算到旧鱼上。
+func (s *Server) qualificationEventForCatch(ctx context.Context, f *RolledFish, rigType int64) qualificationEvent {
+	ev := qualificationEvent{Kind: qevFishLanded}
+	if f == nil {
+		return ev
+	}
+	if rt := s.rigTypeForWrite(ctx, f.GearGUID); rt > 0 {
+		rigType = rt
+	}
+	rodType, rodPower, rodTestMax := s.qualificationRod(ctx, f.GearGUID)
+	mainLine, leaderMat := s.qualificationLineMaterials(ctx, f.GearGUID)
+	rarity := int64(0)
+	if s.DB != nil {
+		rarity = s.DB.SpeciesRarity(ctx, f.Species)
+	}
+	bait := f.QualBait
+	ev.Species, ev.NameZh = f.Species, f.Name
+	ev.WeightG, ev.LengthM = f.WeightG, f.LengthM
+	ev.RigType, ev.RodType, ev.RodPower, ev.RodTestMax = rigType, rodType, rodPower, rodTestMax
+	ev.Grade, ev.CatchGUID, ev.Rarity = f.Grade, f.FishGUID, rarity
+	ev.Bait, ev.BaitCat = bait.ID, bait.Cat
+	ev.BaitClass, ev.BaitFlavor = bait.Class, bait.Flavor
+	ev.LureLenCM, ev.BaitSizeMM = bait.LenCM, bait.SizeMM
+	ev.DepthCM, ev.IsShore = f.DepthCM, !f.OnBoat
+	ev.IsNight, ev.Drift = f.IsNight, f.Drift
+	ev.LocLevel, ev.XP = f.LocLevel, f.XP
+	ev.MainLine, ev.LeaderMat = mainLine, leaderMat
+	ev.CastM = f.CastM
+	return ev
 }
 
 func qualificationHasGUID(fish []store.QualificationFish, guid string) bool {

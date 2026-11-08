@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 )
 
@@ -28,9 +29,14 @@ type QualificationState struct {
 	CompletedTS float64
 }
 
-// QualificationStates 纯查询：读取玩家全部资格任务进度。
-func (d *DB) QualificationStates(ctx context.Context, uid int64) (map[int64]QualificationState, error) {
-	rows, err := d.SQL.QueryContext(ctx,
+// qualificationStates 用统一的查询接口读取进度，供普通连接与结算事务共用。
+type qualificationQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+func qualificationStates(ctx context.Context, q qualificationQuerier, uid int64) (map[int64]QualificationState, error) {
+	rows, err := q.QueryContext(ctx,
 		`SELECT rule_id, counted_json, completed_ts FROM player_qualifications WHERE uid=?`, uid)
 	if err != nil {
 		return nil, err
@@ -51,17 +57,36 @@ func (d *DB) QualificationStates(ctx context.Context, uid int64) (map[int64]Qual
 	return out, rows.Err()
 }
 
-// UpsertQualificationState 写入一条资格任务进度（事件判定后调用）。
-func (d *DB) UpsertQualificationState(ctx context.Context, uid int64, st QualificationState) error {
+func upsertQualificationState(ctx context.Context, q qualificationQuerier, uid int64, st QualificationState) error {
 	raw, err := json.Marshal(st.Counted)
 	if err != nil {
 		return err
 	}
-	_, err = d.SQL.ExecContext(ctx, `
+	_, err = q.ExecContext(ctx, `
 		INSERT INTO player_qualifications(uid, rule_id, counted_json, completed_ts)
 		VALUES(?,?,?,?)
 		ON CONFLICT(uid, rule_id) DO UPDATE SET
 			counted_json=excluded.counted_json, completed_ts=excluded.completed_ts`,
 		uid, st.RuleID, string(raw), st.CompletedTS)
 	return err
+}
+
+// QualificationStates 纯查询：读取玩家全部资格任务进度。
+func (d *DB) QualificationStates(ctx context.Context, uid int64) (map[int64]QualificationState, error) {
+	return qualificationStates(ctx, d.SQL, uid)
+}
+
+// QualificationStatesTx 在结算事务内读取资格进度，保证判定与写入同一快照。
+func QualificationStatesTx(ctx context.Context, tx *sql.Tx, uid int64) (map[int64]QualificationState, error) {
+	return qualificationStates(ctx, tx, uid)
+}
+
+// UpsertQualificationState 写入一条资格任务进度（独立事务入口）。
+func (d *DB) UpsertQualificationState(ctx context.Context, uid int64, st QualificationState) error {
+	return upsertQualificationState(ctx, d.SQL, uid, st)
+}
+
+// UpsertQualificationStateTx 在调用方事务内写入一条资格任务进度。
+func UpsertQualificationStateTx(ctx context.Context, tx *sql.Tx, uid int64, st QualificationState) error {
+	return upsertQualificationState(ctx, tx, uid, st)
 }

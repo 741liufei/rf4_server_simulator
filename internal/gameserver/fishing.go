@@ -28,6 +28,7 @@ type FishState struct {
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
 	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
 	CastActive  bool
+	CastM       float64 // 本杆 14/2 上报的实际落点距离（米），不是钓具理论最大值
 	InWater     bool
 	NeedBite    bool
 	PosX        float64
@@ -262,6 +263,13 @@ type RolledFish struct {
 	OnBoat  bool
 	// Drift 记录咬钩瞬间钓组是否处于顺流移动（14/7 0x40），同样只供资格判定。
 	Drift bool
+	// QualBait 是咬钩瞬间的饵属性快照。天然饵会在 14/11 被 consumeHookedBait
+	// 删除，14/4 再按 BaitGUIDs 反查只会得到空值，因此必须在咬钩时快照。
+	QualBait qualificationBait
+	// CastM / IsNight 同样是咬钩快照：抛投距离取本杆实际落点，夜间按咬钩
+	// 时刻判定，避免搏鱼跨过 06:00/19:00 后改用结算时间。
+	CastM   float64
+	IsNight bool
 }
 
 // stateFor 按 uid 取/建状态。
@@ -1707,6 +1715,12 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 		}
 		f.OnBoat, _ = st.onBoatLocked(now.Unix())
 		f.Drift = st.LureMotionMask&lureMotionDriftBit != 0
+		f.CastM = st.CastM
+		f.IsNight = worldIsNight(now.Unix())
+		if !f.BaitsKnown {
+			f.BaitGUIDs, f.BaitsKnown = s.biteBaitSnapshot(s.dbCtx(), st.GearGuid)
+		}
+		f.QualBait = s.qualificationMountedBait(s.dbCtx(), f.BaitGUIDs)
 		st.Pending = f
 		st.PendingRepush = 0
 		gear, generation := st.GearGuid, st.castGeneration
@@ -1767,6 +1781,9 @@ func (s *Server) onRodBiteTimerTicket(uid int64, st *FishState, ticket fishingTi
 	}
 	f.OnBoat = boatOn
 	f.Drift = lureMask&lureMotionDriftBit != 0
+	f.CastM = st.CastM
+	f.IsNight = worldIsNight(now.Unix())
+	f.QualBait = s.qualificationMountedBait(s.dbCtx(), f.BaitGUIDs)
 	st.Pending = f
 	st.PendingRepush = 0
 	gear, generation := st.GearGuid, st.castGeneration

@@ -27,6 +27,15 @@ type FishingFish struct {
 	LocLevel       string  `json:"loc_level"`
 	NamedID        string  `json:"named_id"`
 	Name           string  `json:"name"`
+	// 咬钩快照：天然饵在 14/11 被消耗删除，重启后也不能再按 GUID 反查。
+	QualBaitID     string  `json:"qual_bait_id,omitempty"`
+	QualBaitCat    int64   `json:"qual_bait_cat,omitempty"`
+	QualBaitClass  int64   `json:"qual_bait_class,omitempty"`
+	QualBaitFlavor int64   `json:"qual_bait_flavor,omitempty"`
+	QualBaitLenCM  float64 `json:"qual_bait_len_cm,omitempty"`
+	QualBaitSizeMM float64 `json:"qual_bait_size_mm,omitempty"`
+	CastM          float64 `json:"cast_m,omitempty"`
+	IsNight        bool    `json:"is_night,omitempty"`
 }
 
 // FishingState 是 FishState 的可持久化子集。Keepnet 是 DB 权威缓存，

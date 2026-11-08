@@ -170,6 +170,15 @@ func rolledFishToStore(f *RolledFish) *store.FishingFish {
 		LocLevel: f.LocLevel,
 		NamedID:  f.NamedID,
 		Name:     f.Name,
+
+		QualBaitID:     f.QualBait.ID,
+		QualBaitCat:    f.QualBait.Cat,
+		QualBaitClass:  f.QualBait.Class,
+		QualBaitFlavor: f.QualBait.Flavor,
+		QualBaitLenCM:  f.QualBait.LenCM,
+		QualBaitSizeMM: f.QualBait.SizeMM,
+		CastM:          f.CastM,
+		IsNight:        f.IsNight,
 	}
 }
 
@@ -193,6 +202,17 @@ func rolledFishFromStore(f *store.FishingFish) *RolledFish {
 		LocLevel: f.LocLevel,
 		NamedID:  f.NamedID,
 		Name:     f.Name,
+
+		QualBait: qualificationBait{
+			ID:     f.QualBaitID,
+			Cat:    f.QualBaitCat,
+			Class:  f.QualBaitClass,
+			Flavor: f.QualBaitFlavor,
+			LenCM:  f.QualBaitLenCM,
+			SizeMM: f.QualBaitSizeMM,
+		},
+		CastM:   f.CastM,
+		IsNight: f.IsNight,
 	}
 }
 

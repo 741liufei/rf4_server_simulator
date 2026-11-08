@@ -24,17 +24,18 @@ type settleXpResult struct {
 	droppedCardGUID string
 	premiumXP       int64
 	replayed        bool
-	baseXP          int64         // 技能倍率后的裸经验（分解中的"基础经验"）
-	totalXP         int64         // 310.f0 = 本条鱼总经验
-	silver          int64         // 展示用银价（catch_silver_cents 口径，不入账）
-	prevBest        int64         // 该鱼种已有纪录重量（813.f6）
-	newLevel        int64         // grant 后等级
-	totalXp         int64         // grant 后累计经验
-	levelsGained    int64         // 本次升级数（310.f1）
-	isRecord        bool          // 是否破个人纪录
-	skillID         int64         // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
-	skillGain       float64       // 310.f3 本次实际熟练度增量
-	giftItems       []*store.Item // 本次结算直发的升级礼物（仅非重放；挂 801 f8 奖励列表）
+	baseXP          int64                              // 技能倍率后的裸经验（分解中的"基础经验"）
+	totalXP         int64                              // 310.f0 = 本条鱼总经验
+	silver          int64                              // 展示用银价（catch_silver_cents 口径，不入账）
+	prevBest        int64                              // 该鱼种已有纪录重量（813.f6）
+	newLevel        int64                              // grant 后等级
+	totalXp         int64                              // grant 后累计经验
+	levelsGained    int64                              // 本次升级数（310.f1）
+	isRecord        bool                               // 是否破个人纪录
+	skillID         int64                              // 310.f2 钓法大类（1 浮钓 / 2 纺车 / 3 底钓 / 11 海钓）
+	skillGain       float64                            // 310.f3 本次实际熟练度增量
+	giftItems       []*store.Item                      // 本次结算直发的升级礼物（仅非重放；挂 801 f8 奖励列表）
+	qualChanges     map[int64]store.QualificationState // 本尾鱼带来的资格变化（重放时从回执还原）
 }
 
 // grantXpMonotonic 增加累计经验并重算等级，保证等级不下降。
@@ -68,16 +69,23 @@ func (s *Server) grantXpMonotonic(ctx context.Context, uid, xpGain int64) (int64
 // settleCatchXP 计算并持久化一条钓获的经验、熟练度、纪录和装备磨损。
 // 经验依次经过技能倍率和单调入账；prevBest 在写入 catch_log 前读取。
 func (s *Server) settleCatchXP(ctx context.Context, uid int64, f *RolledFish, rigType int64) *settleXpResult {
-	r, err := s.settleCatchOnce(ctx, uid, f, rigType)
+	r, _ := s.settleCatchXPWithQualifications(ctx, uid, f, rigType, nil)
+	return r
+}
+
+// settleCatchXPWithQualifications 在成功结算时一并返回本尾鱼的资格变化。
+// ev 为 nil 时跳过资格判定（普通结算调用方）。
+func (s *Server) settleCatchXPWithQualifications(ctx context.Context, uid int64, f *RolledFish, rigType int64, ev *qualificationEvent) (*settleXpResult, map[int64]store.QualificationState) {
+	r, err := s.settleCatchOnceWithQualification(ctx, uid, f, rigType, ev)
 	if err != nil {
 		s.log.Warn("钓获结算未保存", "err", err)
-		return nil
+		return nil, nil
 	}
 	st := s.fishingStateForFish(uid, f)
 	st.mu.Lock()
 	f.XP, f.Silver = r.totalXP, r.silver
 	st.mu.Unlock()
-	return r
+	return r, r.qualChanges
 }
 
 // 磨损槽位使用 item category，而不是客户端序号。鱼线与前导按承力线计算，
@@ -357,7 +365,10 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 	}
 	var res *settleXpResult
 	if hasFish {
-		res = s.settleCatchXP(cctx, uid, pending, rigType)
+		// 资格事件在结算前用咬钩快照装配；判定与经验/回执在同一事务提交。
+		// 达标当尾的结算响应即带完成（增量下发），重放从回执还原同一增量。
+		ev := s.qualificationEventForCatch(cctx, pending, rigType)
+		res, qualChanges = s.settleCatchXPWithQualifications(cctx, uid, pending, rigType, &ev)
 		if res == nil {
 			ctx.ReplyFailure("System.IO.IOException", "钓获结算未能保存，请重试")
 			return nil, true
@@ -371,30 +382,6 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		// 奖杯/蓝冠与破纪录经聊天频道播报；普通鱼由结算卡展示。
 		if !res.replayed {
 			s.notifyFishLanded(ctx.Sess, pending, res.isRecord)
-			// 资格判定在上鱼时发生：达标当尾的结算响应即带完成（增量下发），
-			// 完成后封顶不再计数，避免后续鱼重复弹完成窗。
-			bait := s.qualificationMountedBait(cctx, pending.BaitGUIDs)
-			rodType, rodPower, rodTestMax := s.qualificationRod(cctx, gearGUID)
-			mainLine, leaderMat := s.qualificationLineMaterials(cctx, gearGUID)
-			_, gameHour := worldDayAndHour(time.Now().Unix())
-			qualChanges = s.evaluateQualifications(ctx, qualificationEvent{
-				Kind: qevFishLanded, Species: pending.Species, NameZh: pending.Name,
-				WeightG: pending.WeightG, LengthM: pending.LengthM,
-				RigType: rigType, RodType: rodType, RodPower: rodPower,
-				RodTestMax: rodTestMax,
-				Grade:      pending.Grade, CatchGUID: pending.FishGUID,
-				Rarity: s.DB.SpeciesRarity(cctx, pending.Species),
-				Bait:   bait.ID, BaitCat: bait.Cat,
-				BaitClass: bait.Class, BaitFlavor: bait.Flavor,
-				LureLenCM: bait.LenCM, BaitSizeMM: bait.SizeMM,
-				DepthCM: pending.DepthCM, IsShore: !pending.OnBoat,
-				IsNight:  gameHour >= 19 || gameHour < 6,
-				Drift:    pending.Drift,
-				LocLevel: pending.LocLevel,
-				XP:       pending.XP,
-				MainLine: mainLine, LeaderMat: leaderMat,
-				CastM: castProf.DistanceM,
-			})
 		}
 	}
 
