@@ -267,3 +267,95 @@ func TestGiftBoxMailAttachmentStaysBoxed(t *testing.T) {
 		t.Errorf("饵料盒附件应展开为 food_egg 一行，实得 %d 行", n)
 	}
 }
+
+// TestGiftBoxMailAttachmentWithBuyPriceStaysBoxed 覆盖与 #288 组合后的路径：
+// 商店购买会给礼盒写入 buy_price，邮件快照会携带该值；开盒礼盒仍应可领取。
+func TestGiftBoxMailAttachmentWithBuyPriceStaysBoxed(t *testing.T) {
+	srv, db := newBundleTestServer(t)
+	ctx := context.Background()
+	const uid = int64(4206)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	row, err := srv.prepareNewItem(ctx, uid, giftBoxID, "backpack", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row.BuyPrice = 123
+	att, err := mailItemSnapshotFromRow(row, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.MailInsert(ctx, uid, 0, 0, "test", []store.MailItem{att})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, items := srv.acceptMails(giftBoxTestCtx(t, srv, uid, proto.Args524()), []int64{id}); count != 1 || len(items) != 1 {
+		t.Fatalf("购买价值礼盒应可领取本体: count=%d items=%d", count, len(items))
+	}
+	if rows := giftBoxRows(t, srv, uid, giftBoxID); len(rows) != 1 {
+		t.Fatalf("应领取 1 件礼盒本体，实得 %d 行", len(rows))
+	}
+	if n := giftBoxItemCount(t, srv, uid, "feeder_10126_FD390"); n != 0 {
+		t.Errorf("礼盒附件不应自动展开，实得内容物 %d 行", n)
+	}
+}
+
+// TestGiftBoxMailAttachmentQtyCap 防止损坏附件用超大 Qty 触发无界构造。
+func TestGiftBoxMailAttachmentQtyCap(t *testing.T) {
+	srv, db := newBundleTestServer(t)
+	ctx := context.Background()
+	const uid = int64(4207)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	id, err := db.MailInsert(ctx, uid, 0, 0, "test", []store.MailItem{{
+		ItemID: giftBoxID, Qty: maxBundlePreparedItems + 1,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, items := srv.acceptMails(giftBoxTestCtx(t, srv, uid, proto.Args524()), []int64{id}); count != 0 || len(items) != 0 {
+		t.Fatalf("超限礼盒附件不应领取: count=%d items=%d", count, len(items))
+	}
+	assertBundleMailUnclaimed(t, db, uid, id)
+	if rows := giftBoxRows(t, srv, uid, giftBoxID); len(rows) != 0 {
+		t.Errorf("超限附件不应入库，实得 %d 行", len(rows))
+	}
+}
+
+// TestGiftBoxUseRollsBackWhenDeleteSkipped 删除未真正发生时不得发放内容物。
+func TestGiftBoxUseRollsBackWhenDeleteSkipped(t *testing.T) {
+	srv, db := newBundleTestServer(t)
+	ctx := context.Background()
+	const uid = int64(4208)
+	if _, err := db.EnsureProfile(ctx, uid); err != nil {
+		t.Fatal(err)
+	}
+	row, err := srv.prepareNewItem(ctx, uid, giftBoxID, "backpack", 1, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InsertItem(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`CREATE TRIGGER skip_giftbox_delete BEFORE DELETE ON item
+		WHEN OLD.item_id='box_feeder_pro' BEGIN SELECT RAISE(IGNORE); END`); err != nil {
+		t.Fatal(err)
+	}
+	c := giftBoxTestCtx(t, srv, uid, proto.Args524(proto.U64(0), proto.Guid(row.GUID)))
+	c.replyCapture = &ctxReplyCapture{}
+	body, ok := hItemUse(c)
+	_, present, _, failed := c.replyCapture.snapshot()
+	if !ok || body != nil || !present || !failed {
+		t.Fatalf("删除未发生时礼盒应拒绝开盒: ok=%v body=%d present=%v failed=%v", ok, len(body), present, failed)
+	}
+	if n := giftBoxItemCount(t, srv, uid, giftBoxID); n != 1 {
+		t.Errorf("失败后礼盒应保留，实得 %d 行", n)
+	}
+	for _, content := range giftBoxFeederProContents {
+		if n := giftBoxItemCount(t, srv, uid, content); n != 0 {
+			t.Errorf("失败后内容物 %s 不应入库，实得 %d 行", content, n)
+		}
+	}
+}

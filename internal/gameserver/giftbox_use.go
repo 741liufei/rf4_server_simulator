@@ -62,7 +62,7 @@ func (s *Server) useGiftBox(ctx *Ctx) ([]byte, bool) {
 		return fail("礼盒打开未完成，请重试")
 	}
 	defer func() { _ = tx.Rollback() }()
-	fresh, err := getItemTx(cctx, tx, guid)
+	fresh, err := getOwnedItemTx(cctx, tx, uid, guid)
 	if errors.Is(err, sql.ErrNoRows) {
 		return fail("礼盒不存在或已被打开")
 	}
@@ -73,8 +73,9 @@ func (s *Server) useGiftBox(ctx *Ctx) ([]byte, bool) {
 	if fresh.Container != "backpack" || fresh.RigGUID != "" {
 		return fail("礼盒只能在背包中打开")
 	}
-	if _, err := removeItemsTx(cctx, tx, uid, []string{guid}); err != nil {
-		ctx.Log.Warn("礼盒删除失败", "guid", guid, "err", err)
+	removed, err := removeItemsTx(cctx, tx, uid, []string{guid})
+	if err != nil || removed != 1 {
+		ctx.Log.Warn("礼盒删除失败", "guid", guid, "removed", removed, "err", err)
 		return fail("礼盒打开未完成，请重试")
 	}
 	granted := make([]*store.Item, 0, len(contents))
