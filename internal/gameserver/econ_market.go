@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"math"
 	"os"
 	"path/filepath"
@@ -139,6 +140,7 @@ func marketRatePerG(species string, grade int64) float64 {
 // 无可用数据或倍率未登记时返回 0，调用方回退到基础速率。
 func marketSilverPerKgOverlay(mapKey, fishKey string, grade int64) float64 {
 	overlayOnce.Do(loadMarketOverlay)
+	mapKey = normalizeMarketMapKey(mapKey)
 	if marketPriceTable == nil || len(marketPriceTable) == 0 {
 		return 0
 	}
@@ -206,6 +208,34 @@ func loadMarketOverlay() {
 	}
 }
 
+// normalizeMarketMapKey 把客户端的鱼市场景键（如 level_004_fishmarket）归一到
+// 价格表中的地图键（level_004_torfyanoe_ozero），否则覆盖价查不到会回退基础速率。
+func normalizeMarketMapKey(mapKey string) string {
+	if _, ok := marketPctTable[mapKey]; ok {
+		return mapKey
+	}
+	// 形如 level_004_fishmarket：地图键在前，场景后缀在后。
+	if strings.HasSuffix(mapKey, "_fishmarket") {
+		base := strings.TrimSuffix(mapKey, "_fishmarket")
+		for m := range marketPctTable {
+			if m == base || strings.HasPrefix(m, base+"_") {
+				return m
+			}
+		}
+		return mapKey
+	}
+	// 形如 fishmarket_012：编号在前，映射到 level_012_* 的地图键。
+	if strings.HasPrefix(mapKey, "fishmarket_") {
+		num := strings.TrimPrefix(mapKey, "fishmarket_")
+		for m := range marketPctTable {
+			if strings.HasPrefix(m, "level_"+num+"_") {
+				return m
+			}
+		}
+	}
+	return mapKey
+}
+
 // marketMapPct 返回水域鱼市价格倍率；未登记时返回 0。
 func marketMapPct(mapKey string) float64 {
 	overlayOnce.Do(loadMarketOverlay)
@@ -214,6 +244,30 @@ func marketMapPct(mapKey string) float64 {
 
 // marketPriceCentsForMap 计算单条鱼的鱼市报价（银币分）。
 // 优先使用水域覆盖价，未命中时使用基础速率，两者都乘以新鲜度。
+// marketDayForced 允许用环境变量 RF4_MARKET_DAY 覆盖鱼市日期（yyyyMMdd），
+// 仅用于验证每日价格波动；空值时使用真实 UTC 日期。读取发生在包初始化，
+// 计价路径不做文件 I/O。
+var marketDayForced = os.Getenv("RF4_MARKET_DAY")
+
+func marketDay(now float64) string {
+	if marketDayForced != "" {
+		return marketDayForced
+	}
+	return time.Unix(int64(now), 0).UTC().Format("20060102")
+}
+
+// dailyMarketFactor 返回按 UTC 日期与鱼种确定的每日价格系数，范围 0.95–1.05。
+// 同一鱼种在同一天内稳定，跨天重新取值，用于模拟鱼市日价波动。
+func dailyMarketFactor(species string, now float64) float64 {
+	day := marketDay(now)
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(day))
+	_, _ = h.Write([]byte("|"))
+	_, _ = h.Write([]byte(species))
+	r := float64(h.Sum32()%10000) / 9999.0
+	return 0.95 + 0.10*r
+}
+
 func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) int64 {
 	w := e.WeightG
 	if w < 1 {
@@ -224,10 +278,11 @@ func marketPriceCentsForMap(e *store.KeepnetEntry, now float64, mapKey string) i
 		grade = 1
 	}
 	fresh := freshnessFactor(e.TS, now)
+	factor := dailyMarketFactor(e.Species, now)
 	if perKg := marketSilverPerKgOverlay(mapKey, e.Species, grade); perKg > 0 {
-		return int64(math.Max(1, math.Round(perKg*(float64(w)/1000.0)*100*fresh)))
+		return int64(math.Max(1, math.Round(perKg*factor*(float64(w)/1000.0)*100*fresh)))
 	}
-	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*float64(w)*100*fresh)))
+	return int64(math.Max(1, math.Round(marketRatePerG(e.Species, grade)*factor*float64(w)*100*fresh)))
 }
 
 // marketPriceCents 在未指定地图时计算报价，地图路径应使用 marketPriceCentsForMap。
@@ -269,6 +324,7 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 	uid := ctx.Sess.Userid
 	cctx := ctx.Sess.pushCtx()
 	now := float64(time.Now().Unix())
+	sellMapKey := srv.currentLevel(uid)
 	out := proto.Args(proto.S("111"))
 	rotten := 0
 	locked := srv.openMarketOfferFishSet(cctx, uid)
@@ -285,8 +341,8 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 			flag = 1
 			rotten++
 		}
-		mapKey := srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		price := marketPriceCentsForMap(e, now, mapKey)
+		// 鱼市按卖鱼时所在水域计价：同一批鱼在不同地图卖出，价格随该图倍率变化。
+		price := marketPriceCentsForMap(e, now, sellMapKey)
 		out.Items = append(out.Items, wiregen.MustMakeObj("jpmlmnfkbfn", map[int]*proto.Value{
 			0: proto.Guid(g),
 			1: proto.U64(uint64(price)),
@@ -318,12 +374,8 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 	guids := uniqueStrings(deepGUIDs(ctx.Tree))
 
 	// 地图解析使用连接池，必须在事务前完成；事务内只重读护网行并核价。
-	levels := map[string]string{}
-	if list, err := srv.DB.KeepnetList(cctx, uid); err == nil {
-		for _, e := range list {
-			levels[e.EchoGUID] = srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		}
-	}
+	// 鱼市按卖鱼时所在水域计价，与鱼的钓获地图无关。
+	sellMapKey := srv.currentLevel(uid)
 
 	type soldPair struct {
 		guid  string
@@ -366,10 +418,7 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 			ctx.Log.Warn("20/2 读取挂单锁失败", "guid", g, "err", err)
 			return []byte{0x0F}, true
 		}
-		mapKey := levels[g]
-		if mapKey == "" && e.KeepLevel != "" {
-			mapKey = e.KeepLevel
-		}
+		mapKey := sellMapKey
 		price := marketPriceCentsForMap(e, now, mapKey)
 		sold = append(sold, soldPair{guid: g, price: price})
 		total += price

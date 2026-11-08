@@ -47,6 +47,22 @@ type lureAttributes struct {
 	Attraction   int64
 }
 
+// resolveRollLevelKey 把判鱼上下文的 loc 换成海图用的 level key。
+//
+// c.loc 是客户端场景名（loc12_157），不是 1/12、1/14 那种目标地图 key：
+// travelLevelKey 只认 map_defs.json 里的 level_* key，场景名会被判无效并回退出生图，
+// 海图区号随之定位不到，“海图”前置条件整体失效。场景名必须先用 loc_alias 解析，
+// 与 cafe_orders、econ_market、fishing_weather_context 一致；解析不出来再回退。
+func (s *Server) resolveRollLevelKey(ctx context.Context, loc string) string {
+	if s == nil || s.DB == nil || loc == "" {
+		return travelLevelKey(loc)
+	}
+	if key := s.DB.ResolveLevelKey(ctx, loc); key != "" {
+		return travelLevelKey(key)
+	}
+	return travelLevelKey(loc)
+}
+
 func (s *Server) prepareFishRollRuntime(ctx context.Context, c *fishRollContext, statLoc string) {
 	if c == nil {
 		return
@@ -59,7 +75,7 @@ func (s *Server) prepareFishRollRuntime(ctx context.Context, c *fishRollContext,
 	}
 	if !c.runtime.levelChecked {
 		c.runtime.levelChecked = true
-		levelKey := travelLevelKey(c.loc)
+		levelKey := s.resolveRollLevelKey(ctx, c.loc)
 		c.runtime.chartKnown = sonarChartLevel(levelKey)
 		if c.runtime.chartKnown && c.hasPos {
 			c.runtime.zone, c.runtime.zoneKnown = sonarZoneForPoint(levelKey, c.x, c.z)

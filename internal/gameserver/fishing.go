@@ -1948,31 +1948,34 @@ func fishAnnouncementKind(grade int64) int {
 	return 0
 }
 
+// fishLandedKV 构造上鱼播报的 401.f4 参数：键1 为中文鱼名（客户端查不到
+// 鱼种 key 时按原样显示），键2 为重量克（客户端按克/公斤显示）。档位前缀
+// 由客户端模板补：k25 蓝冠“超级稀有鱼{0},{1}”（深橘红）、k26 奖杯
+// “稀有鱼 {0} ， {1}”（橘黄）、kind3 达标无前缀（蓝色）。
+func (s *Server) fishLandedKV(f *RolledFish) *proto.Value {
+	name := s.speciesZhName(s.dbCtx(), f.Species)
+	if name == "" {
+		name = f.Species
+	}
+	return fishTVKv(name, f.WeightG)
+}
+
 // notifyFishLanded 播报达标、奖杯和蓝冠；普通鱼由结算卡展示。
 func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) {
 	if sess == nil || f == nil {
 		return
 	}
-	// 官方模板参数：键1=鱼种key（客户端本地化），键2=重量克（/1000 千克）。
-	// fish_tv_kv 默认 0：KV 推送曾在客户端触发解析异常断连（回登录界面），
-	// 编码经面板 kv_shape=30 探测确认后置 1 启用。
-	var kv *proto.Value
-	if s.tunableF("fish_tv_kv", 0) != 0 {
-		kv = fishTVKv(f.Species, f.WeightG)
-	}
 	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数；KV 未启用
-	// （kv==nil）时客户端解析模板缺参会抛异常断连（回登录界面）。此时退化
-	// 为已验证的普通系统文本播报，保留提示且不掉线。
-	if kv == nil {
-		if text := s.fishLandedText(f, newRecord); text != "" {
-			sess.pushSystemChat(text)
-		}
-	} else if kind := fishAnnouncementKind(f.Grade); kind != 0 {
-		// 25=稀有奖杯（蓝冠，kDlg_Chat_EventFishCaughtRareTrophy）、
-		// 26=奖杯（kDlg_Chat_EventFishCaughtTrophy）、3=达标（玩家，鱼名 X 千克）。
-		sess.pushChatProbe(27, kind, "", kv)
+	// （fish_tv_kv=0）时客户端解析模板缺参会抛异常断连（回登录界面）。此时
+	// 退化为已验证的普通系统文本播报，保留提示且不掉线。
+	kind := fishAnnouncementKind(f.Grade)
+	if kind != 0 && s.tunableF("fish_tv_kv", 0) != 0 {
+		sess.pushChatProbe(27, kind, "", s.fishLandedKV(f))
+		return
 	}
-
+	if text := s.fishLandedText(f, newRecord); text != "" {
+		sess.pushSystemChat(text)
+	}
 }
 
 // notifyFishKept 入护播报已永久停用：结算卡已经展示入护结果，

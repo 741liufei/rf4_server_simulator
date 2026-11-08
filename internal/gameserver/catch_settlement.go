@@ -274,5 +274,15 @@ func (s *Server) settleCatchOnce(ctx context.Context, uid int64, f *RolledFish, 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	// 官方升级礼物：真实升级（非重放）后逐级直发背包，内部按等级幂等；
+	// 钓法大类取本尾鱼（11 级分套依据）。礼物行随结果返回，由 14/4 处理器
+	// 挂结算奖励列表（801 f8）并在响应后推 4/22；聊天播报在发放函数内完成。
+	if r.LevelsGained > 0 {
+		res := r.result(false)
+		for _, g := range s.grantLevelUpGifts(ctx, uid, oldLevel, level, r.SkillID) {
+			res.giftItems = append(res.giftItems, g.Items...)
+		}
+		return res, nil
+	}
 	return r.result(false), nil
 }
