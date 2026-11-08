@@ -261,6 +261,12 @@ func TestCastDistanceUsesMountedReelAndClip(t *testing.T) {
 		p.PlayerPrimary <= 0 || p.PlayerSecondary <= 0 {
 		t.Fatalf("竿长/锥度/Test/主线/线组/饵/玩家状态/技能数据未完整进入模型: %+v", p)
 	}
+	if p.SpoolCapacityM <= 0 || p.SpoolFill <= 0 || p.SpoolFill > 1 {
+		t.Fatalf("spool capacity/fill missing: capacity=%.3f fill=%.3f", p.SpoolCapacityM, p.SpoolFill)
+	}
+	if want := math.Min(p.LineLengthM, p.SpoolCapacityM); math.Abs(p.LineLimitM-want) > 1e-9 {
+		t.Fatalf("line limit should be capped by spool capacity: line=%.3f capacity=%.3f limit=%.3f want=%.3f", p.LineLengthM, p.SpoolCapacityM, p.LineLimitM, want)
+	}
 	perf, err := db.GetReelPerformance(ctx, reel.GUID)
 	if err != nil {
 		t.Fatal(err)

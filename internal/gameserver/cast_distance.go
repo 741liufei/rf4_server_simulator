@@ -587,7 +587,11 @@ func (s *Server) castDistanceForRig(ctx context.Context, uid int64, rodGUID stri
 	p.SpecialSkillFactor = p.Factors["special_skill"]
 
 	if p.LineLengthM > 0 {
+		// 线杯只能容纳 SpoolCapacityM；整盘线长可能只是商品标称长度。
 		p.LineLimitM = p.LineLengthM
+		if p.SpoolCapacityM > 0 && p.SpoolCapacityM < p.LineLimitM {
+			p.LineLimitM = p.SpoolCapacityM
+		}
 		p.DistanceM = math.Min(p.DistanceM, p.LineLimitM)
 	}
 	if clip, ok := s.savedReelClipM(ctx, rodGUID); ok && clip > 0 {
