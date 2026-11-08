@@ -263,7 +263,13 @@ func (s *Server) evaluateAchievements(ctx *Ctx, ev achievementEvent) {
 	now := float64(time.Now().Unix())
 	newly := make([]int64, 0, len(achievementRules))
 	for _, r := range achievementRules {
-		if r.Event != ev.Kind || states[r.ID].Unlocked || !r.Check(ev) {
+		if r.Event != ev.Kind || !r.Check(ev) {
+			continue
+		}
+		// 只有 unlocked 与 claimed 同时为真才算真正完成。旧版本可能留下
+		// unlocked=1, claimed=0 的中间态（图标永远不亮、也不会再推送），
+		// 这里让它继续走到下面的 UPSERT 修复并补推一次。
+		if st := states[r.ID]; st.Unlocked && st.Claimed {
 			continue
 		}
 		// 客户端实测只有 claimed=1 会点亮图标；本模拟器无发奖链路，解锁即点亮。

@@ -271,6 +271,46 @@ func TestAchievementUnlockAndClaimIsAtomic(t *testing.T) {
 	}
 }
 
+// 旧版本可能留下 unlocked=1, claimed=0 的中间态（图标不亮、后续事件被
+// 直接跳过，永远无法补点亮）。再次触发同一事件时应修复为已点亮，并且
+// 只补推一次 2/8。
+func TestAchievementRepairsLegacyUnlockedNotClaimed(t *testing.T) {
+	const uid = int64(1000015)
+	env := newDLineTestEnv(t, uid)
+	registerAchievementHandlers(env.srv.dispatch)
+	ctx := context.Background()
+
+	if err := env.db.UnlockAchievement(ctx, uid, 900, 1, 100); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := env.db.PlayerAchievementStates(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := legacy[900]; !st.Unlocked || st.Claimed {
+		t.Fatalf("fixture should be unlocked=1, claimed=0, got %+v", st)
+	}
+
+	c1 := env.ctx(14, 4, nil)
+	env.srv.evaluateAchievements(c1, achievementEvent{Kind: evFishLanded, WeightG: 300})
+	if len(c1.afterResponse) != 1 {
+		t.Fatalf("legacy intermediate state should push once, got %d callbacks", len(c1.afterResponse))
+	}
+	repaired, err := env.db.PlayerAchievementStates(ctx, uid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st := repaired[900]; !st.Unlocked || !st.Claimed {
+		t.Fatalf("legacy state should be repaired to unlocked+claimed, got %+v", st)
+	}
+
+	c2 := env.ctx(14, 4, nil)
+	env.srv.evaluateAchievements(c2, achievementEvent{Kind: evFishLanded, WeightG: 300})
+	if len(c2.afterResponse) != 0 {
+		t.Fatalf("repaired achievement must not push again, got %d callbacks", len(c2.afterResponse))
+	}
+}
+
 // UnlockAndClaimAchievement 只在首次点亮时返回 true，调用方据此排推送。
 func TestUnlockAndClaimAchievementReportsFirstClaimOnly(t *testing.T) {
 	const uid = int64(1000014)
