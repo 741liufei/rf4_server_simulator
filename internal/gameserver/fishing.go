@@ -496,33 +496,54 @@ func (s *Server) biteProbabilityForLoc(loc string) float64 {
 	return p
 }
 
-// tunableF 运行参数读取（PG tunables 优先，缓存 30s；缺省回退）。
+// ensureTunablesLocked 刷新运行参数缓存，同时保留原始字符串与非数值参数。
+// 调用方必须持有 s.tunMu。
+func (s *Server) ensureTunablesLocked() {
+	if s.tunCache != nil && time.Since(s.tunAt) <= 30*time.Second {
+		return
+	}
+	m := map[string]float64{}
+	txt := map[string]string{}
+	if s.DB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rows, err := s.DB.SQL.QueryContext(ctx, `SELECT key, value FROM tunables`)
+		if err == nil {
+			for rows.Next() {
+				var k, v string
+				if rows.Scan(&k, &v) == nil {
+					txt[k] = v
+					var f float64
+					if jsonFloat(v, &f) == nil {
+						m[k] = f
+					}
+				}
+			}
+			rows.Close()
+		}
+		cancel()
+	}
+	s.tunCache = m
+	s.tunText = txt
+	s.tunAt = time.Now()
+}
+
+// tunableF 运行参数读取（数值，缓存 30s；缺省回退）。
 func (s *Server) tunableF(key string, def float64) float64 {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
-	if s.tunCache == nil || time.Since(s.tunAt) > 30*time.Second {
-		m := map[string]float64{}
-		if s.DB != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			rows, err := s.DB.SQL.QueryContext(ctx, `SELECT key, value FROM tunables`)
-			if err == nil {
-				for rows.Next() {
-					var k, v string
-					if rows.Scan(&k, &v) == nil {
-						var f float64
-						if jsonFloat(v, &f) == nil {
-							m[k] = f
-						}
-					}
-				}
-				rows.Close()
-			}
-			cancel()
-		}
-		s.tunCache = m
-		s.tunAt = time.Now()
-	}
+	s.ensureTunablesLocked()
 	if v, ok := s.tunCache[key]; ok {
+		return v
+	}
+	return def
+}
+
+// tunableS 运行参数读取（原始字符串，缓存 30s；缺省回退）。
+func (s *Server) tunableS(key, def string) string {
+	s.tunMu.Lock()
+	defer s.tunMu.Unlock()
+	s.ensureTunablesLocked()
+	if v, ok := s.tunText[key]; ok {
 		return v
 	}
 	return def
@@ -2177,11 +2198,11 @@ func (s *Server) notifyFishLanded(sess *Session, f *RolledFish, newRecord bool) 
 	if sess == nil || f == nil {
 		return
 	}
-	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数；KV 未启用
-	// （fish_tv_kv=0）时客户端解析模板缺参会抛异常断连（回登录界面）。此时
-	// 退化为已验证的普通系统文本播报，保留提示且不掉线。
+	// k25/k26/k03 是带参数的官方模板播报，依赖 401.f4 模板参数，默认启用。
+	// 管理员显式设置 fish_tv_kv=0 时退化为普通系统文本播报，避免客户端
+	// 解析模板缺参导致断连。
 	kind := fishAnnouncementKind(f.Grade)
-	if kind != 0 && s.tunableF("fish_tv_kv", 0) != 0 {
+	if kind != 0 && s.tunableF("fish_tv_kv", 1) != 0 {
 		sess.pushChatProbe(27, kind, "", s.fishLandedKV(f))
 		return
 	}

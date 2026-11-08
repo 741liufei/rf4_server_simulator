@@ -6,7 +6,16 @@ import (
 
 func registerAchievementHandlers(d *Dispatch) {
 	d.Register(3, 3, hAchievements305)
+	d.Register(3, 16, hPlayerRewards2015)
 	d.Register(3, 17, hFishTrophies323)
+}
+
+// hPlayerRewards2015 处理 3/16 奖赏列表。客户端 RPC 签名
+// public iidloljandl[] cfbomeockod() 返回 2015 数组，容器名 "185"
+// （argcode_table by_type_id[2015]=185 = by_cmd[3/16]）。
+// 奖赏持久化与发奖链路尚未实装，本轮只把兜底 args("524") 换成合法空数组。
+func hPlayerRewards2015(ctx *Ctx) ([]byte, bool) {
+	return encodeArgsCode(ctx, "185")
 }
 
 func hAchievements305(ctx *Ctx) ([]byte, bool) {

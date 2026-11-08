@@ -450,6 +450,38 @@ var qualificationRules = []qualificationRuleDef{
 	{ID: 8603, Event: qevFishLanded, Counted: qCountSingle(qRarityAtLeast(2))},
 }
 
+// ---- 未实装：限时活动分支 9..20（273 条，留给后续实现）----
+//
+// 上表只覆盖永久资格分支 1..8（168 条 / 文案 171 条，缺 3 条）。活动分支 9..20
+// 目前一条判定都没有，所以面板里这些任务进度恒为 0、永远无法完成。链路本身已
+// 全部打通（活动节点 event_switches.go、阶段 5012/5013 与倒计时、5007 下发），
+// 差的只是条件判断。
+//
+// 全部 444 条任务文案（分支 1..20）已从客户端挖出，见
+// assets/qualification_texts_zh.json 的 tasks 字段：键=RuleID，值=简中描述。
+// 条件一律以文案为准反推（分支只是分组，条件全在文字里）。id 规则同
+// qualificationRuleID()：分支*1000+(阶段-1)*100+任务序号。
+//
+// 各分支任务数：9/10/11/12/13/15/16/17 各 21，14、18 各 30，19 为 22，20 为 23。
+//
+// 实装方式与上表完全一致，每加一条只加一行：
+//
+//	{ID: 19001, Event: qevFishLanded, Counted: qCountSingle(qLocLevelIn("level_..."), ...)}
+//
+// 需要同步改的地方：
+//   - qualificationRodTypesFor()：9..20 走 default 返回 nil（任意竿型）。文案里
+//     写了具体竿型的（如 20103「手竿」、20104「中轻型/轻型/超轻型路亚竿」）要把
+//     分支/任务号补进 switch，否则 5007.Idx5 下发与判定都会放宽。
+//   - qualificationTargets.json：只有 1..8，未收录编号回退 1，所以活动任务分母
+//     恒显示 1；要显示真实分母（3 种鱼、10 种鱼…）得把编号补进该表。
+//
+// 前置：19/20 有两条条件现有事件字段判不了，需要先扩 qualificationEvent 与 14/4
+// 装配（其余条件——水域、竿型/硬度、饵与饵类、重量、稀有度、去重计数、岸钓、
+// 夜间、钓深、抛投距离、竿测试上限——现有字段已够）：
+//   - 鱼线强度：19 的 5 公斤线、20 的 3 公斤线 → 加 LineStrengthKG，取主线/前导
+//     线 item_def 的强度字段，取法同 qualificationLineMaterials()。
+//   - 渔线轮尺寸：20 的「大小不超过 3000 的渔线轮」→ 加 ReelSize，取轮 item_def。
+
 // qualificationCountedGUID 把去重键映射成一个稳定 GUID。同键同 GUID（去重）、
 // 异键异 GUID；该 GUID 同时作为 5003 鱼记录列表里对应记录的键。
 func qualificationCountedGUID(key string) string {

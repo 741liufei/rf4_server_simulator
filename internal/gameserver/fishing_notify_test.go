@@ -288,11 +288,15 @@ func TestFishEventChatTexts(t *testing.T) {
 	}
 }
 
-// 奖杯/蓝冠鱼上鱼时，若 KV 模板参数未启用（fish_tv_kv=0，默认），
+// 奖杯/蓝冠鱼上鱼时，若管理员显式关闭 KV 模板（fish_tv_kv=0），
 // 不得发带参数的 k25/k26/k03 模板播报（缺参会导致客户端解析异常断连），
 // 应退化为普通系统文本播报（24/27，kind=0）。
 func TestFishLandedFallsBackToPlainChatWithoutKV(t *testing.T) {
 	srv, _ := newRigTestServer(t)
+	srv.tunMu.Lock()
+	srv.tunCache = map[string]float64{"fish_tv_kv": 0}
+	srv.tunAt = time.Now()
+	srv.tunMu.Unlock()
 	sess, gc := newTunnelProbe(t, srv)
 
 	srv.notifyFishLanded(sess, &RolledFish{Species: "g_tench", Grade: 3, WeightG: 4100}, false)

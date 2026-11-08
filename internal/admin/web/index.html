@@ -251,6 +251,9 @@ function refreshCurrent(){
   const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,bait:loadBaitPrefs,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
+// 发放物品会偶发造成玩家坏档，暂时关闭前端入口；后端接口保留。
+// 修复坏档问题后把此开关改回 true 即可恢复。
+const GRANT_ITEM_UI_ENABLED=false;
 // 总览常用操作：图标 + 名称 + 一句功能定义
 const QUICK_ACTIONS=[
   ['grant','给玩家发物品','从物品目录发放到背包 / 护网','players'],
@@ -259,7 +262,7 @@ const QUICK_ACTIONS=[
   ['fish','调鱼口','各水域出什么鱼 · 咬钩快慢','fish'],
   ['store','商店货架','改卖的价格和库存','stores'],
   ['audit','查操作记录','后台改过什么都有留痕','audit'],
-];
+].filter(([id])=>GRANT_ITEM_UI_ENABLED||id!=='grant');
 const QA_ICONS={
   grant:'<path d="M20 12v9H4v-9"/><path d="M2 7h20v5H2z"/><path d="M12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7Z"/><path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7Z"/>',
   profile:'<circle cx="12" cy="8" r="4"/><path d="M5 21c.9-3.4 3.8-5 7-5s6.1 1.6 7 5"/>',
@@ -284,6 +287,7 @@ async function loadDashboardSide(){
   $('#ruleOverview').innerHTML=Object.entries(rules).map(([k,n])=>{const on=tuns[k]===undefined?k==='happy_hour_enabled':tuns[k]==='1';return `<div class="rule-mini"><span>${n}</span><span class="pill ${on?'ok':''}">${on?'开启':'关闭'}</span></div>`}).join('')||'<div class="empty">读取失败</div>';
 }
 // 参数三件套：中文标签 + 输入框 + 可见的一行说明（第 4 项为默认值，第 5 项为说明）
+const EVENT_BRANCHES_DEFAULT='9,10,11,12,13,14,15,16,17,18,19,20';
 const TUNABLE_DEFS=[
   ['bite_probability','上鱼概率',1,'0~1。1=每竿必出；0.5=一半概率出鱼'],
   ['bite_delay_fixed','固定咬钩秒',0,'填 0=按延迟倍率随机；填了以后咬钩时间固定'],
@@ -311,6 +315,10 @@ const TUNABLE_DEFS=[
   ['card_drop_star','星鱼掉卡率',0.5,'0~1。默认 0.5 = 50%'],
   ['card_drop_blue','蓝冠鱼掉卡率',0.8,'0~1。默认 0.8 = 80%'],
   ['card_drop_rare_scale','稀有鱼掉卡系数',0.25,'0~1。稀有、超稀有鱼统一乘此系数，默认 0.25'],
+  ['event_newyear_enabled','新年任务',1,'出厂默认开启；开启后下发活动分支；开启会自动关闭周年活动'],
+  ['event_anniversary_enabled','周年纪念任务',0,'开启后下发周年活动分支；开启会自动关闭新年活动；关闭后只保留永久资格'],
+  ['event_branches','活动分支',EVENT_BRANCHES_DEFAULT,'逗号分隔的分支 ID（9~20）；留空表示不下发任何活动分支'],
+  ['event_anniversary_end_unix','活动结束时间',1825632000,'UTC 日期时间，新年与周年面板共用的倒计时终点；默认 2027-11-08 00:00 UTC'],
 ];
 let BAIT_ROWS=[];
 let BAIT_OPEN=new Set();
@@ -352,6 +360,21 @@ async function loadTunables(){
  // 行式布局：左=标签+说明，右=数值+保存/恢复默认，双列排布
  const field=key=>{
   const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
+  if(key==='event_anniversary_enabled'||key==='event_newyear_enabled'){
+   const on=String(t[key]??def)==='1';
+   const tag=key==='event_newyear_enabled'?'新年任务':'周年活动';
+   return `<div class="tunable-field"><div><label for="tun_${key}">${esc(label)}</label><div class="tunable-hint">${esc(hint)}；服务端最多 30 秒生效，活动节点只在全新登录下发，切换后要完整退出游戏重登。</div></div><div><button class="btn sm" id="tun_${key}" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveEventSwitch('${key}',${on?0:1})">${on?tag+'：开（点击关闭）':tag+'：关（点击开启）'}</button></div></div>`;
+  }
+  if(key==='event_branches'){
+   const val=String(t[key]??def);
+   return `<div class="tunable-field"><div><label for="tun_event_branches">${esc(label)}</label><div class="tunable-hint">${esc(hint)}；当前 <b>${esc(val)||'（空）'}</b>。9/10=2024新年、11/12=7周年、13/14=2025新年、15/16=8周年、17/18=2026新年、19/20=9周年。保存后最多 30 秒生效，需完整退出游戏重登。</div></div><div><input type="text" id="tun_event_branches" value="${esc(val)}" style="min-width:230px" placeholder="9,10,..."><button class="btn sm" onclick="saveEventBranches()">保存</button><button class="btn alt sm" onclick="resetEventBranches()">恢复默认</button></div></div>`;
+  }
+  if(key==='event_anniversary_end_unix'){
+   const ts=Number(String(t[key]??def))||def;
+   const iso=new Date(ts*1000).toISOString().slice(0,16);
+   const shown=iso.replace('T',' ')+' UTC';
+   return `<div class="tunable-field"><div><label for="tun_event_end">${esc(label)}</label><div class="tunable-hint">${esc(hint)}；当前 <b>${shown}</b>。保存后最多 30 秒生效，活动节点只在全新登录下发，改完要完整退出游戏重登。</div></div><div><input type="datetime-local" id="tun_event_end" value="${iso}" style="min-width:230px"><button class="btn sm" onclick="saveEventEnd()">保存</button><button class="btn alt sm" onclick="resetEventEnd(${def})">恢复默认</button></div></div>`;
+  }
   if(key==='fish_hooked_chat'){
    const on=parseFloat(String(t[key]??def))>0;
    return `<div class="tunable-field"><div><label for="tun_fish_hooked_chat">${esc(label)}</label><div class="tunable-hint">${esc(hint)}</div></div><div><button class="btn sm" id="tun_fish_hooked_chat" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveTunableVal('fish_hooked_chat',${on?0:1})">${on?'上钩播报：开（点击关闭）':'上钩播报：关（点击开启）'}</button></div></div>`;
@@ -369,11 +392,34 @@ async function loadTunables(){
   +group('钓获掉卡','本地自定概率；最多 30 秒生效，重连或重复结算不补抽',['card_drop_normal','card_drop_star','card_drop_blue','card_drop_rare_scale'])
   +group('鱼获档位比例','按四档占比出鱼；缺某档阈值时其余档自动归一',['grade_ratio_enabled','grade_pct_below','grade_pct_qualified','grade_pct_trophy','grade_pct_super'])
   +group('钓获礼包','钓上鱼当场开箱，奖励直接进背包并播报',['loot_box_enabled','loot_box_chance','loot_box_trophy_guarantee'])
-  +group('聊天通知','跑鱼提示与上钩播报分别设置；保存后最多 30 秒生效',['fish_escape_taunt','fish_hooked_chat']);
+  +group('聊天通知','跑鱼提示与上钩播报分别设置；保存后最多 30 秒生效',['fish_escape_taunt','fish_hooked_chat'])
+  +group('限时活动','同一时间只允许开启一个活动 · 分支 ID 可在下方任意组合，开关决定挂到新年还是周年面板 · 改完都要完整退出游戏重登',['event_newyear_enabled','event_anniversary_enabled','event_branches','event_anniversary_end_unix']);
 }
-async function saveTunableVal(key,val){
+async function saveEventSwitch(key,val){
   await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:String(val)})});
-  toast('已保存，最多 30 秒生效');
+  toast(val?'已开启（另一活动已自动关闭），请完整退出游戏重登':'已关闭，请完整退出游戏重登');
+  await loadTunables();
+}
+async function saveEventBranches(){
+  const v=$('#tun_event_branches').value.trim();
+  await saveTunableVal('event_branches',v,'已保存；请完整退出游戏重登');
+}
+async function resetEventBranches(){
+  await saveTunableVal('event_branches',EVENT_BRANCHES_DEFAULT,'已恢复全部 12 个分支；请完整退出游戏重登');
+}
+async function saveEventEnd(){
+  const v=$('#tun_event_end').value;
+  if(!v){toast('请选择结束时间','bad');return}
+  const ts=Math.floor(new Date(v+'Z').getTime()/1000);
+  if(!Number.isFinite(ts)||ts<=0){toast('结束时间无效','bad');return}
+  await saveTunableVal('event_anniversary_end_unix',ts,'已保存；请完整退出游戏重登');
+}
+async function resetEventEnd(def){
+  await saveTunableVal('event_anniversary_end_unix',def,'已恢复默认；请完整退出游戏重登');
+}
+async function saveTunableVal(key,val,note){
+  await api('/api/tunables',{method:'POST',body:JSON.stringify({key,value:String(val)})});
+  toast(note||'已保存，最多 30 秒生效');
   loadTunables();
 }
 async function saveTunable(key){
@@ -568,12 +614,13 @@ async function saveProfile(){
   await api('/api/players/update',{method:'POST',body:JSON.stringify(body)});toast('已保存，在线玩家立即收到刷新');await sleep(400);await selectPlayer(PLAYER.uid);
 }
 function renderItems(){
-  $('#playerTabBody').innerHTML=`<div class="toolbar"><input class="grow" id="itemFilter" placeholder="筛选 item_id / 名称 / GUID" value="${esc(ITEM_FILTER)}" oninput="ITEM_FILTER=this.value;renderItemRows()"><button class="btn" onclick="showGrantItem()">+ 发放物品</button></div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>物品</th><th>类型</th><th>容器</th><th>数量</th><th>耐久</th><th>GUID</th><th></th></tr></thead><tbody id="itemRows"></tbody></table></div>`;
+  const grantButton=GRANT_ITEM_UI_ENABLED?'<button class="btn" onclick="showGrantItem()">+ 发放物品</button>':'';
+  $('#playerTabBody').innerHTML=`<div class="toolbar"><input class="grow" id="itemFilter" placeholder="筛选 item_id / 名称 / GUID" value="${esc(ITEM_FILTER)}" oninput="ITEM_FILTER=this.value;renderItemRows()">${grantButton}</div><div class="table-wrap" style="margin-top:12px"><table><thead><tr><th>物品</th><th>类型</th><th>容器</th><th>数量</th><th>耐久</th><th>GUID</th><th></th></tr></thead><tbody id="itemRows"></tbody></table></div>`;
   renderItemRows();
 }
 function renderItemRows(){
   const q=ITEM_FILTER.toLowerCase();const rows=(PLAYER.items||[]).filter(x=>!q||`${x.item_id} ${x.name} ${x.guid}`.toLowerCase().includes(q));
-  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">没有物品，点上方「+ 发放物品」添加</td></tr>';
+  $('#itemRows').innerHTML=rows.map(x=>`<tr><td><b>${esc(x.name||x.item_id)}</b><div class="muted mono">${esc(x.item_id)}</div></td><td>${x.category}</td><td>${esc(x.container)}</td><td>${x.qty}</td><td>${Number(x.durability).toFixed(4)}</td><td class="mono muted">${esc(x.guid.slice(0,12))}…</td><td class="right"><button class="btn bad sm" data-guid="${esc(x.guid)}" onclick="deletePlayerItem(this.dataset.guid)">删除</button></td></tr>`).join('')||`<tr><td colspan="7" class="empty">没有物品${GRANT_ITEM_UI_ENABLED?'，点上方「+ 发放物品」添加':''}</td></tr>`;
 }
 async function deletePlayerItem(guid){
   askConfirm('删除物品','把这件物品从该玩家的背包/装备中删除，不可恢复。',async()=>{
