@@ -358,7 +358,7 @@ async function loadTunables(){
  const field=key=>{
   const [,label,def,hint]=TUNABLE_DEFS.find(x=>x[0]===key);
   if(key==='event_anniversary_enabled'||key==='event_newyear_enabled'){
-   const on=String(t[key]??'0')==='1';
+   const on=String(t[key]??def)==='1';
    const tag=key==='event_newyear_enabled'?'新年任务':'周年活动';
    return `<div class="tunable-field"><div><label for="tun_${key}">${esc(label)}</label><div class="tunable-hint">${esc(hint)}；服务端最多 30 秒生效，活动节点只在全新登录下发，切换后要完整退出游戏重登。</div></div><div><button class="btn sm" id="tun_${key}" style="min-width:230px;${on?'background:#2f7d4f;border-color:#2f7d4f':'opacity:.6'}" onclick="saveEventSwitch('${key}',${on?0:1})">${on?tag+'：开（点击关闭）':tag+'：关（点击开启）'}</button></div></div>`;
   }
