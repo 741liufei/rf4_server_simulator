@@ -324,6 +324,7 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 	uid := ctx.Sess.Userid
 	cctx := ctx.Sess.pushCtx()
 	now := float64(time.Now().Unix())
+	sellMapKey := srv.currentLevel(uid)
 	out := proto.Args(proto.S("111"))
 	rotten := 0
 	locked := srv.openMarketOfferFishSet(cctx, uid)
@@ -341,8 +342,7 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 			rotten++
 		}
 		// 鱼市按卖鱼时所在水域计价：同一批鱼在不同地图卖出，价格随该图倍率变化。
-		mapKey := srv.currentLevel(uid)
-		price := marketPriceCentsForMap(e, now, mapKey)
+		price := marketPriceCentsForMap(e, now, sellMapKey)
 		out.Items = append(out.Items, wiregen.MustMakeObj("jpmlmnfkbfn", map[int]*proto.Value{
 			0: proto.Guid(g),
 			1: proto.U64(uint64(price)),
