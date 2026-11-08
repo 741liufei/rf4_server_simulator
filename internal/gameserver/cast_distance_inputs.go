@@ -446,13 +446,6 @@ func nestedNumericScalar(m map[string]any, key string) float64 {
 }
 
 func (s *Server) castPlayerCondition(ctx context.Context, uid int64) (primary, secondary float64) {
-	primary, secondary = defaultPlayerConditionPrimary, defaultPlayerConditionSecondary
-	if s == nil || s.DB == nil {
-		return primary, secondary
-	}
-	condition, err := s.DB.EnsurePlayerCondition(ctx, uid)
-	if err != nil || condition == nil {
-		return primary, secondary
-	}
-	return condition.Primary, condition.Secondary
+	c := s.currentPlayerCondition(ctx, uid)
+	return c.Primary, c.Secondary
 }
