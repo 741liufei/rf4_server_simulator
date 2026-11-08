@@ -384,3 +384,43 @@ func TestFightReelCachePullKgfNoSlipForSmallFish(t *testing.T) {
 		t.Fatalf("正控失效：f8 牛数 %.4f 应高于泄力 %.2f，否则测不出旧 bug", pullN, cached.dragKg)
 	}
 }
+
+// TestFightWearRolloverChargesBaseOncePerCast 钉住"每竿基准一竿一次"：
+// 嘬饵否决/鱼离场的重排是同一竿续段，取走第一段（带基准）后新段不得再带基准，
+// 只有真正换竿才重扣。修复前重排续段重新打基准，客户端重抛的 14/7 又把它当
+// "上一竿未落库的账"写掉——实测同秒双条 reel_overload，零件整晚双倍消耗。
+func TestFightWearRolloverChargesBaseOncePerCast(t *testing.T) {
+	const rodGUID = "rod0000000000000000000000000000001"
+	st := &FishState{}
+	// 抛竿：本竿基准入账。
+	st.reelWear.markRodUsedLocked(rodGUID)
+	// 嘬饵否决/鱼离场重排：同一竿续段。
+	pending, has := rollFightWearLedgerLocked(st, rodGUID, false)
+	if !has || !pending.BaseCharged {
+		t.Fatalf("第一段应携带每竿基准落库: has=%v base=%v", has, pending.BaseCharged)
+	}
+	if st.reelWear.BaseCharged {
+		t.Fatal("重排续段不应再带每竿基准")
+	}
+	// 无战斗磨损的续段不产生落库账（修复前这里会再写一条同秒基准）。
+	if _, has := rollFightWearLedgerLocked(st, rodGUID, false); has {
+		t.Fatal("无战斗磨损的续段不应产生落库账")
+	}
+	// 真正换竿重抛：重新扣基准。
+	rollFightWearLedgerLocked(st, rodGUID, true)
+	if !st.reelWear.BaseCharged {
+		t.Fatal("新竿应重新扣每竿基准")
+	}
+	// 续段里发生的战斗磨损仍要落库；这段是换竿后新竿的首段，基准随它一起落库。
+	st.reelWear.SlipWear = 0.1
+	pending, has = rollFightWearLedgerLocked(st, rodGUID, false)
+	if !has || pending.SlipWear != 0.1 || !pending.BaseCharged {
+		t.Fatalf("新竿首段的战斗磨损应随基准一起落库: has=%v slip=%v base=%v",
+			has, pending.SlipWear, pending.BaseCharged)
+	}
+	// 再往后重排的续段恢复"不带基准"。
+	pending, has = rollFightWearLedgerLocked(st, rodGUID, false)
+	if has && pending.BaseCharged {
+		t.Fatalf("第二段续段不应再带基准: has=%v base=%v", has, pending.BaseCharged)
+	}
+}

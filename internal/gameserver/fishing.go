@@ -1822,10 +1822,9 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.RigSettled = false
 	st.TickSeen = false
 	// 上一竿的磨损账若还没落库（异常退出、断线等），先取走，解锁后补写。
-	pendingWear, hasPendingWear := st.reelWear.claimLocked()
-	st.reelWear.reset()
-	// 抛竿即算“下水使用”：这一竿即使没咬钩，轮内零件也要结算每竿基准与泡水。
-	st.reelWear.markRodUsedLocked(st.GearGuid)
+	// 只有 resetCast（真正换新的一竿）才重新扣每竿基准；嘬饵否决、鱼离场这类
+	// 同一竿续段的重入不带新基准，否则一次抛竿的基准会被扣两次。
+	pendingWear, hasPendingWear := rollFightWearLedgerLocked(st, st.GearGuid, resetCast)
 	if resetCast || st.CastTs.IsZero() {
 		st.CastTs = now
 	}

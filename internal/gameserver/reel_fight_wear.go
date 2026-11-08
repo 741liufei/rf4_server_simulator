@@ -120,6 +120,20 @@ func (w *fightReelWear) markRodBreakLocked() {
 	w.BreakHits++
 }
 
+// rollFightWearLedgerLocked 结束当前磨损账段并开新段：未落库的部分取走由调用方
+// 在锁外落库。只有真正换新的一竿（newCast）才重新打每竿基准与泡水——嘬饵否决
+// 重排、鱼离场重排、补排咬钩都是"同一竿续段"，续段再打基准会把同一竿的基准扣
+// 两次（实测同秒双条 reel_overload，零件整晚双倍消耗）。
+// 口径见 specs/changes/reel-cast-base-once/spec.md。
+func rollFightWearLedgerLocked(st *FishState, rodGUID string, newCast bool) (fightReelWear, bool) {
+	pending, has := st.reelWear.claimLocked()
+	st.reelWear.reset()
+	if newCast {
+		st.reelWear.markRodUsedLocked(rodGUID)
+	}
+	return pending, has
+}
+
 // loadTickSecondsLocked 把两条 14/8 之间的真实间隔折算成结算时长（秒）。
 // 首条上报按 tunable 的兜底节拍起算：在那之前过了多久服务端无从得知。间隔为负
 // （时钟回拨）算 0 秒，超过上限只记上限，免得一条迟到上报把整段发热曲线一次烧完。
