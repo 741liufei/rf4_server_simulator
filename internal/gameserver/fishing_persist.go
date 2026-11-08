@@ -85,6 +85,7 @@ func applyPersistedFishingState(st *FishState, saved *store.FishingState) {
 		st.Spot = saved.Spot
 	}
 	st.DepthCM = saved.DepthCM
+	st.CastM = saved.CastM
 	st.CastActive = saved.CastActive
 	st.CastTs = saved.CastTS
 	st.FallTs = saved.FallTS
@@ -128,6 +129,7 @@ func fishingStateSnapshot(st *FishState) *store.FishingState {
 		Loc:            st.Loc,
 		Spot:           st.Spot,
 		DepthCM:        st.DepthCM,
+		CastM:          st.CastM,
 		CastActive:     st.CastActive,
 		CastTS:         st.CastTs,
 		FallTS:         st.FallTs,
@@ -179,6 +181,9 @@ func rolledFishToStore(f *RolledFish) *store.FishingFish {
 		QualBaitSizeMM: f.QualBait.SizeMM,
 		CastM:          f.CastM,
 		IsNight:        f.IsNight,
+		DepthCM:        f.DepthCM,
+		OnBoat:         f.OnBoat,
+		Drift:          f.Drift,
 	}
 }
 
@@ -213,6 +218,9 @@ func rolledFishFromStore(f *store.FishingFish) *RolledFish {
 		},
 		CastM:   f.CastM,
 		IsNight: f.IsNight,
+		DepthCM: f.DepthCM,
+		OnBoat:  f.OnBoat,
+		Drift:   f.Drift,
 	}
 }
 

@@ -37,9 +37,11 @@ Status: done
 ## Implementation Decisions
 
 - `RolledFish` 新增 `QualBait`（`qualificationBait`）、`CastM`、`IsNight` 三个咬钩快照
-  字段，并随 `fishing_state.pending_json` 持久化，重启后不丢。
-- `FishState.CastM` 在 14/2 由 `throwDistance(ctx.Tree)` 写入，咬钩时复制到 `RolledFish`；
-  不再使用 `castDistanceForRig(...).DistanceM` 作为实际距离。
+  字段，并随 `fishing_state.pending_json` 持久化；原有 `DepthCM/OnBoat/Drift` 也补入
+  `FishingFish` 映射，重启后不缺条件。
+- `FishState.CastM` 在 14/2 由 `throwDistance(ctx.Tree)` 写入，并持久化到
+  `fishing_state.cast_m`（迁移 `00048_fishing_state_cast_m.sql`）；咬钩时复制到
+  `RolledFish`，不再使用 `castDistanceForRig(...).DistanceM` 作为实际距离。
 - `worldIsNight(unix)` 统一夜间口径（19:00–06:00），咬钩与结算共用。
 - `settleCatchOnceWithQualification` 在结算事务内调用 `evaluateQualificationsTx`；
   任一条资格写入失败返回错误，整笔结算回滚并提示重试。
@@ -57,11 +59,16 @@ Status: done
 - `TestWorldIsNightBoundaries`：覆盖 00/05/06/18/19/23 点的夜间边界。
 - `TestQualificationSettlementAtomicAndReplayable`：资格表不可用时断言经验与回执一起
   回滚；恢复后首次结算写入 1001；新进程重放返回回执中的资格变化且计数仍为 1。
-- 以上用例在回滚到旧实现时分别因饵快照缺失、距离取最大值、跨时段判定和事务外写入
-  而变红。
+- `TestFishingStateRestorePendingNoReroll`：搏鱼中重启后，pending 的 `DepthCM/OnBoat/Drift`、
+  `QualBait/CastM/IsNight` 与鱼本体一起原样恢复。
+- `TestFishingStateCastMSurvivesRestartBeforeBite`：14/2 抛投后、咬钩前重启，断言
+  `fishing_state.cast_m` 恢复为本杆实际距离。
+- 以上用例在回滚到旧实现时分别因饵快照缺失、距离取最大值、跨时段判定、事务外写入和
+  重启丢快照而变红。
 
 ## Out of Scope
 
-- 不改 5003/5004/5005 的 wire 形状、args code 或迁移表结构。
+- 不改 5003/5004/5005 的 wire 形状或 args code；新增 00048 只给 `fishing_state` 补
+  `cast_m` 列，不改资格进度表结构。
 - 不改资格任务文案、目标分母与规则表数值。
 - 不处理客户端本地化文案缺项；不引入活动分支（19/20）判定。

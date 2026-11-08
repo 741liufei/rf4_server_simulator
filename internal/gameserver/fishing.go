@@ -260,11 +260,12 @@ type RolledFish struct {
 	Force    float64 // obj27#08 拉力；0=按体重和已验证比例计算
 	NamedID  string  // 被命名鱼
 	Name     string
-	// DepthCM/OnBoat 是咬钩瞬间的钓深与船只状态，只供资格判定读取，不落库；
-	// 重启后恢复的 pending 鱼按默认值（0/岸钓）处理。
+	// DepthCM/OnBoat 是咬钩瞬间的钓深与船只状态，只供资格判定读取；随
+	// pending_json 持久化，重启恢复后仍按咬钩时条件判定。
 	DepthCM int64
 	OnBoat  bool
-	// Drift 记录咬钩瞬间钓组是否处于顺流移动（14/7 0x40），同样只供资格判定。
+	// Drift 记录咬钩瞬间钓组是否处于顺流移动（14/7 0x40），同样只供资格判定，
+	// 并随 pending_json 持久化。
 	Drift bool
 	// QualBait 是咬钩瞬间的饵属性快照。天然饵会在 14/11 被 consumeHookedBait
 	// 删除，14/4 再按 BaitGUIDs 反查只会得到空值，因此必须在咬钩时快照。
