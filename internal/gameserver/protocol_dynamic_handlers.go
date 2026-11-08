@@ -315,6 +315,10 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 	if srv.DB != nil && rodGUID != zeroGUID && ctx.DecodeOK {
 		outcome, err := srv.breakLineOrRod(ctx.Sess.pushCtx(), ctx.Sess.Userid, rodGUID, brokenGUID)
 		if err == nil {
+			if outcome.OverloadProtected {
+				ctx.ReplyFailure("System.OperationCanceledException", "满红不爆已取消装备破坏")
+				return nil, true
+			}
 			st.mu.Lock()
 			if st.biteTimer != nil {
 				st.biteTimer.Stop()

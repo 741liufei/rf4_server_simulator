@@ -71,8 +71,12 @@ func hSocialUserProfile(ctx *Ctx) ([]byte, bool) {
 
 func hSocialUserCard(ctx *Ctx) ([]byte, bool) {
 	uid := firstRequestUID(ctx)
-	if uid == fishQueryContactUID {
-		outer, err := bytesWrappedObject(fishQueryContactCard(), ctx.Sess.Table())
+	if isVirtualContact(uid) {
+		name := fishQueryContactName
+		if uid == gearAssistantUID {
+			name = gearAssistantName
+		}
+		outer, err := bytesWrappedObject(virtualContactCard(uid, name), ctx.Sess.Table())
 		if err != nil {
 			return nil, false
 		}
