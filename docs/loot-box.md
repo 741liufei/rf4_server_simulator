@@ -56,10 +56,11 @@ INSERT INTO kv(k,v) VALUES('loot_box_defs','[...]')
 ## 实现要点
 
 - 入口：`fishingKeep`（14/5 入护）成功后异步调用，不阻塞回包。
-- 抽奖：配置了 `rewards` 按权重抽取；否则 `shop_item` 里 `stock>0` 的商品随机一件。
-- 排除 category 55（套盒）与 73（礼物袋）：55 会"套娃"，73 没有 wire class 映射，
-  会被错误物化成钓线类并可能导致背包 UI 异常。
+- 抽奖：配置了 `rewards` 时按权重抽取；否则 `shop_item` 里 `stock>0` 的商品随机一件。
+- 资格校验：随机奖励和 `rewards` 都排除 category 55（套盒）与 73（礼物袋），并要求类别存在
+  `categoryWireClass` 权威映射；`carrier_item` 也必须能正确物化。无法发放的配置项会被跳过。
 - 发奖：`AddToStack` → `pushItemUpdate`（4/22）→ 聊天播报。
+- 幂等：同一尾鱼重复 14/5 只触发一次礼包。
 - 容错：写库失败只记 Warn，不影响入护结果；goroutine 带 recover。
 
 ## 为什么不用客户端开箱弹窗

@@ -7,8 +7,6 @@ import (
 	"math/rand"
 	"strings"
 	"time"
-
-	"rf4server/internal/store"
 )
 
 // ---- 钓获礼包（开箱） ----
@@ -127,6 +125,53 @@ func catchGrade(f *RolledFish) int64 {
 	return f.Grade
 }
 
+// lootWireCategoryEligible 只允许能由权威 categoryWireClass 正确物化的类别。
+func lootWireCategoryEligible(category int64) bool {
+	_, ok := categoryWireClass[category]
+	return ok
+}
+
+// lootRewardCategoryEligible 在 wire 可物化基础上再排除套盒/礼物袋，避免奖励套娃。
+func lootRewardCategoryEligible(category int64) bool {
+	if category == 55 || category == 73 {
+		return false
+	}
+	return lootWireCategoryEligible(category)
+}
+
+func (s *Server) lootItemCategory(ctx context.Context, itemID string) (int64, bool) {
+	def, err := s.DB.GetItemDefByItemID(ctx, itemID)
+	if err != nil || def == nil {
+		s.log.Warn("礼包物品定义不存在", "item", itemID, "err", err)
+		return 0, false
+	}
+	return def.Category, true
+}
+
+func (s *Server) lootRewardItemEligible(ctx context.Context, itemID string) bool {
+	category, ok := s.lootItemCategory(ctx, itemID)
+	if !ok {
+		return false
+	}
+	if !lootRewardCategoryEligible(category) {
+		s.log.Warn("礼包奖励类别不可发放", "item", itemID, "category", category)
+		return false
+	}
+	return true
+}
+
+func (s *Server) lootCarrierItemEligible(ctx context.Context, itemID string) bool {
+	category, ok := s.lootItemCategory(ctx, itemID)
+	if !ok {
+		return false
+	}
+	if !lootWireCategoryEligible(category) {
+		s.log.Warn("礼包载体类别不可物化", "item", itemID, "category", category)
+		return false
+	}
+	return true
+}
+
 // grantLootBox 抽奖并发放，失败返回空串。
 func (s *Server) grantLootBox(ctx context.Context, sess *Session, def lootBoxDef, catch *RolledFish, reason string) string {
 	itemID, qty, name := s.pickLootReward(ctx, def)
@@ -145,7 +190,9 @@ func (s *Server) grantLootBox(ctx context.Context, sess *Session, def lootBoxDef
 		if qty <= 0 {
 			qty = 1
 		}
-		if crow, _, cerr := s.AddToStack(ctx, sess.Userid, def.CarrierItem, "backpack", qty); cerr == nil {
+		if !s.lootCarrierItemEligible(ctx, def.CarrierItem) {
+			s.log.Warn("福袋载体已跳过", "uid", sess.Userid, "carrier", def.CarrierItem)
+		} else if crow, _, cerr := s.AddToStack(ctx, sess.Userid, def.CarrierItem, "backpack", qty); cerr == nil {
 			s.pushItemUpdate(sess.Userid, crow)
 		} else {
 			s.log.Warn("福袋载体发放失败", "uid", sess.Userid, "carrier", def.CarrierItem, "err", cerr)
@@ -176,18 +223,18 @@ func catchSpecies(f *RolledFish) string {
 // pickLootReward 选出奖励：配置了 rewards 就按权重抽，否则从商店货架随机一件。
 func (s *Server) pickLootReward(ctx context.Context, def lootBoxDef) (itemID string, qty int64, name string) {
 	if len(def.Rewards) > 0 {
+		eligible := make([]lootBoxReward, 0, len(def.Rewards))
 		var total float64
 		for _, r := range def.Rewards {
-			if r.ItemID != "" && r.Weight > 0 {
-				total += r.Weight
+			if r.ItemID == "" || r.Weight <= 0 || !s.lootRewardItemEligible(ctx, r.ItemID) {
+				continue
 			}
+			eligible = append(eligible, r)
+			total += r.Weight
 		}
 		if total > 0 {
 			x := rand.Float64() * total
-			for _, r := range def.Rewards {
-				if r.ItemID == "" || r.Weight <= 0 {
-					continue
-				}
+			for _, r := range eligible {
 				if x < r.Weight {
 					q := r.Qty
 					if q <= 0 {
@@ -202,20 +249,40 @@ func (s *Server) pickLootReward(ctx context.Context, def lootBoxDef) (itemID str
 	return s.pickRandomShopItem(ctx)
 }
 
-// pickRandomShopItem 从生效货架随机抽一件可购买商品。
-// 排除套盒/礼包类（55/73），避免开出"套娃"以及 category 73 被错误物化的物品。
+// pickRandomShopItem 从有库存的商店物品中等概率抽一件。
+// 排除套盒/礼包类（55/73），并要求类别存在权威 wire 映射，避免错误物化。
 func (s *Server) pickRandomShopItem(ctx context.Context) (itemID string, qty int64, name string) {
-	row := s.DB.SQL.QueryRowContext(ctx, `
-		SELECT s.item_id
+	rows, err := s.DB.SQL.QueryContext(ctx, `
+		SELECT DISTINCT s.item_id, d.category
 		FROM shop_item s
 		JOIN item_def d ON d.item_id = s.item_id
 		WHERE s.stock > 0
-		  AND d.category NOT IN (55, 73)
-		ORDER BY RANDOM() LIMIT 1`)
-	if err := row.Scan(&itemID); err != nil || itemID == "" {
+		ORDER BY s.item_id`)
+	if err != nil {
 		s.log.Warn("礼包抽取商店物品失败", "err", err)
 		return "", 0, ""
 	}
+	defer rows.Close()
+	var candidates []string
+	for rows.Next() {
+		var candidate string
+		var category int64
+		if err := rows.Scan(&candidate, &category); err != nil {
+			continue
+		}
+		if lootRewardCategoryEligible(category) {
+			candidates = append(candidates, candidate)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		s.log.Warn("礼包抽取商店物品失败", "err", err)
+		return "", 0, ""
+	}
+	if len(candidates) == 0 {
+		s.log.Warn("礼包抽取商店物品失败", "err", "没有可发放的商品")
+		return "", 0, ""
+	}
+	itemID = candidates[rand.Intn(len(candidates))]
 	return itemID, 1, s.lootItemName(ctx, itemID)
 }
 
@@ -229,8 +296,6 @@ func (s *Server) lootItemName(ctx context.Context, itemID string) string {
 	}
 	return name
 }
-
-var _ = store.Item{}
 
 // scheduleLootBox 异步开箱：不阻塞 14/5 入护回包，也不受请求 ctx 取消影响。
 func (s *Server) scheduleLootBox(sess *Session, catch *RolledFish) {
