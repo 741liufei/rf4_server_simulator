@@ -17,6 +17,11 @@ const (
 )
 
 const (
+	fishHuntModeFreshwater = iota
+	fishHuntModeMarine
+)
+
+const (
 	fishHuntCompWindowSeconds = 10 * 60
 	fishHuntSpotResetM        = 20.0
 )
@@ -25,6 +30,9 @@ type fishHuntState struct {
 	UID           int64
 	Loc           string
 	Spot          uint64
+	Mode          int64
+	Zone          int64
+	ZoneKnown     bool
 	AnchorX       float64
 	AnchorZ       float64
 	AnchorKnown   bool
@@ -59,17 +67,18 @@ func (s *Server) loadFishHuntState(ctx context.Context, uid int64, loc string, s
 	if !s.fishHuntEnabled() || uid == 0 || loc == "" {
 		return h
 	}
-	var anchorKnown, compGrade int64
+	var anchorKnown, zoneKnown, compGrade int64
 	err := s.DB.SQL.QueryRowContext(ctx, `
 		SELECT anchor_x,anchor_z,anchor_known,active_seconds,valid_bites,pity,
 		       big_miss,comp_fish,comp_grade,comp_until,last_catch_guid,
-		       last_active_ts,updated_ts
+		       last_active_ts,updated_ts,hunt_mode,sea_zone,sea_zone_known
 		FROM fish_hunt_state WHERE uid=? AND loc=? AND spot=?`,
 		uid, loc, int64(spot)).Scan(
 		&h.AnchorX, &h.AnchorZ, &anchorKnown, &h.ActiveSeconds, &h.ValidBites, &h.Pity,
 		&h.BigMiss, &h.CompFish, &compGrade, &h.CompUntil, &h.LastCatchGUID,
-		&h.LastActiveTS, &h.UpdatedTS)
+		&h.LastActiveTS, &h.UpdatedTS, &h.Mode, &h.Zone, &zoneKnown)
 	h.AnchorKnown = anchorKnown != 0
+	h.ZoneKnown = zoneKnown != 0
 	h.CompGrade = compGrade
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.log.Warn("鱼猎状态读取失败", "uid", uid, "loc", loc, "spot", spot, "err", err)
@@ -86,8 +95,8 @@ func (s *Server) saveFishHuntState(ctx context.Context, h *fishHuntState) {
 		INSERT INTO fish_hunt_state(
 			uid,loc,spot,anchor_x,anchor_z,anchor_known,active_seconds,valid_bites,
 			pity,big_miss,comp_fish,comp_grade,comp_until,last_catch_guid,
-			last_active_ts,updated_ts)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			last_active_ts,updated_ts,hunt_mode,sea_zone,sea_zone_known)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(uid,loc,spot) DO UPDATE SET
 			anchor_x=excluded.anchor_x,anchor_z=excluded.anchor_z,
 			anchor_known=excluded.anchor_known,active_seconds=excluded.active_seconds,
@@ -95,10 +104,13 @@ func (s *Server) saveFishHuntState(ctx context.Context, h *fishHuntState) {
 			big_miss=excluded.big_miss,comp_fish=excluded.comp_fish,
 			comp_grade=excluded.comp_grade,comp_until=excluded.comp_until,
 			last_catch_guid=excluded.last_catch_guid,
-			last_active_ts=excluded.last_active_ts,updated_ts=excluded.updated_ts`,
+			last_active_ts=excluded.last_active_ts,updated_ts=excluded.updated_ts,
+			hunt_mode=excluded.hunt_mode,sea_zone=excluded.sea_zone,
+			sea_zone_known=excluded.sea_zone_known`,
 		h.UID, h.Loc, int64(h.Spot), h.AnchorX, h.AnchorZ, boolInt(h.AnchorKnown),
 		h.ActiveSeconds, h.ValidBites, h.Pity, h.BigMiss, h.CompFish, h.CompGrade,
-		h.CompUntil, h.LastCatchGUID, h.LastActiveTS, h.UpdatedTS)
+		h.CompUntil, h.LastCatchGUID, h.LastActiveTS, h.UpdatedTS,
+		h.Mode, h.Zone, boolInt(h.ZoneKnown))
 	if err != nil {
 		s.log.Warn("鱼猎状态保存失败", "uid", h.UID, "loc", h.Loc, "spot", h.Spot, "err", err)
 	}
@@ -157,6 +169,138 @@ func (s *Server) fishHuntBaitMatch(ctx context.Context, key string, c fishRollCo
 	default:
 		return .35
 	}
+}
+
+type marineFishTraits struct {
+	schooling float64
+	chase     float64
+	ambush    float64
+	pit       float64
+}
+
+// marineTraits 是海图 v1 的鱼群习性代理值。现有生态表没有单独的社会性字段，
+// 先用活动度、攻击性、水层和稀有度推导，后续可由后台覆盖。
+func (s *Server) marineTraits(ctx context.Context, key string, c fishRollContext) marineFishTraits {
+	p := s.cachedFishEcology(ctx, c, key)
+	activity := groundbaitClamp(p.Activity, .5, 1.5)
+	aggression := groundbaitClamp(p.Aggression, .5, 1.5)
+	layer := groundbaitClamp(p.LayerPref, 0, 1)
+	return marineFishTraits{
+		schooling: groundbaitClamp(.35+(activity-.7)*.45-(aggression-1)*.20+(1-layer)*.10, .05, .95),
+		chase:     groundbaitClamp(.15+(aggression-.8)*.55+p.CurrentPref*.20, .05, .95),
+		ambush:    groundbaitClamp(.15+layer*.60+(1.2-activity)*.20, .05, .95),
+		pit:       groundbaitClamp(.15+layer*.65+float64(p.RarityTier)*.04, .05, .95),
+	}
+}
+
+func marineActionMatch(c fishRollContext, t marineFishTraits) float64 {
+	switch c.lureAction {
+	case "trolling":
+		return groundbaitClamp(.55+.45*(.60*t.schooling+.40*t.chase), .35, 1)
+	case "marine_jig", "vertical_dive", "vertical_ascend", "bottom_layer_move", "bottom_move":
+		return groundbaitClamp(.50+.50*(.60*t.ambush+.40*t.pit), .30, 1)
+	case "drift":
+		return groundbaitClamp(.50+.50*(.50*t.schooling+.50*t.chase), .30, 1)
+	case "jig":
+		return groundbaitClamp(.60+.40*(.55*t.ambush+.45*t.chase), .30, 1)
+	default:
+		return .55
+	}
+}
+
+func marineDepthMatch(c fishRollContext, t marineFishTraits) float64 {
+	layer := normalizeWaterLayer(c.lureLayer)
+	if c.spotEnv.Known && c.spotEnv.DepthM > 0 {
+		layer = groundbaitClamp(c.spotEnv.DepthM/220, 0, 1)
+	}
+	return groundbaitClamp(1-math.Abs(layer-.58*t.pit-.20*t.ambush), .25, 1)
+}
+
+// fishHuntReadiness 根据水域模式分派：淡水用窝料，海图用声呐区号和搜索动作。
+func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
+	if marineHuntContext(c) {
+		return s.fishMarineHuntReadiness(ctx, key, c, h)
+	}
+	return s.fishFreshwaterHuntReadiness(ctx, key, c, h)
+}
+
+func marineHuntContext(c fishRollContext) bool {
+	return marineRigType(c.rigType) || c.runtime != nil && c.runtime.chartKnown
+}
+
+func (s *Server) fishMarineHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
+	out := fishHuntReadiness{Stage: fishHuntDaily}
+	if h == nil || s.DB == nil {
+		return out
+	}
+	s.huntTouch(h)
+	zone := 0
+	zoneKnown := c.runtime != nil && c.runtime.zoneKnown
+	if zoneKnown {
+		zone = c.runtime.zone
+	}
+	if h.Mode != fishHuntModeMarine {
+		h.ActiveSeconds, h.ValidBites, h.Pity = 0, 0, 0
+		h.BigMiss, h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0, 0
+		h.Zone, h.ZoneKnown = 0, false
+	}
+	if zoneKnown {
+		if h.ZoneKnown && h.Zone != int64(zone) {
+			h.ActiveSeconds, h.ValidBites, h.Pity = 0, 0, 0
+			h.BigMiss, h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0, 0
+		}
+		h.Zone, h.ZoneKnown = int64(zone), true
+	}
+	h.Mode = fishHuntModeMarine
+	traits := s.marineTraits(ctx, key, c)
+	action := marineActionMatch(c, traits)
+	depth := marineDepthMatch(c, traits)
+	zoneMatch := .15
+	if zoneKnown {
+		zoneMatch = 1
+	}
+	sonar := .15
+	if zoneKnown {
+		sonar = .75
+		if c.spotEnv.Known {
+			sonar += .10
+		}
+	}
+	if c.runtime != nil && c.runtime.sonarSystemID != "" {
+		if profile := s.sonarProfileFor(ctx, c.runtime.sonarSystemID); profile != nil {
+			sonar = math.Max(sonar, .80)
+			if profile.depthMax > profile.depthMin {
+				sonar += .08
+			}
+			if profile.sizeP90 >= profile.sizeMed && profile.sizeMed > 0 {
+				sonar += .05
+			}
+			sonar = math.Min(sonar, 1)
+		}
+	}
+	out.P = .65*(1-math.Exp(-h.ActiveSeconds/720)) + .35*(1-math.Exp(-float64(h.ValidBites)/12))
+	out.P = groundbaitClamp(out.P, 0, 1)
+	out.A = groundbaitClamp(zoneMatch*(.35+.45*sonar+.20*out.P)*(.55+.45*action), 0, 1)
+	env := s.fishBiteEnvironmentWeight(ctx, key, c)
+	eco := groundbaitClamp((env-.35)/1.65, 0, 1)
+	out.E = groundbaitClamp(.70*eco+.30*.35, 0, 1)
+	water := fishWaterConditionsFor(s.cachedFishEcology(ctx, c, key), c)
+	lure := groundbaitClamp((s.fishLureWeight(s.cachedFishEcology(ctx, c, key), c, water)-.45)/1.05, 0, 1)
+	out.G = groundbaitClamp(.45*lure+.35*action+.20*depth, 0, 1)
+	k := groundbaitClamp(.5+c.skill.EcologyInterest*2+c.skill.TrophyLuck*2, 0, 1)
+	out.Q = groundbaitClamp(out.E*out.G*(.25+.75*out.P)*(.90+.10*k), 0, 1)
+	out.Comp = h.CompFish > 0 && float64(time.Now().Unix()) <= h.CompUntil
+	switch {
+	case out.A < .25 || out.E < .25 || out.G < .25:
+		out.Stage = fishHuntDaily
+	case out.A >= .70 && out.Q >= .82:
+		out.Stage = fishHuntGiant
+	case out.A >= .55 && out.Q >= .58:
+		out.Stage = fishHuntActive
+	default:
+		out.Stage = fishHuntGather
+	}
+	return out
 }
 
 // hookScore 把实际钩号与钩体长度合成为一个连续值；0=小钩，0.5=中钩，1=大钩。
@@ -237,11 +381,12 @@ func hookRetentionFails(f *RolledFish) bool {
 		f.HookHoldP > 0 && rand.Float64() > f.HookHoldP
 }
 
-func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
+func (s *Server) fishFreshwaterHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
 	out := fishHuntReadiness{Stage: fishHuntDaily}
 	if h == nil || s.DB == nil || !s.groundbaitEnabled() {
 		return out
 	}
+	h.Mode = fishHuntModeFreshwater
 	s.huntTouch(h)
 	gb := s.groundbaitSpotAt(ctx, h.UID, h.Loc, c.x, c.z, c.hasPos, h.Spot)
 	if gb.units <= 0 {

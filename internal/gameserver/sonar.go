@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"rf4server/internal/proto"
+	"rf4server/internal/store"
 	"rf4server/internal/wiregen"
 )
 
@@ -27,8 +28,8 @@ const (
 	sonarResponseClass = "efnipphkbce"
 	sonarCellClass     = "gphnpomceak"
 	sonarEchoClass     = "inhomdofcfb"
-	sonarCellArgCode   = "15004"
-	sonarEchoArgCode   = "15005"
+	sonarCellArgCode   = "496"
+	sonarEchoArgCode   = "497"
 )
 
 // sonarGrid 是一块水域的声呐网格几何。level 是该水域所属地图 key，
@@ -173,62 +174,68 @@ func sonarTriangular(rng *rand.Rand, low, high, mode float64) float64 {
 	return high - math.Sqrt((1-u)*(high-low)*(high-mode))
 }
 
-// sampleSonarEcho 生成一条声呐回声的体长和深度。
-// 有档案时使用深度与体长分位区间；无档案时使用默认的鱼体大小和深度范围。
-func sampleSonarEcho(rng *rand.Rand, profile *sonarProfile) (sizeCM, depthM float64) {
+func sonarDepthRange(profile *sonarProfile) (low, high float64) {
+	low, high = 0.8, 5.5
 	if profile != nil {
-		depthLow := profile.depthMin
-		if depthLow == 0 {
-			depthLow = 0.8
+		if profile.depthMin != 0 {
+			low = profile.depthMin
 		}
-		depthLow = math.Max(0.1, depthLow)
-		depthHigh := profile.depthMax
-		if depthHigh == 0 {
-			depthHigh = 5.5
+		if profile.depthMax != 0 {
+			high = profile.depthMax
 		}
-		depthHigh = math.Max(depthLow+0.5, depthHigh)
-		depthM = sonarTriangular(rng, depthLow, depthHigh, depthLow+(depthHigh-depthLow)*0.25)
+	}
+	low = math.Max(0.1, low)
+	high = math.Max(low+0.5, high)
+	return low, high
+}
 
-		med := profile.sizeMed
-		if med == 0 {
-			med = 4.0
+func sampleSonarWeightKg(rng *rand.Rand, profile *sonarProfile) float64 {
+	if profile != nil {
+		weightMedKg := profile.sizeMed
+		if weightMedKg == 0 {
+			weightMedKg = 4.0
 		}
-		med = math.Max(0.5, med)
-		p90 := profile.sizeP90
-		if p90 == 0 {
-			p90 = med * 3
+		weightMedKg = math.Max(0.05, weightMedKg)
+		weightP90Kg := profile.sizeP90
+		if weightP90Kg == 0 {
+			weightP90Kg = weightMedKg * 3
 		}
-		p90 = math.Max(med, p90)
+		weightP90Kg = math.Max(weightMedKg, weightP90Kg)
 		x := rng.Float64()
 		switch {
 		case x < 0.80:
-			sizeCM = sonarUniform(rng, med*0.5, med*2.0)
+			return sonarUniform(rng, weightMedKg*0.5, weightMedKg*2.0)
 		case x < 0.97:
-			sizeCM = sonarUniform(rng, med*1.5, p90)
+			return sonarUniform(rng, weightMedKg*1.5, weightP90Kg)
 		default:
-			sizeCM = sonarUniform(rng, p90, math.Max(p90, 97.0))
+			return sonarUniform(rng, weightP90Kg, math.Max(weightP90Kg, 97.0))
 		}
-		return sizeCM, math.Min(depthM, depthHigh)
 	}
 
 	if rng.Float64() < 0.12 {
-		sizeCM = sonarUniform(rng, 60, 130)
-	} else {
-		sizeCM = sonarUniform(rng, 12, 60)
+		return sonarUniform(rng, 6, 40)
 	}
-	return sizeCM, sonarUniform(rng, 0.8, 5.5)
+	return sonarUniform(rng, 0.15, 6)
 }
 
-func makeSonarEcho(sizeCM, depthM float64) (*proto.Value, error) {
+// sampleSonarEcho 生成一条声呐回声。f0 是客户端图标分级直接比较的鱼重 kg，
+// 不是克；客户端用 3 kg / 10 kg 两档阈值选择大小图标。
+func sampleSonarEcho(rng *rand.Rand, profile *sonarProfile) (weightKg, depthM float64) {
+	low, high := sonarDepthRange(profile)
+	depthM = sonarTriangular(rng, low, high, low+(high-low)*0.25)
+	return sampleSonarWeightKg(rng, profile), depthM
+}
+
+func makeSonarEcho(weightKg, depthM float64) (*proto.Value, error) {
 	return wiregen.MakeObj(sonarEchoClass, map[int]*proto.Value{
-		0: proto.F32(float32(sizeCM)),
+		0: proto.F32(float32(weightKg)),
 		1: proto.F32(float32(depthM)),
 	})
 }
 
 func makeSonarCell(echoes []*proto.Value) (*proto.Value, error) {
 	if len(echoes) == 0 {
-		return proto.ElemNull(), nil
+		return proto.Null(), nil
 	}
 	code := sonarEchoArgCode
 	return wiregen.MakeObj(sonarCellClass, map[int]*proto.Value{
@@ -237,17 +244,60 @@ func makeSonarCell(echoes []*proto.Value) (*proto.Value, error) {
 }
 
 func makeEmptySonarResponse(systemID string) (*proto.Value, error) {
-	// 不能带 args(15004)：解码 args 时会先按 code 解析元素类型，客户端没有
-	// 15004，哪怕 0 个元素也会抛 GetType not found 并断开连接。
+	code := sonarCellArgCode
 	return wiregen.MakeObj(sonarResponseClass, map[int]*proto.Value{
 		0: proto.StrVal(systemID),
-		1: proto.Null(),
+		1: proto.Args(&code),
 	})
 }
 
-// synthesizeSonar 生成声呐网格：2 到 5 个鱼群中心向邻近格扩散，
-// 空格编码为 0xFF；未知水域返回 15003 空数组。
-func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*proto.Value, error) {
+type sonarSchool struct {
+	centerX int
+	centerY int
+	radiusX int
+	radiusY int
+	depthM  float64
+	// depthJitterM 只让同一鱼群内的相邻格产生轻微深度起伏；鱼群主线仍
+	// 由该鱼种 ecology 的 layer_pref 决定，玩家可以据此调放线深度。
+	depthJitterM float64
+	fishKey      string
+	gradeWeights [4]float64
+	lines        cachedGradeLines
+}
+
+func randomSonarSchools(cols, rows int, profile *sonarProfile, rng *rand.Rand) []sonarSchool {
+	depthLow, depthHigh := sonarDepthRange(profile)
+	schools := make([]sonarSchool, 0, 4)
+	for clusters := rng.Intn(3) + 2; clusters > 0; clusters-- {
+		radiusX := rng.Intn(4) + 1
+		radiusY := rng.Intn(3) + 1
+		if radiusX*2+1 > cols {
+			radiusX = (cols - 1) / 2
+		}
+		if radiusY*2+1 > rows {
+			radiusY = (rows - 1) / 2
+		}
+		radiusX = maxInt(1, radiusX)
+		radiusY = maxInt(1, radiusY)
+		centerX := radiusX + rng.Intn(maxInt(1, cols-2*radiusX))
+		centerY := radiusY + rng.Intn(maxInt(1, rows-2*radiusY))
+		schools = append(schools, sonarSchool{
+			centerX: centerX,
+			centerY: centerY,
+			radiusX: radiusX,
+			radiusY: radiusY,
+			depthM: sonarTriangular(
+				rng, depthLow, depthHigh, depthLow+(depthHigh-depthLow)*0.3,
+			),
+			depthJitterM: math.Max(0.08, (depthHigh-depthLow)*0.05),
+		})
+	}
+	return schools
+}
+
+// synthesizeSonarSchools 把鱼群渲染成客户端要的连续椭圆回声带。
+func synthesizeSonarSchools(systemID string, profile *sonarProfile, schools []sonarSchool,
+	rng *rand.Rand) (*proto.Value, error) {
 	grids, err := loadSonarGrids()
 	if err != nil {
 		return nil, err
@@ -259,16 +309,25 @@ func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*p
 	if rng == nil {
 		rng = newSonarRand()
 	}
-
 	cols, rows := sonarGridDimensions(grid)
 	cellCount := cols * rows
-	hot := make(map[int]int)
-	for clusters := rng.Intn(4) + 2; clusters > 0; clusters-- {
-		center := rng.Intn(cellCount)
-		for spreadCount := rng.Intn(12) + 3; spreadCount > 0; spreadCount-- {
-			spread := center + (rng.Intn(4*cols+1) - 2*cols) + (rng.Intn(5) - 2)
-			if spread >= 0 && spread < cellCount {
-				hot[spread]++
+	depthLow, depthHigh := sonarDepthRange(profile)
+
+	schoolAt := make(map[int]int)
+	for schoolIdx, school := range schools {
+		for dy := -school.radiusY; dy <= school.radiusY; dy++ {
+			for dx := -school.radiusX; dx <= school.radiusX; dx++ {
+				nx := (dx * dx * school.radiusY * school.radiusY) +
+					(dy * dy * school.radiusX * school.radiusX)
+				limit := school.radiusX * school.radiusX * school.radiusY * school.radiusY
+				if nx > limit {
+					continue
+				}
+				x, y := school.centerX+dx, school.centerY+dy
+				if x < 0 || x >= cols || y < 0 || y >= rows {
+					continue
+				}
+				schoolAt[y*cols+x] = schoolIdx
 			}
 		}
 	}
@@ -276,18 +335,25 @@ func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*p
 	items := make([]*proto.Value, 0, cellCount)
 	for idx := 0; idx < cellCount; idx++ {
 		var echoes []*proto.Value
-		echoCount := 0
-		if hot[idx] > 0 {
-			echoCount = rng.Intn(4) + 1
-		}
-		for echoCount > 0 {
-			sizeCM, depthM := sampleSonarEcho(rng, profile)
-			echo, err := makeSonarEcho(sizeCM, depthM)
-			if err != nil {
-				return nil, err
+		if schoolIdx, ok := schoolAt[idx]; ok {
+			school := schools[schoolIdx]
+			echoCount := rng.Intn(3) + 1
+			for echoIdx := 0; echoIdx < echoCount; echoIdx++ {
+				var weightKg, depthM float64
+				if echoIdx == 0 {
+					weightKg = sampleSonarSchoolWeightKg(rng, school, profile)
+					depthM = school.depthM
+				} else {
+					weightKg = sampleSonarSchoolWeightKg(rng, school, profile)
+					depthM = school.depthM + sonarUniform(rng, -school.depthJitterM, school.depthJitterM)
+					depthM = math.Max(depthLow, math.Min(depthHigh, depthM))
+				}
+				echo, err := makeSonarEcho(weightKg, depthM)
+				if err != nil {
+					return nil, err
+				}
+				echoes = append(echoes, echo)
 			}
-			echoes = append(echoes, echo)
-			echoCount--
 		}
 		cell, err := makeSonarCell(echoes)
 		if err != nil {
@@ -301,6 +367,331 @@ func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*p
 		0: proto.StrVal(systemID),
 		1: proto.Args(&code, items...),
 	})
+}
+
+// synthesizeSonar 是静态资产回退路径，只在数据库不可用或水域名册为空时使用。
+func synthesizeSonar(systemID string, profile *sonarProfile, rng *rand.Rand) (*proto.Value, error) {
+	if rng == nil {
+		rng = newSonarRand()
+	}
+	grids, err := loadSonarGrids()
+	if err != nil {
+		return nil, err
+	}
+	grid, ok := grids[systemID]
+	if !ok {
+		return makeEmptySonarResponse(systemID)
+	}
+	cols, rows := sonarGridDimensions(grid)
+	return synthesizeSonarSchools(systemID, profile,
+		randomSonarSchools(cols, rows, profile, rng), rng)
+}
+
+func sonarDepthRangeForContext(profile *sonarProfile, c fishRollContext) (low, high float64) {
+	if profile != nil {
+		return sonarDepthRange(profile)
+	}
+	if c.spotEnv.Known && c.spotEnv.DepthM > 0 {
+		return 0.5, math.Max(2, c.spotEnv.DepthM)
+	}
+	return sonarDepthRange(nil)
+}
+
+func sonarPlayerCell(grid sonarGrid, x, z float64) (col, row int, ok bool) {
+	if x < grid.topLeftX || x >= grid.topLeftX+grid.width ||
+		z > grid.topLeftZ || z <= grid.topLeftZ-grid.length {
+		return 0, 0, false
+	}
+	col = int((x - grid.topLeftX) / grid.cellSize)
+	row = int((grid.topLeftZ - z) / grid.cellSize)
+	cols, rows := sonarGridDimensions(grid)
+	if col < 0 || col >= cols || row < 0 || row >= rows {
+		return 0, 0, false
+	}
+	return col, row, true
+}
+
+func fitSonarSchoolCenter(center, radius, dimension int, rng *rand.Rand) int {
+	if dimension <= 1 {
+		return 0
+	}
+	if radius > (dimension-1)/2 {
+		radius = (dimension - 1) / 2
+	}
+	if radius < 1 {
+		return 0
+	}
+	low, high := radius, dimension-radius-1
+	if high < low {
+		return dimension / 2
+	}
+	if center < low || center > high {
+		center = low + rng.Intn(high-low+1)
+	}
+	return center
+}
+
+func sonarCandidateKeys(roster []*store.FishRosterRow) (keys []string, weights []float64) {
+	for _, row := range roster {
+		if row == nil || strings.TrimSpace(row.FishKey) == "" || row.Catches <= 0 {
+			continue
+		}
+		keys = append(keys, row.FishKey)
+		weights = append(weights, row.Catches)
+	}
+	return keys, weights
+}
+
+func sonarWeightedIndex(rng *rand.Rand, weights []float64) int {
+	total := 0.0
+	for _, weight := range weights {
+		if weight > 0 && finiteSonarNumber(weight) {
+			total += weight
+		}
+	}
+	if total <= 0 {
+		return rng.Intn(len(weights))
+	}
+	pick := rng.Float64() * total
+	acc := 0.0
+	last := 0
+	for i, weight := range weights {
+		if weight <= 0 || !finiteSonarNumber(weight) {
+			continue
+		}
+		last = i
+		acc += weight
+		if pick <= acc {
+			return i
+		}
+	}
+	return last
+}
+
+func sonarGradeFromWeights(rng *rand.Rand, weights [4]float64, forceTrophy bool) int64 {
+	if forceTrophy {
+		weights[0], weights[1] = 0, 0
+		if weights[2]+weights[3] <= 0 {
+			weights[2] = 1
+		}
+	}
+	total := 0.0
+	for _, weight := range weights {
+		if weight > 0 && finiteSonarNumber(weight) {
+			total += weight
+		}
+	}
+	if total <= 0 {
+		return 2
+	}
+	pick := rng.Float64() * total
+	acc := 0.0
+	for i, weight := range weights {
+		if weight <= 0 || !finiteSonarNumber(weight) {
+			continue
+		}
+		acc += weight
+		if pick <= acc {
+			return int64(i + 1)
+		}
+	}
+	return 4
+}
+
+func sonarTriangularLogRand(rng *rand.Rand, low, high, mode float64) float64 {
+	if low <= 0 {
+		low = 1
+	}
+	if high <= low {
+		return low
+	}
+	if mode <= low || mode >= high {
+		mode = math.Sqrt(low * high)
+	}
+	lowLog, highLog, modeLog := math.Log(low), math.Log(high), math.Log(mode)
+	u := rng.Float64()
+	split := (modeLog - lowLog) / (highLog - lowLog)
+	switch {
+	case u < split && modeLog > lowLog:
+		return math.Exp(lowLog + math.Sqrt(u*(highLog-lowLog)*(modeLog-lowLog)))
+	case highLog > modeLog:
+		return math.Exp(highLog - math.Sqrt((1-u)*(highLog-lowLog)*(highLog-modeLog)))
+	default:
+		return mode
+	}
+}
+
+func sonarSampleGradeGrams(rng *rand.Rand, lines cachedGradeLines, grade int64) float64 {
+	var low, high, mode float64
+	switch grade {
+	case 1:
+		if lines.val == nil || *lines.val <= 0 {
+			return 0
+		}
+		q := float64(*lines.val)
+		low, high, mode = math.Max(1, .15*q), .98*q, .45*q
+	case 2:
+		if lines.val == nil || lines.trophy == nil || *lines.trophy <= *lines.val {
+			return 0
+		}
+		q, t := float64(*lines.val), float64(*lines.trophy)
+		low, high, mode = 1.02*q, .98*t, math.Min(1.25*q, .92*t)
+	case 3:
+		if lines.trophy == nil || lines.blue == nil || *lines.blue <= *lines.trophy {
+			return 0
+		}
+		t, b := float64(*lines.trophy), float64(*lines.blue)
+		low, high, mode = 1.02*t, .98*b, math.Min(1.15*t, .92*b)
+	case 4:
+		if lines.blue == nil || *lines.blue <= 0 {
+			return 0
+		}
+		b := float64(*lines.blue)
+		low, high, mode = 1.02*b, 1.60*b, 1.10*b
+	default:
+		return 0
+	}
+	if high < low {
+		return 0
+	}
+	return sonarTriangularLogRand(rng, low, high, mode)
+}
+
+func sampleSonarSchoolWeightKg(rng *rand.Rand, school sonarSchool, profile *sonarProfile) float64 {
+	if school.fishKey != "" {
+		grade := sonarGradeFromWeights(rng, school.gradeWeights, false)
+		for attempts := int64(0); attempts < 4; attempts++ {
+			if grams := sonarSampleGradeGrams(rng, school.lines, grade); grams > 0 {
+				return math.Max(.001, grams/1000)
+			}
+			if attempts == 0 {
+				grade--
+				if grade < 1 {
+					break
+				}
+			}
+		}
+	}
+	return sampleSonarWeightKg(rng, profile)
+}
+
+// rosterSonarSchools 用与真实判鱼相同的静态鱼库生成鱼群：
+// 水域名册给鱼种与基础权重，spot_fish/生态条件微调，fish_ecology 给水层，
+// fish_grade_lines + 当前鱼猎阶段给体重档位。这里只读，不推进咬口或保底。
+func (s *Server) rosterSonarSchools(ctx context.Context, systemID string, grid sonarGrid,
+	profile *sonarProfile, c fishRollContext, rng *rand.Rand) []sonarSchool {
+	if s == nil || s.DB == nil || rng == nil {
+		return nil
+	}
+	c = rollContext([]fishRollContext{c})
+	if c.loc == "" {
+		c.loc = systemID
+	}
+	statLoc := s.cachedResolveStatLoc(ctx, c, systemID)
+	if statLoc == "" {
+		statLoc = s.cachedResolveStatLoc(ctx, c, grid.level)
+	}
+	if statLoc == "" {
+		return nil
+	}
+	zone, zoneOK := sonarZoneNumber(systemID)
+	c.runtime = &fishRollRuntime{
+		levelChecked: true, chartKnown: true, zone: zone, zoneKnown: zoneOK,
+		sonarSystemID: systemID,
+	}
+	s.prepareFishRollRuntime(ctx, &c, statLoc)
+
+	roster, err := s.cachedLocRoster(ctx, c, statLoc)
+	if err != nil || len(roster) == 0 {
+		return nil
+	}
+	keys, weights := sonarCandidateKeys(roster)
+	if len(keys) == 0 {
+		return nil
+	}
+	applyFishSpotBias(keys, weights, c.runtime.spotPref, c.runtime.spotData)
+	for i, key := range keys {
+		weights[i] *= s.fishBiteEnvironmentWeight(ctx, key, c)
+	}
+
+	var hunt *fishHuntState
+	if c.uid > 0 {
+		hunt = s.loadFishHuntState(ctx, c.uid, systemID, c.spot)
+	}
+	cols, rows := sonarGridDimensions(grid)
+	depthLow, depthHigh := sonarDepthRangeForContext(profile, c)
+	playerCol, playerRow, playerKnown := sonarPlayerCell(grid, c.x, c.z)
+	if !c.hasPos {
+		playerKnown = false
+	}
+
+	count := rng.Intn(3) + 2
+	if count > len(keys) {
+		count = len(keys)
+	}
+	schools := make([]sonarSchool, 0, count)
+	for len(schools) < count {
+		idx := sonarWeightedIndex(rng, weights)
+		key := keys[idx]
+		if weights[idx] <= 0 || !finiteSonarNumber(weights[idx]) {
+			break
+		}
+		weights[idx] = 0
+
+		eco := s.cachedFishEcology(ctx, c, key)
+		layerMin := math.Max(0, math.Min(1, eco.LayerMin))
+		layerPref := math.Max(0, math.Min(1, eco.LayerPref))
+		layerMax := math.Max(0, math.Min(1, eco.LayerMax))
+		if layerMax <= layerMin {
+			layerMin, layerPref, layerMax = .25, .55, 1
+		}
+		if layerPref < layerMin || layerPref > layerMax {
+			layerPref = (layerMin + layerMax) / 2
+		}
+		depthM := depthLow + layerPref*(depthHigh-depthLow)
+		depthJitter := math.Max(.1, math.Min(2.5, (depthHigh-depthLow)*.025))
+
+		readiness := s.fishHuntReadiness(ctx, key, c, hunt)
+		w1, w2, w3, w4, forceTrophy := fishHuntWeights(
+			readiness.Stage, hunt, c.skill.TrophyLuck, hookScore(c.hook), readiness.Comp,
+		)
+		if forceTrophy {
+			w1, w2 = 0, 0
+		}
+		gradeWeights := [4]float64{w1, w2, w3, w4}
+
+		traits := s.marineTraits(ctx, key, c)
+		radiusX := 1 + rng.Intn(3) + int(math.Round(traits.schooling*2))
+		radiusY := 1 + rng.Intn(2) + int(math.Round(traits.schooling))
+		if radiusX*2+1 > cols {
+			radiusX = maxInt(1, (cols-1)/2)
+		}
+		if radiusY*2+1 > rows {
+			radiusY = maxInt(1, (rows-1)/2)
+		}
+		centerX := radiusX + rng.Intn(maxInt(1, cols-2*radiusX))
+		centerY := radiusY + rng.Intn(maxInt(1, rows-2*radiusY))
+		if len(schools) == 0 && playerKnown {
+			centerX = playerCol + rng.Intn(3) - 1
+			centerY = playerRow + rng.Intn(3) - 1
+		}
+		centerX = fitSonarSchoolCenter(centerX, radiusX, cols, rng)
+		centerY = fitSonarSchoolCenter(centerY, radiusY, rows, rng)
+
+		schools = append(schools, sonarSchool{
+			centerX: centerX, centerY: centerY, radiusX: radiusX, radiusY: radiusY,
+			depthM: depthM, depthJitterM: depthJitter, fishKey: key,
+			gradeWeights: gradeWeights, lines: s.cachedGradeLines(ctx, c, key),
+		})
+	}
+	return schools
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // sonarChartLevel 判断该地图有没有海图网格。目前只有挪威海有声呐水域资源，
@@ -368,12 +759,26 @@ func sonarZoneForPoint(levelKey string, x, z float64) (int, bool) {
 	return zone, found
 }
 
-func (s *Server) sonarResponse(ctx context.Context, systemID string) (*proto.Value, error) {
-	// 客户端 4.0.25034 的响应类型表里没有 15004，发回波网格会在解码时抛
-	// "GetType not found: 15004" 并断开连接（上船、切图后反复重连）。
+func (s *Server) sonarResponse(ctx context.Context, systemID string, c fishRollContext) (*proto.Value, error) {
 	// 默认只回 15003 空网格；需要回波时用运行参数 sonar_echo=1 打开。
 	if s.tunableF("sonar_echo", 0) < 1 {
 		return makeEmptySonarResponse(systemID)
 	}
-	return synthesizeSonar(systemID, s.sonarProfileFor(ctx, systemID), newSonarRand())
+	profile := s.sonarProfileFor(ctx, systemID)
+	rng := newSonarRand()
+	grids, err := loadSonarGrids()
+	if err != nil {
+		return nil, err
+	}
+	if grid, ok := grids[systemID]; ok {
+		if schools := s.rosterSonarSchools(ctx, systemID, grid, profile, c, rng); len(schools) > 0 {
+			details := make([]string, 0, len(schools))
+			for _, school := range schools {
+				details = append(details, fmt.Sprintf("%s@%.1fm", school.fishKey, school.depthM))
+			}
+			s.log.Info("声呐鱼群", "system", systemID, "schools", strings.Join(details, ","))
+			return synthesizeSonarSchools(systemID, profile, schools, rng)
+		}
+	}
+	return synthesizeSonar(systemID, profile, rng)
 }
