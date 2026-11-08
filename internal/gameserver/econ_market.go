@@ -340,7 +340,8 @@ func hMarketRate(ctx *Ctx) ([]byte, bool) {
 			flag = 1
 			rotten++
 		}
-		mapKey := srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
+		// 鱼市按卖鱼时所在水域计价：同一批鱼在不同地图卖出，价格随该图倍率变化。
+		mapKey := srv.currentLevel(uid)
 		price := marketPriceCentsForMap(e, now, mapKey)
 		out.Items = append(out.Items, wiregen.MustMakeObj("jpmlmnfkbfn", map[int]*proto.Value{
 			0: proto.Guid(g),
@@ -373,12 +374,8 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 	guids := uniqueStrings(deepGUIDs(ctx.Tree))
 
 	// 地图解析使用连接池，必须在事务前完成；事务内只重读护网行并核价。
-	levels := map[string]string{}
-	if list, err := srv.DB.KeepnetList(cctx, uid); err == nil {
-		for _, e := range list {
-			levels[e.EchoGUID] = srv.levelKeyOfLoc(cctx, uid, e.KeepLoc)
-		}
-	}
+	// 鱼市按卖鱼时所在水域计价，与鱼的钓获地图无关。
+	sellMapKey := srv.currentLevel(uid)
 
 	type soldPair struct {
 		guid  string
@@ -421,10 +418,7 @@ func hMarketSell(ctx *Ctx) ([]byte, bool) {
 			ctx.Log.Warn("20/2 读取挂单锁失败", "guid", g, "err", err)
 			return []byte{0x0F}, true
 		}
-		mapKey := levels[g]
-		if mapKey == "" && e.KeepLevel != "" {
-			mapKey = e.KeepLevel
-		}
+		mapKey := sellMapKey
 		price := marketPriceCentsForMap(e, now, mapKey)
 		sold = append(sold, soldPair{guid: g, price: price})
 		total += price
