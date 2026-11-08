@@ -650,6 +650,30 @@ async function toggleFishRules(kind,el){
     await loadFishRules();toast('已保存，最多 30 秒影响后续判鱼');
   }catch(e){toast(e.message,'bad');el.checked=x.enabled;el.disabled=false;}
 }
+// 鱼饵偏好缓存：鱼口控制页在鱼种行里附带饵料摘要，只拉一次。
+let BAIT_MAP=null,BAIT_MAP_P=null;
+function ensureBaitMap(){
+  if(BAIT_MAP)return Promise.resolve(BAIT_MAP);
+  if(BAIT_MAP_P)return BAIT_MAP_P;
+  BAIT_MAP_P=api('/api/bait/prefs?limit=2000').then(d=>{
+    BAIT_MAP={};(d.rows||[]).forEach(r=>{BAIT_MAP[r.fish_key]=r});
+    return BAIT_MAP;
+  }).catch(e=>{BAIT_MAP_P=null;throw e});
+  return BAIT_MAP_P;
+}
+// 鱼口列表里的一行饵料摘要：规则吃/不吃 + tier3 饵名称。
+function baitSummaryHTML(key){
+  const r=BAIT_MAP&&BAIT_MAP[key];
+  if(!r)return '<div class="muted" style="font-size:11px">饵料：<span title="静态库无此鱼种的饵料记录">无资料</span></div>';
+  const allow=(r.allow||[]).slice(0,4).join('/')||'—';
+  const deny=(r.deny||[]).slice(0,2).join('/');
+  const t3=(r.baits||[]).filter(b=>b.tier===3).slice(0,3).map(b=>b.bait_id).join(', ');
+  const tip=`吃: ${(r.allow||[]).join(' / ')||'—'}${deny?'\n不吃: '+(r.deny||[]).join(' / '):''}${r.bottom_only&&r.bottom_only.length?'\n底钓只吃: '+r.bottom_only.join(' / '):''}${r.condition&&r.condition!=='无'?'\n前置: '+r.condition:''}\n有证据的饵: ${r.total} 种 (T3 ${r.tier3} / T2 ${r.tier2})`;
+  const noRule=r.has_rule?'':'<span class="pill" style="background:#5a3b1a;color:#f0d3a8" title="规则表无条目，严格模式仅靠饵效证据放行">无规则</span>';
+  return `<div style="font-size:11px;line-height:1.5;max-width:340px" title="${esc(tip)}">
+    <div class="muted">饵：${esc(allow)}${deny?` <span style="color:#e0a">不吃 ${esc(deny)}</span>`:''} ${noRule}</div>
+    <div class="muted">证据 ${r.total} 种 · T3 ${r.tier3}${t3?` · ${esc(t3)}`:''}</div></div>`;
+}
 async function loadFishAreas(){
   await loadFishRules();
   FISH_AREAS=await api('/api/fish/areas');renderFishAreas();
@@ -677,7 +701,9 @@ async function selectFishArea(loc,force=false){
     return;
   }
   FISH_DIRTY=false;FISH_AREA=loc;renderFishAreas();
-  FISH_CFG=await api('/api/fish/config?loc='+encodeURIComponent(loc));
+  // 鱼种行的"爱吃的饵"列依赖饵效映射；失败不影响鱼口编辑。
+  const [cfg]=await Promise.all([api('/api/fish/config?loc='+encodeURIComponent(loc)),ensureBaitMap().catch(()=>null)]);
+  FISH_CFG=cfg;
   renderFishEditor();
 }
 function renderFishEditor(){
@@ -706,7 +732,7 @@ function syncFishRows(){
 function renderFishRows(){
   if(!FISH_CFG)return;const q=($('#fishFilter')?.value||'').toLowerCase();
   const rows=FISH_CFG.fish.map((f,i)=>({f,i})).filter(x=>!q||`${x.f.fish_key} ${x.f.name_zh}`.toLowerCase().includes(q));
-  $('#fishRows').innerHTML=`<div class="table-wrap"><table class="fish-table"><thead><tr><th>启用</th><th>鱼种</th><th>基础权重</th><th>覆盖权重</th><th>来源</th></tr></thead><tbody>${rows.map(({f,i})=>`<tr><td><input class="switch" type="checkbox" id="fe_${i}" ${f.enabled?'checked':''} onchange="syncFishRows()"></td><td><b>${esc(f.name_zh||f.fish_key)}</b><div class="muted mono">${esc(f.fish_key)}</div></td><td>${Number(f.base_weight).toFixed(2)}</td><td><input class="mini-input" id="fw_${i}" type="number" min="0" step="0.1" value="${f.weight}" onchange="syncFishRows()"></td><td>${f.has_override?'<span class="tag gold">覆盖</span>':'<span class="tag">静态</span>'}</td></tr>`).join('')||'<tr><td colspan="5" class="empty">没有匹配鱼种</td></tr>'}</tbody></table></div>`;
+  $('#fishRows').innerHTML=`<div class="table-wrap"><table class="fish-table"><thead><tr><th>启用</th><th>鱼种</th><th>爱吃的饵（静态规则 / 实证）</th><th>基础权重</th><th>覆盖权重</th><th>来源</th></tr></thead><tbody>${rows.map(({f,i})=>`<tr><td><input class="switch" type="checkbox" id="fe_${i}" ${f.enabled?'checked':''} onchange="syncFishRows()"></td><td><b>${esc(f.name_zh||f.fish_key)}</b><div class="muted mono">${esc(f.fish_key)}</div></td><td>${baitSummaryHTML(f.fish_key)}</td><td>${Number(f.base_weight).toFixed(2)}</td><td><input class="mini-input" id="fw_${i}" type="number" min="0" step="0.1" value="${f.weight}" onchange="syncFishRows()"></td><td>${f.has_override?'<span class="tag gold">覆盖</span>':'<span class="tag">静态</span>'}</td></tr>`).join('')||'<tr><td colspan="6" class="empty">没有匹配鱼种</td></tr>'}</tbody></table></div>`;
   const filtered=q.length>0;
   const on=$('#fishAllOn'),off=$('#fishAllOff');
   if(on)on.textContent=filtered?'启用筛选结果':'全部启用';
