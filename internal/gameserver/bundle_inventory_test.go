@@ -483,3 +483,45 @@ func TestBundleMetaQuantityAndMirrors(t *testing.T) {
 		})
 	}
 }
+
+// TestBundleAbsoluteQuantityHonorsFlag 条目 mlapkoadfnh=true 时数量为绝对个数，
+// 不乘子物定义默认量；缺省条目维持乘法。SKU 用真实静态库：
+// box_worm_asurv_100（worm_asurv def ljnnpokapig=30，flag=true → 应发 100 而非
+// 3000，实机事故回归）、box_bloodworm_10（flag 缺省 → 30×10=300，价格自洽）。
+// 官服语义见客户端 ahoacflhhno.ekfefhbgegl：flag 真直接返回条目数，否则乘 def 0x78。
+func TestBundleAbsoluteQuantityHonorsFlag(t *testing.T) {
+	srv, _ := newBundleTestServer(t)
+	const uid = int64(4117)
+	items, err := srv.prepareBundleItems(context.Background(), uid, "box_worm_asurv_100", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ItemID != "worm_asurv" {
+		t.Fatalf("蚯蚓盒应展开为一行 worm_asurv: %+v", items)
+	}
+	assertBundleItemQuantity(t, items[0], 100)
+
+	bw, err := srv.prepareBundleItems(context.Background(), uid, "box_bloodworm_10", "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bw) != 1 || bw[0].ItemID != "bloodworm" {
+		t.Fatalf("血虫盒应展开为一行 bloodworm: %+v", bw)
+	}
+	assertBundleItemQuantity(t, bw[0], 300)
+}
+
+// TestBundleAbsoluteQuantityOverflowRejected 绝对个数条目超数量槽上限必须拒绝。
+func TestBundleAbsoluteQuantityOverflowRejected(t *testing.T) {
+	srv, db := newBundleTestServer(t)
+	seedEconomyItemDef(t, db, 990004, "test_abs_bundle", bundleCategory)
+	seedEconomyItemDef(t, db, 990005, "test_abs_child", 27)
+	if _, err := db.SQL.Exec(`UPDATE item_def SET attrs_json=? WHERE item_id=?`,
+		`{"nbkhfhenbag":[{"cemjmlpafmc":"test_abs_child","ljnnpokapig":4294967296,"mlapkoadfnh":true}]}`,
+		"test_abs_bundle"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := srv.prepareBundleItems(context.Background(), int64(4118), "test_abs_bundle", "backpack", 1); err == nil {
+		t.Error("绝对个数超过 U32 数量槽上限必须拒绝")
+	}
+}
