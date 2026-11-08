@@ -1211,8 +1211,10 @@ func hFishingFall(ctx *Ctx) ([]byte, bool) {
 func hFishingPull(ctx *Ctx) ([]byte, bool) {
 	// 14/9 fishing/pull：纺车杆的"抬杆"（右键）与"小刺"（Ctrl+右键）。
 	// 客户端在本地播放杆梢动作，这条命令是 fire-and-forget 通知，不需要回包。
-	// 海钓使用 Pull 作为实际刺鱼入口，不一定另发普通钓法的 14/11；收到鱼后若只记录
-	// 这条命令，客户端永远得不到 14/15 挂钩确认，表现为不能抬竿且没有力度条。
+	// 海钓使用 Pull 作为实际刺鱼入口，不一定另发普通钓法的 14/11。
+	// ⚠️ 下面的 marineHookConfirm 分支推送的 14/15 实为"鱼离场"（见 fishing.go
+	// Push14_15 注释），开启 marine_hook_confirm 会把刚上钩的海钓鱼直接放走，
+	// 保持默认关闭。
 	srv := ctx.Sess.Srv
 	// 搏鱼抬杆/小刺扣精力：14/9 无官服拒绝样本，只扣不拒（搏鱼中拒绝会破坏
 	// 鱼战状态一致性）；精力闸门只在 14/2 抛投入口生效。
@@ -1367,6 +1369,14 @@ func finishNibbleHook(ctx *Ctx, st *FishState, pending *RolledFish, gear string,
 		if err := srv.consumeNibbleBait(ctx.Sess, pending, gear); err != nil {
 			ctx.Log.Warn("嘬饵扣饵失败", "fish", pending.FishGUID, "err", err)
 		}
+		// 14/11 的客户端语义是"鱼实体已进搏鱼态"，服务端单方面否决必须让客户端
+		// 知情：推送鱼离场（命令 14 非 2/14 子号 = 鱼离场分支，args[1]=鱼 GUID），
+		// 客户端走与自然脱钩相同的离场状态机放鱼游走，否则它会一直搏到岸边凭空消失。
+		// 客户端尚未接受鱼实体（此前 f0=3/5 拒收）时这是一次无效查找，无副作用。
+		if bound := ctx.Sess.Push14_15(gear, pending.FishGUID); bound {
+			ctx.Log.Info("嘬饵否决推送鱼离场 14/15", "fish", shortGUID(pending.FishGUID),
+				"species", pending.Species)
+		}
 	}
 	st.mu.Lock()
 	if st.Pending == pending {
@@ -1429,6 +1439,15 @@ func hFishingLeft(ctx *Ctx) ([]byte, bool) {
 	if f0 == 3 || f0 == 5 {
 		// 客户端尚未接收鱼实体：保留当前鱼，延迟重推同一尾，
 		// 不能把不兼容的钓组状态误当成鱼已离场。
+		//
+		// 例外：Pending 为空时这是一条离场回执（典型：嘬饵否决推送 14/15 后
+		// 客户端放鱼游走的 f0=5）。此时本竿刚重排完，绝不能走下面的拒收路径——
+		// 它会 cancel 刚 armed 的咬钩 timer 并把 Resolved 置真，整竿就此哑火。
+		if st.Pending == nil {
+			st.mu.Unlock()
+			ctx.Log.Info("14/12 无在途鱼，按离场回执忽略", "f0", f0, "reported", shortGUID(reported))
+			return nil, true
+		}
 		st.cancelBiteTimerLocked()
 		st.PushSent = false
 		st.Hooked = false

@@ -3,6 +3,7 @@ package gameserver
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -287,6 +288,123 @@ func TestMarineNibbleDoesNotEnterHookedState(t *testing.T) {
 		t.Fatalf("海钓嘬饵不应进入 Hooked 状态: pending=%v hooked=%v timer=%v",
 			st.Pending != nil, st.Hooked, st.biteTimer != nil)
 	}
+}
+
+// 嘬饵否决必须让客户端知情：否决时推送 14/15[竿,鱼]（客户端把命令 14 的
+// 非 2/14 子号统一当"鱼离场"，鱼走自然脱钩状态机游走）。否则客户端会蒙在
+// 鼓里继续搏鱼，拖到岸边收竿 14/4 落空，鱼凭空消失（2026-11-08 23:24/23:26 实证）。
+func TestNibbleVetoPushesFishLeave(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	sess, gc := newTunnelProbe(t, s)
+	st := s.stateFor(sess.Userid)
+	fish := &RolledFish{FishGUID: "1411feed1411feed1411feed1411feed", Species: "crucian", Grade: 1, WeightG: 120,
+		BiteQuality: "nibble", HookHoldP: .4}
+	st.mu.Lock()
+	st.GearGuid = "aaa00000aaa00000aaa00000aaa00000"
+	st.CastActive, st.InWater, st.Resolved, st.Pending = true, true, false, fish
+	st.mu.Unlock()
+
+	if _, ok := hFishingHooked(miscCtx(sess, 14, 11, nil)); !ok {
+		t.Fatal("14/11 嘬饵处理失败")
+	}
+	env := awaitPushEnvelope(t, gc)
+	if env.Main != 14 || env.Sub != 15 {
+		t.Fatalf("嘬饵否决应推送 14/15 鱼离场，实得 %d/%d", env.Main, env.Sub)
+	}
+	dec, _, err := proto.DecodeValue(env.Body, 0, s.Table())
+	if err != nil {
+		t.Fatalf("14/15 body 不可解码: %v", err)
+	}
+	if len(dec.Items) < 2 {
+		t.Fatalf("14/15 args 应为 [竿GUID, 鱼GUID]，实得 %d 项", len(dec.Items))
+	}
+	if got := dec.Items[1].GuidHex(); !strings.EqualFold(got, fish.FishGUID) {
+		t.Fatalf("14/15 args[1] 应为否决鱼 GUID %s，实得 %q", fish.FishGUID, got)
+	}
+	// 推送不得改变否决本身的状态转移。
+	st.mu.Lock()
+	cleared := st.Pending == nil && !st.Hooked && st.biteTimer != nil
+	st.cancelBiteTimerLocked()
+	st.mu.Unlock()
+	if !cleared {
+		t.Fatalf("否决状态转移不得改变: pending=%v hooked=%v timer=%v",
+			st.Pending != nil, st.Hooked, st.biteTimer != nil)
+	}
+}
+
+func TestMarineNibbleVetoPushesFishLeave(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	sess, gc := newTunnelProbe(t, s)
+	st := s.stateFor(sess.Userid)
+	fish := &RolledFish{FishGUID: "149feed0149feed0149feed0149feed0", Species: "atl_cod", Grade: 2, WeightG: 4200,
+		BiteQuality: "nibble", HookHoldP: .4}
+	st.mu.Lock()
+	st.GearGuid = "bbb00000bbb00000bbb00000bbb00000"
+	st.RigType, st.CastActive, st.InWater, st.Pending = 50, true, true, fish
+	st.mu.Unlock()
+
+	if _, ok := hFishingPull(miscCtx(sess, 14, 9, nil)); !ok {
+		t.Fatal("14/9 海钓嘬饵处理失败")
+	}
+	env := awaitPushEnvelope(t, gc)
+	if env.Main != 14 || env.Sub != 15 {
+		t.Fatalf("海钓嘬饵否决应推送 14/15 鱼离场，实得 %d/%d", env.Main, env.Sub)
+	}
+	dec, _, err := proto.DecodeValue(env.Body, 0, s.Table())
+	if err != nil {
+		t.Fatalf("14/15 body 不可解码: %v", err)
+	}
+	if got := dec.Items[1].GuidHex(); !strings.EqualFold(got, fish.FishGUID) {
+		t.Fatalf("14/15 args[1] 应为否决鱼 GUID %s，实得 %q", fish.FishGUID, got)
+	}
+}
+
+// 否决后客户端的离场回执（14/12 f0=5，此时 Pending 已空）必须按良性回执忽略：
+// 不清刚重排的咬钩 timer，不把本竿标记为终局，也不产生任何推送。
+func TestNibbleVetoLeaveAckBenign(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	sess, gc := newTunnelProbe(t, s)
+	st := s.stateFor(sess.Userid)
+	fish := &RolledFish{FishGUID: "abcd0000abcd0000abcd0000abcd0000", Species: "crucian", Grade: 1, WeightG: 120,
+		BiteQuality: "nibble", HookHoldP: .4}
+	st.mu.Lock()
+	st.GearGuid = "ccc00000ccc00000ccc00000ccc00000"
+	st.CastActive, st.InWater, st.Resolved, st.Pending = true, true, false, fish
+	st.mu.Unlock()
+	if _, ok := hFishingHooked(miscCtx(sess, 14, 11, nil)); !ok {
+		t.Fatal("14/11 嘬饵处理失败")
+	}
+	awaitPushEnvelope(t, gc) // 14/15 离场推送
+
+	tree := proto.Args524(
+		proto.Guid(st.GearGuid),
+		proto.Guid(fish.FishGUID),
+		proto.Obj("lhicjpmglbo", 0, proto.Field{Op: "U32", Num: ptrU64(5)}),
+	)
+	if _, ok := hFishingLeft(miscCtx(sess, 14, 12, tree)); !ok {
+		t.Fatal("14/12 f0=5 离场回执未处理")
+	}
+	st.mu.Lock()
+	timer := st.biteTimer
+	resolved, pending := st.Resolved, st.Pending != nil
+	st.mu.Unlock()
+	if resolved || timer == nil || pending {
+		t.Fatalf("离场回执不得终止本竿: resolved=%v timer=%v pending=%v",
+			resolved, timer != nil, pending)
+	}
+	ch := make(chan error, 1)
+	go func() {
+		_, _, _, err := gc.ReadRecord()
+		ch <- err
+	}()
+	select {
+	case err := <-ch:
+		t.Fatalf("离场回执不应产生推送，实得 %v", err)
+	case <-time.After(400 * time.Millisecond):
+	}
+	st.mu.Lock()
+	st.cancelBiteTimerLocked()
+	st.mu.Unlock()
 }
 
 func TestHookQualityPrefersDifferentFishSizes(t *testing.T) {
