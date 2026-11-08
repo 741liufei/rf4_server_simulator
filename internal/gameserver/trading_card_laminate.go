@@ -185,4 +185,3 @@ func hTradingCardLaminate(ctx *Ctx) ([]byte, bool) {
 	ctx.Log.Info("卡册塑封完成", "uid", uid, "deck", deck.ItemID, "rewards", len(trees.Items))
 	return body, true
 }
-

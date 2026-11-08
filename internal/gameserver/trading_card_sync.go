@@ -18,7 +18,7 @@ import (
 )
 
 // tradingCardItemGUIDs 玩家在收藏册容器里的全部卡片与卡册行
-//（category 78/82 的实例；入册卡在 card_deck 容器，随卡册树一起下发）。
+// （category 78/82 的实例；入册卡在 card_deck 容器，随卡册树一起下发）。
 func (s *Server) tradingCardItemGUIDs(ctx context.Context, uid int64) []string {
 	rows, err := s.DB.ListItemsByContainer(ctx, uid, tradingCardContainer)
 	if err != nil {
