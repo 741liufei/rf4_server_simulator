@@ -11,6 +11,10 @@ import (
 	"rf4server/internal/store"
 )
 
+// foodSatietyFullThreshold：饱食度到这个值就视为“吃饱”，再吃只会浪费物品。
+// 用略低于 1.0 的阈值，避免浮点累加尾差让玩家永远差一点点吃不饱。
+const foodSatietyFullThreshold = 0.995
+
 type drinkUseReceipt struct {
 	BodySHA256     string
 	ExpectResponse bool
@@ -125,6 +129,20 @@ func (s *Server) useAlcoholDrink(ctx *Ctx) ([]byte, bool) {
 	if qtyIdx < 0 || qtyIdx >= len(fields) || fields[qtyIdx].Num == nil || row.Qty <= 0 ||
 		u64Of(fields[qtyIdx].Num) != uint64(row.Qty) || uint64(row.Qty) > 0xffffffff {
 		return fail("饮品数量无效，请刷新背包")
+	}
+
+	if isConsumable {
+		var satiety float64
+		switch qerr := tx.QueryRowContext(cctx,
+			`SELECT COALESCE(secondary_value,0) FROM player_condition WHERE uid=?`, uid).Scan(&satiety); {
+		case qerr == nil:
+			if satiety >= foodSatietyFullThreshold {
+				ctx.Sess.pushSystemChat("你已经吃饱了，吃不下更多食物")
+				return fail("你已经吃饱了")
+			}
+		case !errors.Is(qerr, sql.ErrNoRows):
+			return failed(qerr)
+		}
 	}
 
 	if isDrink {
