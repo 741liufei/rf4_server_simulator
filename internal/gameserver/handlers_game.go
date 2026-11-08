@@ -966,6 +966,9 @@ func hCast(ctx *Ctx) ([]byte, bool) {
 	bait := srv.currentBait(ctx.Sess.pushCtx(), gear)
 	st.mu.Lock()
 	st.Bait = bait
+	// 实际落点距离供后续咬钩快照给资格判定；不能用 castProf.DistanceM
+	//（钓具理论最大距离），否则 5m 短抛也会满足「抛投 ≥30m」。
+	st.CastM = requestedM
 	st.mu.Unlock()
 	// 水体距离闸门：玩家离水体太远（抛投够不到）时不派鱼。
 	// 只有该地点有水体矩形数据时才判定；没有数据一律放行，避免误伤。

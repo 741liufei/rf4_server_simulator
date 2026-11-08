@@ -66,11 +66,40 @@ func hPlayerWarnings(ctx *Ctx) ([]byte, bool) {
 // nullVal 共享的 null 值。
 func nullVal() *proto.Value { return &proto.Value{Kind: proto.KindNull} }
 
-// hEnvironment 处理 28/1，返回 5011 环境配置对象和空 args(206) 参数表。
+// 资格面板规模：8 个钓法分支 × 7 阶段 × 3 任务 = 168 条任务。
+const (
+	qualificationBranches = 8
+	qualificationStages   = 7
+	qualificationTasks    = 3
+)
+
+// qualificationRuleID 返回某条任务的规则类型编号。
+//
+// 该编号同时是客户端本地化键 qlfctn_t_<编号> 的后缀，客户端的任务文案、条件说明
+// 全部按它查表得出，服务端只发数字。168 个编号与客户端本地化键逐条吻合：
+// 分支 1..8、阶段 1..7、任务 1..3 → 1001..1603 / 2001..2603 / … / 8001..8603。
+func qualificationRuleID(branch, stage, task uint64) uint64 {
+	return branch*1000 + (stage-1)*100 + task
+}
+
+// hEnvironment 处理 28/1，返回 5011 资格内容对象。
+//
+// 5011.f1 是资格分支数组（5009）：每个分支含 7 阶段（5008），每阶段含 3 条任务
+// （5019），任务内嵌 1 条规则（5007）。客户端按规则编号查 qlfctn_t_<id> 文案。
+//
+// 约束：
+//  1. 5009.Idx1 必须为 0；资格面板只收 0，非 0 值属于活动面板。
+//  2. 数组容器名 = DTO 类型 ID - 4803：5008→"205"、5009→"206"、5019→"216"、5007→"204"；
+//     名字错了客户端建数组会抛异常。
+//  3. 每条任务至少 1 条规则，且规则 Idx3（进度分母）> 0；否则进度 0/0 会让面板异常。
 func hEnvironment(*Ctx) ([]byte, bool) {
+	nodes := make([]*proto.Value, 0, qualificationBranches)
+	for branch := uint64(1); branch <= qualificationBranches; branch++ {
+		nodes = append(nodes, qualificationBranchNode(branch))
+	}
 	obj := proto.Obj("acjaheimjge", 5011,
 		proto.Field{Op: "BYTE", Num: ptrU64(0)},
-		proto.Field{Op: "VAL", Val: proto.Args(proto.S("206"))},
+		proto.Field{Op: "VAL", Val: proto.Args(proto.S("206"), nodes...)},
 	)
 	body, err := proto.EncodeValue(obj, wiregen.Table())
 	if err != nil {
@@ -79,25 +108,91 @@ func hEnvironment(*Ctx) ([]byte, bool) {
 	return body, true
 }
 
-// hFog 处理 28/2，返回 5003 雾效与环境时段对象。
-// 赛季块包含固定时段和空的环境参数容器。
-func hFog(*Ctx) ([]byte, bool) {
-	season := proto.Obj("nkakjeigjla", 5013,
-		proto.Field{Op: "BYTE", Num: ptrU64(6)},
-		proto.Field{Op: "U64", Num: ptrU64(134238816000000000)},
-		proto.Field{Op: "U64", Num: ptrU64(134265924000000000)},
-		proto.Field{Op: "OPT", Num: ptrU64(0)},
-		proto.Field{Op: "U64", Num: ptrU64(0)},
-		proto.Field{Op: "VAL", Val: nullVal()},
+// qualificationBranchNode 构造一个永久资格分支节点（5009）。
+// Idx0 分支 ID（客户端据此查 qlfctn_n_<id> 名称与勋章）；Idx1 恒为 0
+// （资格面板只收 0）。周年/活动节点不在本树下发，必须与资格分支严格分开。
+func qualificationBranchNode(branch uint64) *proto.Value {
+	return proto.Obj("bibmoppiacg", 5009,
+		proto.Field{Op: "BYTE", Num: ptrU64(branch)},                // Idx0 分支 ID
+		proto.Field{Op: "BYTE", Num: ptrU64(0)},                     // Idx1 常驻（资格面板只收 0）
+		proto.Field{Op: "BYTE", Num: ptrU64(0)},                     // Idx2 解锁模式
+		proto.Field{Op: "VAL", Val: qualificationStageList(branch)}, // Idx3 coljdmbcknh[]
+		proto.Field{Op: "VAL", Val: nullVal()},                      // Idx4 string[]
+		proto.Field{Op: "VAL", Val: nullVal()},                      // Idx5 miobbnhdpif
 	)
-	fog := proto.Obj("fopkeoppndn", 5003,
-		proto.Field{Op: "VAL", Val: proto.Obj("fkcmcjlagdh", 5012,
-			proto.Field{Op: "VAL", Val: proto.Args(proto.S("210"), season)}),
-		},
-		proto.Field{Op: "VAL", Val: proto.Args(proto.S("202"))},
-		proto.Field{Op: "VAL", Val: proto.Args(proto.S("201"))},
-	)
-	body, err := proto.EncodeValue(fog, wiregen.Table())
+}
+
+// qualificationStageList 构造一个分支的 7 个阶段（coljdmbcknh 5008，数组名 "205"）。
+func qualificationStageList(branch uint64) *proto.Value {
+	stages := make([]*proto.Value, 0, qualificationStages)
+	for stage := uint64(1); stage <= qualificationStages; stage++ {
+		stages = append(stages, proto.Obj("goglkgnhpcl", 5008,
+			proto.Field{Op: "U32", Num: ptrU64(stage)},                        // Idx0 阶段号 1..7
+			proto.Field{Op: "VAL", Val: qualificationTaskList(branch, stage)}, // Idx1 iolhlkoilph[]
+			proto.Field{Op: "VAL", Val: nullVal()},                            // Idx2 string[]
+			proto.Field{Op: "VAL", Val: nullVal()},                            // Idx3 阶段元数据 miobbnhdpif
+		))
+	}
+	return proto.Args(proto.S("205"), stages...)
+}
+
+// qualificationTaskList 构造一个阶段的 3 条任务（iolhlkoilph 5019，数组名 "216"）。
+func qualificationTaskList(branch, stage uint64) *proto.Value {
+	tasks := make([]*proto.Value, 0, qualificationTasks)
+	for task := uint64(1); task <= qualificationTasks; task++ {
+		tasks = append(tasks, proto.Obj("gjbbiokohda", 5019,
+			proto.Field{Op: "BYTE", Num: ptrU64(0)}, // Idx0 枚举 fidehpgfmmo（仅成员 0）
+			proto.Field{Op: "VAL", Val: proto.Args(proto.S("204"),
+				qualificationRule(qualificationRuleID(branch, stage, task)))},
+		))
+	}
+	return proto.Args(proto.S("216"), tasks...)
+}
+
+// qualificationRule 构造一条任务规则（bcijcdlkjbk / hgnkdommpea 5007）。
+// Idx0 为规则类型（= 本地化键 qlfctn_t_<id>），Idx3 为进度分母（静态目标值）。
+// Idx4 钓组大类、Idx5 竿型、Idx6 竿硬度档、Idx27 顺流位用于客户端「鱼竿/条件」文案，
+// 与服务端 qualificationRodTypesFor 同源；其余字段按 ClassOps 零值（数组 → null）。
+func qualificationRule(ruleID uint64) *proto.Value {
+	fields := map[int]*proto.Value{
+		0: proto.U32(uint32(ruleID)),
+		3: proto.U32(qualificationTarget(ruleID)),
+	}
+	if rigClass := qualificationRigClassFor(int64(ruleID)); rigClass > 0 {
+		fields[4] = proto.U32(uint32(rigClass))
+	}
+	if types := qualificationRodTypesFor(int64(ruleID)); len(types) > 0 {
+		fields[5] = proto.U32Arr(u32Values(types))
+	}
+	if powers := qualificationRodPowerFor(int64(ruleID)); len(powers) > 0 {
+		fields[6] = proto.U32Arr(u32Values(powers))
+	}
+	if driftRuleIDs[int64(ruleID)] {
+		fields[27] = proto.U32(64) // StreamMoving 顺水漂流
+	}
+	return wiregen.MustMakeObj("hgnkdommpea", fields)
+}
+
+func u32Values(v []int64) []uint32 {
+	out := make([]uint32, len(v))
+	for i, x := range v {
+		out[i] = uint32(x)
+	}
+	return out
+}
+
+// hFog 处理 28/2，返回 5003（fopkeoppndn / mkooaaknoee）：Idx0 赛季块、
+// Idx1 资格渔获记录列表、Idx2 资格进度计数器列表。这是资格进度的全量快照通道
+// （登录时请求）；逐尾增量走 14/4 的 801.f3（同用 build5003）。赛季时段与玩家
+// 档案 307 共用 seasonBounds()。无会话时（如测试）只发赛季块与空槽。
+func hFog(ctx *Ctx) ([]byte, bool) {
+	var obj *proto.Value
+	if ctx != nil && ctx.Sess != nil && ctx.Sess.Srv != nil {
+		obj = ctx.Sess.Srv.build5003(ctx.Sess.pushCtx(), ctx.Sess.Userid)
+	} else {
+		obj = build5003FromStates(nil)
+	}
+	body, err := proto.EncodeValue(obj, wiregen.Table())
 	if err != nil {
 		return nil, false
 	}
