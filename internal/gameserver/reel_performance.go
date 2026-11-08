@@ -10,10 +10,12 @@ import (
 
 const reelDurabilityStep = 0.20
 
-// reelSlipWear 是每次泄力打滑对摩擦片的磨损量：泄力是消耗鱼体力的搏斗手段，
+// reelSlipWear 是每次泄力打滑对摩擦片的基准磨损量：泄力是消耗鱼体力的搏斗手段，
 // 打滑会让摩擦片发热、逐渐磨损（衰减 → 最大泄力下降），而不是一次性"损坏"。
-// 2% / 次意味着约 50 次打滑搏斗磨穿一整套摩擦片。
-const reelSlipWear = 0.02
+// 0.5% / 次是单次基准磨损，约 200 次打滑磨穿一整套摩擦片；实际单次还要乘
+// 超出泄力的比例与轮油系数。搏鱼结算不在这里逐次落库，而是整竿累计打滑与
+// 锁轮过载后一次写入（见 reel_fight_wear.go）。
+const reelSlipWear = 0.005
 
 const reelPartQualityAttr = "obifdihmcfn"
 
@@ -181,10 +183,15 @@ func (s *Server) reelInstalledDragFromRow(ctx context.Context, row *store.Item) 
 	return 0
 }
 
-// degradeFrictionWasher 泄力打滑让摩擦片(cat9)发热磨损，其制动力 csDragForce
-// 按 reelSlipWear 线性衰减（约 50 次打滑磨穿）。返回 wornOut（磨穿、制动力归零、
-// 泄力失效）和是否真的找到了摩擦片子件。找不到子件时调用方回退到本体耐久通道。
+// degradeFrictionWasher 按单次基准磨损磨摩擦片（旧口径入口，等价于 wear=reelSlipWear）。
 func (s *Server) degradeFrictionWasher(ctx context.Context, reel *store.Item) (wornOut bool, found bool, err error) {
+	return s.degradeFrictionWasherBy(ctx, reel, reelSlipWear)
+}
+
+// degradeFrictionWasherBy 泄力打滑与锁轮过载都会让摩擦片(cat9)发热磨损，其制动力
+// csDragForce 按 wear（寿命比例）线性衰减。返回 wornOut（磨穿、制动力归零、泄力
+// 失效）和是否真的找到了摩擦片子件。找不到子件时调用方回退到本体耐久通道。
+func (s *Server) degradeFrictionWasherBy(ctx context.Context, reel *store.Item, wear float64) (wornOut bool, found bool, err error) {
 	if reel == nil {
 		return false, false, nil
 	}
@@ -211,8 +218,11 @@ func (s *Server) degradeFrictionWasher(ctx context.Context, reel *store.Item) (w
 		// 字段存在且为 0 = 已磨穿。泄力失效必须保持，下一次打滑不能复活制动力。
 		return true, true, nil
 	}
-	// 线性磨损：每次打滑烧掉额定制动力的一小份（reelSlipWear），约 50 次磨穿。
-	next := cur - maxDrag*reelSlipWear
+	// 线性磨损：按寿命比例烧掉额定制动力的一小份。
+	if wear <= 0 {
+		return cur <= 0, true, nil
+	}
+	next := cur - maxDrag*wear
 	if next < 0 {
 		next = 0
 	}
@@ -330,4 +340,59 @@ func (s *Server) RebuildReelPerformance(ctx context.Context) (int, error) {
 		count++
 	}
 	return count, nil
+}
+
+// reelWasherRatedFromRow 返回当前安装摩擦片的额定制动力（零件额定 x 母轮工艺）。
+// 磨损是按额定值的比例烧的，所以结算必须先拿到额定值；没有独立摩擦片子件时返回
+// false，调用方回退到本体耐久通道。
+func (s *Server) reelWasherRatedFromRow(ctx context.Context, row *store.Item) (float64, bool) {
+	if row == nil {
+		return 0, false
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return 0, false
+	}
+	_, def, _, found := s.selectedReelPart(ctx, fields, 9)
+	if !found || def == nil {
+		return 0, false
+	}
+	rated := itemDefF32(def, gearAttrDragMax) * row.Workmanship
+	if rated <= 0 {
+		return 0, false
+	}
+	return rated, true
+}
+
+// reelOilStateFromRow 读取当前安装轮油的品质与自身耐久。缺字段按满耐久结算
+// （历史存档没有写过该字段），值为 0 表示轮油已干、保护失效。
+func (s *Server) reelOilStateFromRow(ctx context.Context, row *store.Item) (quality, durability float64) {
+	_, quality = s.reelPartQualityFromRow(ctx, row, 10)
+	durability = 1
+	if row == nil {
+		return quality, durability
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return quality, durability
+	}
+	child, _, _, found := s.selectedReelPart(ctx, fields, 10)
+	if !found || child == nil {
+		return quality, durability
+	}
+	idx := fieldIdxByCS(child.Class, csDurability)
+	if idx < 0 || idx >= child.FieldCount() {
+		return quality, durability
+	}
+	switch fieldOpAt(child.Class, idx) {
+	case "FLOAT", "DOUBLE":
+		// 与摩擦片同一口径：FLOAT 的 0 视为未初始化，不能当成"油已干"。
+		if v := child.Fields[idx].Float; v > 0 {
+			durability = math.Min(1, v)
+		}
+	default:
+		// U32 承载 F32 位型：字段存在即已初始化，0 是真实状态（轮油已干）。
+		durability = math.Max(0, math.Min(1, childWireFloat(child, csDurability)))
+	}
+	return quality, durability
 }

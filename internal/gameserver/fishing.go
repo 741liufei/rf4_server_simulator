@@ -27,15 +27,18 @@ type FishState struct {
 	Spot        uint64
 	DepthCM     int64 // 玩家设钓深（17/12 记入；14/1 的 158.f2 透传用）
 	ReelSetting int64 // 17/15 收线速度档（路亚族）；摩擦档位见 rod_setting.reel_drag_setting
-	CastActive  bool
-	InWater     bool
-	NeedBite    bool
-	PosX        float64
-	PosZ        float64
-	HasPos      bool
-	CastPosX    float64
-	CastPosZ    float64
-	HasCastPos  bool
+	// reelWear 是本竿搏鱼期间的渔轮磨损账（泄力打滑 + 锁轮过载）。仅进程内，
+	// 落库后清零；口径见 specs/changes/reel-friction-life-model/spec.md。
+	reelWear   fightReelWear
+	CastActive bool
+	InWater    bool
+	NeedBite   bool
+	PosX       float64
+	PosZ       float64
+	HasPos     bool
+	CastPosX   float64
+	CastPosZ   float64
+	HasCastPos bool
 	// BoatUntil 是船票租用有效的截止 unix，3/7 验票上船时写入。0 表示本次会话
 	// 还没有上船证据，判鱼对“已上船”条件保持中性。
 	BoatUntil int64
@@ -1594,6 +1597,9 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.FallSeen = false
 	st.RigSettled = false
 	st.TickSeen = false
+	// 上一竿的磨损账若还没落库（异常退出、断线等），先取走，解锁后补写。
+	pendingWear, hasPendingWear := st.reelWear.claimLocked()
+	st.reelWear.reset()
 	if resetCast || st.CastTs.IsZero() {
 		st.CastTs = now
 	}
@@ -1606,6 +1612,9 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	delay := s.biteDelayInWeather(st, sess.weatherAt(st.Loc, now), now, bonus)
 	s.armBiteTimerLocked(sess.Userid, st, now.Add(time.Duration(delay*float64(time.Second))))
 	st.mu.Unlock()
+	if hasPendingWear {
+		s.applyFightReelWear(s.dbCtx(), sess.Userid, pendingWear, "14/7")
+	}
 	return true
 }
 

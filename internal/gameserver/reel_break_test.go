@@ -46,7 +46,7 @@ func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
 		t.Fatalf("轮子应有摩擦片制动力: %+v err=%v", initial, perr)
 	}
 
-	// 泄力打滑磨的是摩擦片（每次 reelSlipWear=2%），本体耐久不变。
+	// 泄力打滑磨的是摩擦片（基准 reelSlipWear=0.5%），本体耐久不变。
 	var worn bool
 	var last *gearBreakOutcome
 	for i := 0; i < 200; i++ {

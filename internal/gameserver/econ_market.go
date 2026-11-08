@@ -1646,6 +1646,12 @@ func hRodSetDrag(ctx *Ctx) ([]byte, bool) {
 		rodGUID, reelDragSettingKey, value, 6) {
 		ctx.Log.Warn("17/14 竿不属于当前玩家，已忽略", "竿", shortGUID(rodGUID))
 	}
+	// 摩擦档位变了：本竿缓存的泄力/锁轮承力必须重取，当前锁轮过载段也从头重新爬升。
+	if st := srv.fishingStateForRod(ctx.Sess.Userid, rodGUID); st != nil {
+		st.mu.Lock()
+		st.reelWear.invalidate()
+		st.mu.Unlock()
+	}
 	return nil, true
 }
 

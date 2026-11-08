@@ -265,6 +265,8 @@ func (s *Server) itemBrokenForMount(ctx context.Context, row *store.Item) bool {
 func (s *Server) breakLineOrRod(ctx context.Context, uid int64, rodGUID, reportedGUID string) (*gearBreakOutcome, error) {
 	rodGUID = strings.TrimSpace(rodGUID)
 	reportedGUID = strings.TrimSpace(reportedGUID)
+	// 断件即终局：先把本竿已累计的渔轮磨损落库，否则这条账会随状态重置丢掉。
+	s.settleFightReelWear(ctx, uid, rodGUID, "17/9")
 	report, err := s.validateBreakReport(ctx, uid, rodGUID, reportedGUID)
 	if err != nil {
 		return nil, err
@@ -893,16 +895,23 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 }
 
 // damageReelSlip 处理"泄力打滑"：鱼力超过泄力档时，摩擦片打滑放线、发热磨损，
-// 制动力 csDragForce 线性衰减（reelSlipWear=2%/次，约 50 次磨穿）→ 泄力失效。
+// 制动力 csDragForce 线性衰减（基准 reelSlipWear=0.5%/次）→ 泄力失效。
 // 摩擦片是"只能摩擦不能损坏"的消耗件，磨穿只泄力失效、不伤本体，换片即恢复。
 func (s *Server) damageReelSlip(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
+	return s.damageReelSlipWear(ctx, uid, rodGUID, reelGUID, reelSlipWear, nil)
+}
+
+// damageReelSlipWear 按 wear（摩擦片寿命比例）磨一次摩擦片并落库。wear 由调用方汇总
+// 给出：搏鱼结算把整竿累计的泄力打滑与锁轮过载合成一次写入，避免每条上报都写库。
+// extra 是本次结算的诊断字段（打滑次数、过载秒数、当时张力状态）。
+func (s *Server) damageReelSlipWear(ctx context.Context, uid int64, rodGUID, reelGUID string, wear float64, extra map[string]any) (*gearBreakOutcome, error) {
 	reel, err := s.DB.GetItemByGUID(ctx, reelGUID)
 	if err != nil || reel == nil || reel.UID != uid {
 		return nil, sql.ErrNoRows
 	}
 	before := reel.Durability
 
-	wornOut, found, derr := s.degradeFrictionWasher(ctx, reel)
+	wornOut, found, derr := s.degradeFrictionWasherBy(ctx, reel, wear)
 	if derr != nil {
 		return nil, derr
 	}
@@ -918,12 +927,7 @@ func (s *Server) damageReelSlip(ctx context.Context, uid int64, rodGUID, reelGUI
 	if err := s.DB.AddItemDamageLog(ctx, store.ItemDamageLog{
 		UID: uid, ItemGUID: reel.GUID, ItemID: reel.ItemID, Event: damageEventReelOverload,
 		BeforeDurability: ptrFloat64(before), AfterDurability: ptrFloat64(reel.Durability),
-		DetailJSON: damageDetailJSON(map[string]any{
-			"rod_guid": rodGUID, "base_drag_kg": perf.BaseDragKg,
-			"locked_drag_kg": perf.LockedDragKg, "lock_multiplier": reelLockMultiplier(reel.Durability),
-			"bearing_quality": perf.BearingQuality, "oil_quality": perf.OilQuality,
-			"oil_wear_factor": perf.OilWearFactor, "friction_worn": wornOut,
-		}),
+		DetailJSON: frictionWearDetail(rodGUID, perf, reel.Durability, wornOut, extra),
 	}); err != nil {
 		return nil, err
 	}
@@ -1695,3 +1699,18 @@ var (
 	errLineLengthField = errors.New("鱼线长度字段不存在")
 	errDurabilityField = errors.New("耐久字段不存在")
 )
+
+// frictionWearDetail 组装渔轮磨损日志的 detail。extra 是本次结算的补充诊断字段，
+// 同名键覆盖默认值，便于从搏鱼结算里带回打滑次数与过载时长。
+func frictionWearDetail(rodGUID string, perf *store.ReelPerformance, durability float64, wornOut bool, extra map[string]any) string {
+	detail := map[string]any{
+		"rod_guid": rodGUID, "base_drag_kg": perf.BaseDragKg,
+		"locked_drag_kg": perf.LockedDragKg, "lock_multiplier": reelLockMultiplier(durability),
+		"bearing_quality": perf.BearingQuality, "oil_quality": perf.OilQuality,
+		"oil_wear_factor": perf.OilWearFactor, "friction_worn": wornOut,
+	}
+	for k, v := range extra {
+		detail[k] = v
+	}
+	return damageDetailJSON(detail)
+}
