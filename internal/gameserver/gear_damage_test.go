@@ -191,7 +191,7 @@ func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// 客户端上报主线断，服务端按上报件断主线并固定扣 5 米。
+	// 客户端上报主线断：官服清杯口径，主线整条丢失（含挂线配件）。
 	tree := rigRequestTree(t, proto.Guid(rod.GUID), proto.Guid(line.GUID), proto.U32(1), proto.Null())
 	body, ok := hDynamicRodBreak(&Ctx{Sess: sess, Main: 17, Sub: 9, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard()})
@@ -208,8 +208,8 @@ func TestMainLineBreakLosesExactlyFiveMeters(t *testing.T) {
 	if got := dec.Fields[1].GuidHex(); got != line.GUID {
 		t.Fatalf("应断主线 %s，实得 %s", line.GUID, got)
 	}
-	if got := lineLengthOfTestItem(t, srv, line.GUID); got != 45 {
-		t.Fatalf("断主线后长度=%d，期望固定扣 5m 后为 45", got)
+	if row, _ := db.GetItemByGUID(ctx, line.GUID); row != nil {
+		t.Fatalf("断主线后主线应整条销毁，实得 %+v", row)
 	}
 }
 
@@ -333,21 +333,6 @@ func TestWearAddsHistoryAndWearsRodBody(t *testing.T) {
 	}
 	if !got[rod.GUID] || !got[line.GUID] {
 		t.Fatalf("磨损历史缺少竿或线: %+v", got)
-	}
-}
-
-func TestLineBreakLossBounds(t *testing.T) {
-	if got := lineBreakLoss(100, 30); got != 30 {
-		t.Fatalf("客户端提供 30m 时应扣 30m，实得 %d", got)
-	}
-	if got := lineBreakLoss(100, 200); got != 100 {
-		t.Fatalf("请求长度不得超过剩余长度，实得 %d", got)
-	}
-	for i := 0; i < 200; i++ {
-		got := lineBreakLoss(100, 0)
-		if got < 1 || got > 80 {
-			t.Fatalf("默认随机扣减=%d，应在 1..80m", got)
-		}
 	}
 }
 
@@ -498,30 +483,9 @@ func TestHookBreakDetachesComponentKeepsRod(t *testing.T) {
 	if freshRod.Durability <= 0 {
 		t.Fatalf("钩断不应归零竿耐久: %v", freshRod.Durability)
 	}
-	freshHook := mustItem(t, db, hook.GUID)
-	if freshHook.Durability != 0 {
-		t.Fatalf("断钩耐久应归零: %v", freshHook.Durability)
-	}
-	if freshHook.Container != "backpack" || freshHook.RigGUID != "" || freshHook.Slot != 0 {
-		t.Fatalf("损坏组件应退回背包: container=%q rig_guid=%q slot=%d", freshHook.Container, freshHook.RigGUID, freshHook.Slot)
-	}
-	if got := rigStoredGUID(t, freshHook, csParent); got != "" {
-		t.Fatalf("损坏组件快照仍保留父件: %s", got)
-	}
-	// 等价重登后重建容器：按背包容器查询仍能读到该组件。
-	bagRows, err := srv.DB.ListItemsByContainer(ctx, uid, "backpack")
-	if err != nil {
-		t.Fatal(err)
-	}
-	backInBag := false
-	for _, row := range bagRows {
-		if row.GUID == hook.GUID {
-			backInBag = true
-			break
-		}
-	}
-	if !backInBag {
-		t.Fatal("重建背包容器后应能查询到损坏组件")
+	// 官服口径：断钩即丢失销毁，不再退回背包。
+	if row, _ := db.GetItemByGUID(ctx, hook.GUID); row != nil {
+		t.Fatalf("断钩后鱼钩应销毁，实得 %+v", row)
 	}
 	if mustItem(t, db, line.GUID) == nil {
 		t.Fatal("钩断不应影响鱼线")
@@ -576,12 +540,9 @@ func TestTerminalComponentProjectionOnlyBreakCleansProjection(t *testing.T) {
 	if got := rigSlotGUIDs(t, srv, rod.GUID)[catFloat]; got != "" {
 		t.Fatalf("仅投影存在的组件断裂后仍残留 rig_component: %s", got)
 	}
-	freshBobber := mustItem(t, db, bobber.GUID)
-	if freshBobber.Container != "backpack" || freshBobber.RigGUID != "" || freshBobber.Slot != 0 {
-		t.Fatalf("损坏组件应退回背包: container=%q rig_guid=%q slot=%d", freshBobber.Container, freshBobber.RigGUID, freshBobber.Slot)
-	}
-	if got := rigStoredGUID(t, freshBobber, csParent); got != "" {
-		t.Fatalf("损坏组件快照仍保留父件: %s", got)
+	// 官服口径：终端件断裂即丢失销毁。
+	if row, _ := db.GetItemByGUID(ctx, bobber.GUID); row != nil {
+		t.Fatalf("终端件断裂后应销毁，实得 %+v", row)
 	}
 }
 
@@ -739,9 +700,9 @@ func TestTerminalComponentBreakRechecksAttachment(t *testing.T) {
 	}
 }
 
-// 断竿官方表现（回归：此前断竿不清线组，客户端鱼仍挂钩整轮卡死）：
-// 整组钓组与主线随竿报废进 11028 移除列表，竿耐久归零但物品保留。
-func TestRodBreakReturnsRigGearToBackpack(t *testing.T) {
+// 断竿后果：竿子断梢——竿本体（0 耐久）和竿上的渔轮保留，主线与挂线配件
+// 全部丢失销毁，销毁件进 11028 移除列表让客户端清掉线组 UI。
+func TestRodBreakDestroysRigGearKeepsBrokenRod(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -789,12 +750,8 @@ func TestRodBreakReturnsRigGearToBackpack(t *testing.T) {
 		}
 	}
 	for _, guid := range []string{line.GUID, hook.GUID, bobber.GUID} {
-		row, err := db.GetItemByGUID(ctx, guid)
-		if row == nil {
-			t.Fatalf("断竿后 %s 应保留下来: %v", guid, err)
-		}
-		if row.Container != "backpack" || row.RigGUID != "" {
-			t.Fatalf("断竿后 %s 应摘回背包: container=%s rig=%s", guid, row.Container, row.RigGUID)
+		if row, _ := db.GetItemByGUID(ctx, guid); row != nil {
+			t.Fatalf("断竿后 %s 应丢失销毁（官服口径），实得 %+v", guid, row)
 		}
 		if !removed[guid] {
 			t.Fatalf("断竿移除列表缺少 %s", guid)
@@ -819,14 +776,6 @@ func TestRodBreakReturnsRigGearToBackpack(t *testing.T) {
 	if _, hasHook := rigCompsOf(rigStoredF5(t, freshRod))[catHook]; hasHook {
 		t.Fatal("断竿后竿 f5 不应残留组件")
 	}
-	// 摘回背包的配件还能装到别的竿上，断竿只锁自己的装配。
-	other, err := srv.CreateItem(ctx, uid, "tele_10180_4", "backpack", 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res := mountGearForTest(t, srv, sess, other.GUID, bobber.GUID); res == nil {
-		t.Fatal("断竿摘回的浮漂应能重新装配到其他鱼竿")
-	}
 	logs, _ := db.ListItemDamageLogs(ctx, uid, 50)
 	seen := map[string]int{}
 	for _, entry := range logs {
@@ -835,8 +784,8 @@ func TestRodBreakReturnsRigGearToBackpack(t *testing.T) {
 	if seen[damageEventRodBreak] != 1 {
 		t.Fatalf("rod_break 记录=%d，期望 1", seen[damageEventRodBreak])
 	}
-	if seen[damageEventDetachedOnRodBreak] != 3 {
-		t.Fatalf("detached_on_rod_break 记录=%d，期望 3（线+钩+漂）", seen[damageEventDetachedOnRodBreak])
+	if seen[damageEventLostOnRodBreak] != 3 {
+		t.Fatalf("lost_on_rod_break 记录=%d，期望 3（线+钩+漂）", seen[damageEventLostOnRodBreak])
 	}
 }
 
@@ -956,7 +905,7 @@ func TestBrokenRodRejectsComponentMount(t *testing.T) {
 	}
 }
 
-func TestRodBreakDetachesReelAndClearsRodReference(t *testing.T) {
+func TestRodBreakKeepsReelMounted(t *testing.T) {
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -980,8 +929,12 @@ func TestRodBreakDetachesReelAndClearsRodReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Contains(outcome.RemovedGUIDs, reel.GUID) {
-		t.Fatalf("断竿移除列表缺少渔轮: %+v", outcome.RemovedGUIDs)
+	// 官服口径：断竿时轮子没坏，仍挂在竿上；只有主线丢失销毁。
+	if slices.Contains(outcome.RemovedGUIDs, reel.GUID) {
+		t.Fatalf("断竿不应把渔轮移出钓组: %+v", outcome.RemovedGUIDs)
+	}
+	if !slices.Contains(outcome.RemovedGUIDs, line.GUID) {
+		t.Fatalf("断竿主线应丢失销毁: %+v", outcome.RemovedGUIDs)
 	}
 	fresh, err := db.GetItemByGUID(ctx, rod.GUID)
 	if err != nil || fresh == nil {
@@ -991,15 +944,18 @@ func TestRodBreakDetachesReelAndClearsRodReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if idx := fieldIdxByCS(fresh.WireClass, csReel); idx >= 0 && idx < len(fields) && fields[idx].Hex != "" {
-		t.Fatalf("断竿后竿实例仍引用渔轮 %s", fields[idx].Hex)
+	if idx := fieldIdxByCS(fresh.WireClass, csReel); idx < 0 || idx >= len(fields) || fields[idx].GuidHex() != reel.GUID {
+		t.Fatalf("断竿后竿实例应仍引用渔轮 %s", reel.GUID)
 	}
-	returned, err := db.GetItemByGUID(ctx, reel.GUID)
-	if err != nil || returned == nil {
+	mounted, err := db.GetItemByGUID(ctx, reel.GUID)
+	if err != nil || mounted == nil {
 		t.Fatal(err)
 	}
-	if returned.Container != "backpack" || returned.RigGUID != "" {
-		t.Fatalf("渔轮未正确退回背包: %+v", returned)
+	if mounted.Container != "rig" || mounted.RigGUID != rod.GUID {
+		t.Fatalf("渔轮应仍挂在断竿上: %+v", mounted)
+	}
+	if mounted.Durability != 1 {
+		t.Fatalf("断竿不应伤到渔轮耐久: %v", mounted.Durability)
 	}
 }
 

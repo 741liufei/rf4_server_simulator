@@ -42,7 +42,6 @@ func TestBreakReportMissingOrZeroGUIDFallsBackToWeakestLink(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, db := newRigTestServer(t)
 			ctx, uid, rodGUID, lineGUID, _ := mountWeakLineRig(t, srv)
-			before := lineLengthOfTestItem(t, srv, lineGUID)
 
 			out, err := srv.breakLineOrRod(ctx, uid, rodGUID, tc.reported)
 			if err != nil {
@@ -51,8 +50,9 @@ func TestBreakReportMissingOrZeroGUIDFallsBackToWeakestLink(t *testing.T) {
 			if !out.LineBroken || out.BreakPart != "line" || out.BrokenGUID != lineGUID {
 				t.Fatalf("空/zero 上报应按最弱环断主线: %+v", out)
 			}
-			if after := lineLengthOfTestItem(t, srv, lineGUID); after >= before {
-				t.Fatalf("断主线后长度应减少: %d -> %d", before, after)
+			// 官服清杯口径：主线断=整条销毁，不再只扣一段长度。
+			if row, _ := db.GetItemByGUID(ctx, lineGUID); row != nil {
+				t.Fatalf("断主线后主线应整条销毁，实得 %+v", row)
 			}
 			row, err := db.GetItemByGUID(ctx, rodGUID)
 			if err != nil || row == nil || row.Durability <= 0 {

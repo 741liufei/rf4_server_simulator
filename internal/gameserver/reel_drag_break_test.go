@@ -56,14 +56,18 @@ func TestReportedReelBreakDamagesReel(t *testing.T) {
 	if fresh, _ := db.GetItemByGUID(ctx, rod.GUID); fresh == nil || fresh.Durability != 1 {
 		t.Fatalf("上报渔轮断件不应伤到竿体: %+v", fresh)
 	}
-	if row, _ := db.GetItemByGUID(ctx, line.GUID); row == nil || row.Container != "backpack" || row.RigGUID != "" {
-		t.Fatalf("渔轮损坏后主线应退回背包: %+v", row)
+	// 官服断轮口径：钓组原样保留、鱼仍挂钩，只是无法收线。
+	if row, _ := db.GetItemByGUID(ctx, line.GUID); row == nil || row.Container == "backpack" {
+		t.Fatalf("渔轮损坏后主线应仍装在竿上: %+v", row)
 	}
-	if got := rigSlotGUIDs(t, srv, rod.GUID); got[catLine] != "" || got[catReel] != reel.GUID {
-		t.Fatalf("渔轮损坏后钓组只应保留渔轮: %+v", got)
+	if got := rigSlotGUIDs(t, srv, rod.GUID); got[catLine] != line.GUID || got[catReel] != reel.GUID {
+		t.Fatalf("渔轮损坏后钓组应原样保留: %+v", got)
 	}
-	if !containsGUID(outcome.RemovedGUIDs, line.GUID) {
-		t.Fatalf("主线应进入移除列表: %+v", outcome.RemovedGUIDs)
+	if len(outcome.RemovedGUIDs) != 0 {
+		t.Fatalf("渔轮损坏不应摘除任何组件: %+v", outcome.RemovedGUIDs)
+	}
+	if !outcome.KeepFight {
+		t.Fatalf("渔轮损坏应保持搏鱼（鱼仍挂钩）: %+v", outcome)
 	}
 }
 
