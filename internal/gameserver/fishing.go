@@ -489,33 +489,54 @@ func (s *Server) biteProbabilityForLoc(loc string) float64 {
 	return p
 }
 
-// tunableF 运行参数读取（PG tunables 优先，缓存 30s；缺省回退）。
+// ensureTunablesLocked 刷新运行参数缓存，同时保留原始字符串与非数值参数。
+// 调用方必须持有 s.tunMu。
+func (s *Server) ensureTunablesLocked() {
+	if s.tunCache != nil && time.Since(s.tunAt) <= 30*time.Second {
+		return
+	}
+	m := map[string]float64{}
+	txt := map[string]string{}
+	if s.DB != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		rows, err := s.DB.SQL.QueryContext(ctx, `SELECT key, value FROM tunables`)
+		if err == nil {
+			for rows.Next() {
+				var k, v string
+				if rows.Scan(&k, &v) == nil {
+					txt[k] = v
+					var f float64
+					if jsonFloat(v, &f) == nil {
+						m[k] = f
+					}
+				}
+			}
+			rows.Close()
+		}
+		cancel()
+	}
+	s.tunCache = m
+	s.tunText = txt
+	s.tunAt = time.Now()
+}
+
+// tunableF 运行参数读取（数值，缓存 30s；缺省回退）。
 func (s *Server) tunableF(key string, def float64) float64 {
 	s.tunMu.Lock()
 	defer s.tunMu.Unlock()
-	if s.tunCache == nil || time.Since(s.tunAt) > 30*time.Second {
-		m := map[string]float64{}
-		if s.DB != nil {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			rows, err := s.DB.SQL.QueryContext(ctx, `SELECT key, value FROM tunables`)
-			if err == nil {
-				for rows.Next() {
-					var k, v string
-					if rows.Scan(&k, &v) == nil {
-						var f float64
-						if jsonFloat(v, &f) == nil {
-							m[k] = f
-						}
-					}
-				}
-				rows.Close()
-			}
-			cancel()
-		}
-		s.tunCache = m
-		s.tunAt = time.Now()
-	}
+	s.ensureTunablesLocked()
 	if v, ok := s.tunCache[key]; ok {
+		return v
+	}
+	return def
+}
+
+// tunableS 运行参数读取（原始字符串，缓存 30s；缺省回退）。
+func (s *Server) tunableS(key, def string) string {
+	s.tunMu.Lock()
+	defer s.tunMu.Unlock()
+	s.ensureTunablesLocked()
+	if v, ok := s.tunText[key]; ok {
 		return v
 	}
 	return def

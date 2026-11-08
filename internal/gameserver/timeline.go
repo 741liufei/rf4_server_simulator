@@ -88,14 +88,20 @@ func qualificationRuleID(branch, stage, task uint64) uint64 {
 // （5019），任务内嵌 1 条规则（5007）。客户端按规则编号查 qlfctn_t_<id> 文案。
 //
 // 约束：
-//  1. 5009.Idx1 必须为 0；资格面板只收 0，非 0 值属于活动面板。
+//  1. 永久资格节点 5009.Idx1 必须为 0；活动节点 Idx1=6 只进周年面板
+//     （三个面板的 gppikafllmb 谓词分别比较 0/5/6）。
 //  2. 数组容器名 = DTO 类型 ID - 4803：5008→"205"、5009→"206"、5019→"216"、5007→"204"；
 //     名字错了客户端建数组会抛异常。
 //  3. 每条任务至少 1 条规则，且规则 Idx3（进度分母）> 0；否则进度 0/0 会让面板异常。
-func hEnvironment(*Ctx) ([]byte, bool) {
-	nodes := make([]*proto.Value, 0, qualificationBranches)
+func hEnvironment(ctx *Ctx) ([]byte, bool) {
+	nodes := make([]*proto.Value, 0, qualificationBranches+len(eventTaskCounts))
 	for branch := uint64(1); branch <= qualificationBranches; branch++ {
 		nodes = append(nodes, qualificationBranchNode(branch))
+	}
+	// 活动开关默认关闭；开启后追加对应 Idx1 的活动节点。28/1 只在全新登录
+	// 请求，所以开关切换后客户端必须完整退出重登才会看到节点变化。
+	if ctx != nil && ctx.Sess != nil && ctx.Sess.Srv != nil {
+		nodes = append(nodes, ctx.Sess.Srv.eventNodes()...)
 	}
 	obj := proto.Obj("acjaheimjge", 5011,
 		proto.Field{Op: "BYTE", Num: ptrU64(0)},
@@ -190,7 +196,7 @@ func hFog(ctx *Ctx) ([]byte, bool) {
 	if ctx != nil && ctx.Sess != nil && ctx.Sess.Srv != nil {
 		obj = ctx.Sess.Srv.build5003(ctx.Sess.pushCtx(), ctx.Sess.Userid)
 	} else {
-		obj = build5003FromStates(nil)
+		obj = build5003FromStates(nil, build5012([]uint32{0}, seasonEndFiletime(0)))
 	}
 	body, err := proto.EncodeValue(obj, wiregen.Table())
 	if err != nil {
