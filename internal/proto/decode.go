@@ -372,7 +372,7 @@ func decodeValue(r *reader, table *OpsTable, depth int) (*Value, int, error) {
 		return &Value{Kind: KindStr, Marker: m, Str: &s}, r.pos, nil
 
 	case 0xFF:
-		// 列表空元素哨兵（声呐 15004/15005 列表用）。
+		// 探测性保留；标准 args 元素空值应使用 0x00。
 		return &Value{Kind: KindElemNull}, r.pos, nil
 	}
 	_ = start

@@ -95,7 +95,7 @@ func TestFishHuntBlueProbabilityIsHookIndependent(t *testing.T) {
 		comp bool
 	}{
 		{name: "active", h: &fishHuntState{}},
-		{name: "softPity", h: &fishHuntState{Pity: 55}},
+		{name: "giant", h: &fishHuntState{Pity: 55}},
 		{name: "hardPity", h: &fishHuntState{Pity: 60}},
 		{name: "blueComp", h: &fishHuntState{CompFish: 4, CompGrade: 4}, comp: true},
 	}
@@ -359,6 +359,85 @@ func TestFishHuntReadinessRequiresFishMouthMatch(t *testing.T) {
 	}
 	if r.E < .45 && r.Stage != fishHuntDaily {
 		t.Fatalf("鱼口匹配不足时必须守住日常阶段，实得 E=%.2f stage=%s", r.E, fishHuntStageName(r.Stage))
+	}
+}
+
+func TestMarineHuntUsesSonarZoneWithoutGroundbait(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "fish_ecology_enabled", "1")
+	setWeatherTestTunable(t, s, "fish_weather_enabled", "1")
+	const (
+		uid  = int64(1000005)
+		loc  = "loc12_215"
+		spot = uint64(7)
+	)
+	h := &fishHuntState{UID: uid, Loc: loc, Spot: spot, Mode: fishHuntModeMarine,
+		Zone: 215, ZoneKnown: true, ActiveSeconds: 1800, ValidBites: 30}
+	c := fishRollContext{
+		uid: uid, loc: loc, x: 2260, z: -460, hasPos: true, spot: spot,
+		rigType: 50, depthCM: 450, lureLayer: .90, lureAction: "marine_jig",
+		lureSpeed: 8, boatKnown: true, onBoat: true,
+		now:     time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+		cache:   newFishingRollCache(),
+		weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 17, wind: 3},
+		runtime: &fishRollRuntime{chartKnown: true, zone: 215, zoneKnown: true, sonarSystemID: "loc12_215"},
+		skill: fishingSkillBonus{BiteSpeed: 1, EcologyInterest: .22, RareFish: .18,
+			LayerAccuracy: .18, WeatherAdaptation: .2, LureTolerance: .2},
+	}
+	r := s.fishHuntReadiness(ctx, "atl_cod", c, h)
+	if r.A < .50 || r.G < .25 || r.Stage == fishHuntDaily {
+		t.Fatalf("海图声呐区应能建立狩猎状态，实得 stage=%s A=%.2f E=%.2f G=%.2f P=%.2f Q=%.2f",
+			fishHuntStageName(r.Stage), r.A, r.E, r.G, r.P, r.Q)
+	}
+	if h.Mode != fishHuntModeMarine || !h.ZoneKnown || h.Zone != 215 {
+		t.Fatalf("海图狩猎状态未写入声呐区: %+v", h)
+	}
+}
+
+func TestMarineHuntUnknownZoneKeepsLastKnownProgress(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	setWeatherTestTunable(t, s, "fish_ecology_enabled", "1")
+	setWeatherTestTunable(t, s, "fish_weather_enabled", "1")
+	const (
+		uid  = int64(1000008)
+		loc  = "loc12_215"
+		spot = uint64(7)
+	)
+	h := &fishHuntState{UID: uid, Loc: loc, Spot: spot, Mode: fishHuntModeMarine,
+		Zone: 215, ZoneKnown: true, ActiveSeconds: 1800, ValidBites: 30, Pity: 25,
+		CompFish: 2, CompGrade: 3, CompUntil: float64(time.Now().Add(time.Hour).Unix())}
+	c := fishRollContext{
+		uid: uid, loc: loc, x: 2260, z: -460, hasPos: true, spot: spot,
+		rigType: 50, depthCM: 450, lureLayer: .90, lureAction: "marine_jig",
+		lureSpeed: 8, boatKnown: true, onBoat: true,
+		now:     time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC),
+		cache:   newFishingRollCache(),
+		weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 17, wind: 3},
+		runtime: &fishRollRuntime{chartKnown: true, zone: 215, zoneKnown: true, sonarSystemID: "loc12_215"},
+		skill: fishingSkillBonus{BiteSpeed: 1, EcologyInterest: .22, RareFish: .18,
+			LayerAccuracy: .18, WeatherAdaptation: .2, LureTolerance: .2},
+	}
+	s.fishMarineHuntReadiness(ctx, "atl_cod", c, h)
+	if !h.ZoneKnown || h.Zone != 215 || h.Pity != 25 || h.CompFish != 2 {
+		t.Fatalf("同一已知区号不应重置进度: %+v", h)
+	}
+
+	c.runtime.zoneKnown = false
+	c.runtime.zone = 0
+	s.fishMarineHuntReadiness(ctx, "atl_cod", c, h)
+	if !h.ZoneKnown || h.Zone != 215 || h.Pity != 25 || h.CompFish != 2 {
+		t.Fatalf("未知位置应保留上一次已知区号与进度: %+v", h)
+	}
+
+	c.runtime.zoneKnown = true
+	c.runtime.zone = 216
+	c.runtime.sonarSystemID = "loc12_216"
+	s.fishMarineHuntReadiness(ctx, "atl_cod", c, h)
+	if !h.ZoneKnown || h.Zone != 216 || h.ActiveSeconds != 0 || h.ValidBites != 0 ||
+		h.Pity != 0 || h.CompFish != 0 {
+		t.Fatalf("切换到不同已知区号应重置进度: %+v", h)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"rf4server/internal/config"
 	"rf4server/internal/logging"
@@ -15,6 +16,32 @@ func dynamicTestCtx(srv *Server, tree *proto.Value) *Ctx {
 	return &Ctx{
 		Sess: newProbeSess(srv), Main: 0, Sub: 0, Tree: tree,
 		DecodeOK: true, ExpectResponse: true, Log: logging.Discard(),
+	}
+}
+
+func TestSonarRollContextUsesBiteContextState(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	sess, _ := newTunnelProbe(t, srv)
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	st := srv.stateFor(sess.Userid)
+	st.mu.Lock()
+	st.HasPos, st.PosX, st.PosZ = true, 10, 20
+	st.HasCastPos, st.CastPosX, st.CastPosZ = true, 110, 220
+	st.Spot, st.RigType, st.DepthCM = 9, 50, 450
+	st.LureLayer, st.LureAction, st.LureMotionMask, st.ReelSetting = .9, "marine_jig", 0x400, 8
+	st.Bonus = fishingSkillBonus{BiteSpeed: 1.1, EcologyInterest: .22, TrophyLuck: .18}
+	st.mu.Unlock()
+
+	c := sonarRollContext(srv, sess, "loc12_215", now)
+	if !c.hasPos || c.x != 110 || c.z != 220 {
+		t.Fatalf("声呐应优先使用真实抛竿落点: %+v", c)
+	}
+	if c.spot != 9 || c.rigType != 50 || c.depthCM != 450 ||
+		c.lureLayer != .9 || c.lureAction != "marine_jig" || c.lureMask != 0x400 || c.lureSpeed != 8 {
+		t.Fatalf("声呐竿位上下文与真实咬口不一致: %+v", c)
+	}
+	if math.Abs(c.skill.TrophyLuck-.18) > 1e-9 || math.Abs(c.skill.EcologyInterest-.22) > 1e-9 {
+		t.Fatalf("声呐未继承当前技能加成: %+v", c.skill)
 	}
 }
 
@@ -45,10 +72,9 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 		if got := f0.StrOr(); got != "loc12_01" {
 			t.Fatalf("1/10 f0=%q, 期望 loc12_01", got)
 		}
-		if grid := dec.Field(1).Val; grid == nil || grid.Kind != proto.KindNull {
-			// 客户端 4.0.25034 不认识 15004，连空的 args(15004) 都会抛
-			// GetType not found 并断线，所以默认只回 f1=null。
-			t.Fatalf("1/10 f1 应为 null，实得 %#v", grid)
+		grid := dec.Field(1).Val
+		if grid == nil || grid.Kind != proto.KindArgs || grid.ArgCodeStr() != sonarCellArgCode || grid.ArgCount() != 0 {
+			t.Fatalf("1/10 f1 应为空 args(%s)，实得 %#v", sonarCellArgCode, grid)
 		}
 		if reason := srv.dispatch.checkRegisteredResponse(1, 10, body, srv.Table()); reason != "" {
 			t.Fatalf("1/10 合同守卫误拒: %s", reason)

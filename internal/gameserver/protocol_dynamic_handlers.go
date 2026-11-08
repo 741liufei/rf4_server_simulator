@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"rf4server/internal/proto"
 	"rf4server/internal/wiregen"
@@ -599,7 +600,8 @@ func hDynamicEquippedItems(ctx *Ctx) ([]byte, bool) {
 // 已配置水域生成 15004/15005 回声；未知或空水域返回空网格。
 func hDynamicSonar(ctx *Ctx) ([]byte, bool) {
 	key := argFirstStr(ctx.Tree)
-	obj, err := ctx.Sess.Srv.sonarResponse(ctx.Sess.pushCtx(), key)
+	c := sonarRollContext(ctx.Sess.Srv, ctx.Sess, key, time.Now())
+	obj, err := ctx.Sess.Srv.sonarResponse(ctx.Sess.pushCtx(), key, c)
 	if err != nil {
 		return nil, false
 	}
@@ -608,6 +610,37 @@ func hDynamicSonar(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	return body, true
+}
+
+func sonarRollContext(srv *Server, sess *Session, key string, now time.Time) fishRollContext {
+	c := fishRollContext{uid: sess.Userid, loc: key, now: now, cache: newFishingRollCache()}
+	if st := srv.fishingState(sess.Userid); st != nil {
+		st.mu.Lock()
+		c.spot = st.Spot
+		c.rigType = st.RigType
+		c.depthCM = st.effectiveBaitDepthCMLocked(now)
+		c.lureLayer = st.LureLayer
+		c.lureAction = st.LureAction
+		c.lureMask = st.LureMotionMask
+		c.lureSpeed = st.ReelSetting
+		c.skill = st.Bonus
+		if st.HasCastPos {
+			c.x, c.z, c.hasPos = st.CastPosX, st.CastPosZ, true
+		} else if st.HasPos {
+			c.x, c.z, c.hasPos = st.PosX, st.PosZ, true
+		}
+		c.onBoat, c.boatKnown = st.onBoatLocked(now.Unix())
+		gearGUID := st.GearGuid
+		st.mu.Unlock()
+		if gearGUID != "" && srv.DB != nil {
+			cctx := sess.pushCtx()
+			c.baits = srv.currentBaits(cctx, gearGUID)
+			c.hook = srv.loadGearSpecForRig(cctx, srv.rigGearIDs(cctx, sess.Userid, gearGUID), gearGUID)
+		}
+	}
+	c.weather = sess.weatherAt(key, now)
+	c.happyBite = sess.currentHappyHour().BiteBonus
+	return c
 }
 
 type handitemThrowConsume struct {

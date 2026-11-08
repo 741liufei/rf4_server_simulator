@@ -9,6 +9,7 @@ import (
 	"math"
 	"math/rand"
 	"testing"
+	"time"
 
 	"rf4server/internal/proto"
 	"rf4server/internal/wiregen"
@@ -65,17 +66,17 @@ func TestSonarSynthesisKnownWaterShape(t *testing.T) {
 	}
 	cells := obj.Field(1).Val
 	if cells == nil || cells.Kind != proto.KindArgs || cells.ArgCodeStr() != sonarCellArgCode {
-		t.Fatalf("f1 应为 args(15004): %#v", cells)
+		t.Fatalf("f1 应为 args(%s): %#v", sonarCellArgCode, cells)
 	}
 
 	// loc12_01 = 116/4 * 72/4 = 29 * 18。
 	if cells.ArgCount() != 522 {
-		t.Fatalf("15004 格数=%d, 期望 522", cells.ArgCount())
+		t.Fatalf("声呐格数=%d, 期望 522", cells.ArgCount())
 	}
 
 	nonEmpty := 0
 	for idx, cell := range cells.Items {
-		if cell.Kind == proto.KindElemNull {
+		if cell.Kind == proto.KindNull {
 			continue
 		}
 		nonEmpty++
@@ -84,7 +85,7 @@ func TestSonarSynthesisKnownWaterShape(t *testing.T) {
 		}
 		echoes := cell.Field(0).Val
 		if echoes == nil || echoes.Kind != proto.KindArgs || echoes.ArgCodeStr() != sonarEchoArgCode {
-			t.Fatalf("格 %d f0 应为 args(15005)", idx)
+			t.Fatalf("格 %d f0 应为 args(%s): %#v", idx, sonarEchoArgCode, echoes)
 		}
 		if echoes.ArgCount() < 1 || echoes.ArgCount() > 4 {
 			t.Fatalf("格 %d 回声数=%d, 期望 1..4", idx, echoes.ArgCount())
@@ -93,10 +94,11 @@ func TestSonarSynthesisKnownWaterShape(t *testing.T) {
 			if echo.Class != sonarEchoClass || echo.TypeID != 15005 {
 				t.Fatalf("格 %d 回声 %d 类型=%s/%d", idx, echoIdx, echo.Class, echo.TypeID)
 			}
-			sizeCM := float64(echo.Fields[0].F32())
-			depthM := float64(echo.Fields[1].F32())
-			if math.IsNaN(sizeCM) || math.IsInf(sizeCM, 0) || math.IsNaN(depthM) || math.IsInf(depthM, 0) {
-				t.Fatalf("格 %d 回声 %d 非有限: %f/%f", idx, echoIdx, sizeCM, depthM)
+			weightKg := float64(proto.F32FromBits(echo.Fields[0].U32()))
+			depthM := float64(proto.F32FromBits(echo.Fields[1].U32()))
+			if math.IsNaN(weightKg) || math.IsInf(weightKg, 0) || weightKg <= 0 ||
+				math.IsNaN(depthM) || math.IsInf(depthM, 0) || depthM <= 0 {
+				t.Fatalf("格 %d 回声 %d 无效: weight_kg=%f depth_m=%f", idx, echoIdx, weightKg, depthM)
 			}
 		}
 	}
@@ -122,17 +124,27 @@ func TestSonarSynthesisWireRoundTrip(t *testing.T) {
 		t.Fatalf("解码类型=%s/%d", decoded.Class, decoded.TypeID)
 	}
 	cells := decoded.Field(1).Val
-	if cells == nil || cells.ArgCodeStr() != sonarCellArgCode || cells.ArgCount() == 0 {
-		t.Fatalf("解码后 15004 网格为空: %#v", cells)
+	if cells == nil || cells.Kind != proto.KindArgs || cells.ArgCodeStr() != sonarCellArgCode || cells.ArgCount() == 0 {
+		t.Fatalf("解码后声呐网格不是 args(%s): %#v", sonarCellArgCode, cells)
 	}
 
 	foundEcho := false
 	for _, cell := range cells.Items {
-		if cell == nil || cell.Kind == proto.KindElemNull {
+		if cell == nil || cell.Kind == proto.KindNull {
 			continue
 		}
-		if cell.Class != sonarCellClass || cell.Field(0).Val.ArgCodeStr() != sonarEchoArgCode {
+		echoes := cell.Field(0).Val
+		if cell.Class != sonarCellClass || echoes == nil || echoes.Kind != proto.KindArgs ||
+			echoes.ArgCodeStr() != sonarEchoArgCode || echoes.ArgCount() == 0 {
 			t.Fatalf("解码后的 15004/15005 形状错误: %#v", cell)
+		}
+		for _, echo := range echoes.Items {
+			if echo == nil || echo.Kind == proto.KindNull {
+				continue
+			}
+			if echo.Class != sonarEchoClass || echo.TypeID != 15005 {
+				t.Fatalf("解码 15005 元素错误: %s/%d", echo.Class, echo.TypeID)
+			}
 		}
 		foundEcho = true
 	}
@@ -154,9 +166,8 @@ func TestSonarUnknownWaterReturnsEmptyGrid(t *testing.T) {
 		t.Fatalf("未知水域 f0=%q", got)
 	}
 	cells := obj.Field(1).Val
-	if cells == nil || cells.Kind != proto.KindNull {
-		// 客户端 4.0.25034 不认识 15004，空网格也必须是 null 而不是 args(15004)。
-		t.Fatalf("未知水域应回 f1=null: %#v", cells)
+	if cells == nil || cells.Kind != proto.KindArgs || cells.ArgCodeStr() != sonarCellArgCode || cells.ArgCount() != 0 {
+		t.Fatalf("未知水域应回空 args(%s): %#v", sonarCellArgCode, cells)
 	}
 
 	body, err := proto.EncodeValue(obj, wiregen.Table())
@@ -167,8 +178,9 @@ func TestSonarUnknownWaterReturnsEmptyGrid(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Field(1).Val.ArgCount() != 0 {
-		t.Fatalf("未知水域线缆解码后格数=%d", decoded.Field(1).Val.ArgCount())
+	if decoded.Field(1).Val.Kind != proto.KindArgs || decoded.Field(1).Val.ArgCodeStr() != sonarCellArgCode ||
+		decoded.Field(1).Val.ArgCount() != 0 {
+		t.Fatalf("未知水域线缆解码后应为空 args(%s): %#v", sonarCellArgCode, decoded.Field(1).Val)
 	}
 }
 
@@ -176,24 +188,231 @@ func TestSonarEchoSamplingRanges(t *testing.T) {
 	rng := rand.New(rand.NewSource(19))
 	profile := &sonarProfile{depthMin: 2, depthMax: 6, sizeMed: 10, sizeP90: 30}
 	for i := 0; i < 5000; i++ {
-		sizeCM, depthM := sampleSonarEcho(rng, profile)
-		if sizeCM < 5 || sizeCM > 97 || depthM < 2 || depthM > 6 {
-			t.Fatalf("档案采样越界: size=%f depth=%f", sizeCM, depthM)
+		weightKg, depthM := sampleSonarEcho(rng, profile)
+		if weightKg < 5 || weightKg > 97 || depthM < 2 || depthM > 6 {
+			t.Fatalf("档案采样越界: weight_kg=%f depth_m=%f", weightKg, depthM)
 		}
 	}
 
 	rng = rand.New(rand.NewSource(23))
 	for i := 0; i < 5000; i++ {
-		sizeCM, depthM := sampleSonarEcho(rng, nil)
-		if sizeCM < 12 || sizeCM > 130 || depthM < 0.8 || depthM > 5.5 {
-			t.Fatalf("无档案采样越界: size=%f depth=%f", sizeCM, depthM)
+		weightKg, depthM := sampleSonarEcho(rng, nil)
+		if weightKg < 0.15 || weightKg > 40 || depthM < 0.8 || depthM > 5.5 {
+			t.Fatalf("无档案采样越界: weight_kg=%f depth_m=%f", weightKg, depthM)
 		}
+	}
+}
+
+func TestSonarEchoWeightsSpanIconBands(t *testing.T) {
+	rng := rand.New(rand.NewSource(29))
+	profile := &sonarProfile{depthMin: 1, depthMax: 8, sizeMed: 2, sizeP90: 20}
+	var small, medium, large int
+	for i := 0; i < 20000; i++ {
+		weightKg := sampleSonarWeightKg(rng, profile)
+		switch {
+		case weightKg < 3:
+			small++
+		case weightKg <= 10:
+			medium++
+		default:
+			large++
+		}
+	}
+	if small == 0 || medium == 0 || large == 0 {
+		t.Fatalf("图标档位没有齐全: small=%d medium=%d large=%d", small, medium, large)
+	}
+	if small <= medium {
+		t.Fatalf("小鱼应占多数，实得 small=%d medium=%d large=%d", small, medium, large)
+	}
+}
+
+func TestSonarSchoolWeightsUseFishGradeLines(t *testing.T) {
+	q, trophy, blue := int64(500), int64(5000), int64(12000)
+	school := sonarSchool{
+		fishKey:      "test_fish",
+		gradeWeights: [4]float64{10, 64, 20, 6},
+		lines:        cachedGradeLines{val: &q, trophy: &trophy, blue: &blue},
+	}
+	rng := rand.New(rand.NewSource(37))
+	var small, medium, large int
+	for i := 0; i < 20000; i++ {
+		weightKg := sampleSonarSchoolWeightKg(rng, school, nil)
+		switch {
+		case weightKg < 3:
+			small++
+		case weightKg <= 10:
+			medium++
+		default:
+			large++
+		}
+	}
+	if small == 0 || medium == 0 || large == 0 {
+		t.Fatalf("真实档位线没有混出三种图标: small=%d medium=%d large=%d", small, medium, large)
+	}
+}
+
+func TestSonarRosterSchoolsFollowZoneFishAndEcology(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	seed := []string{
+		`INSERT INTO loc_alias(alias,loc) VALUES('level_012_north_sea','sonar-test-loc')`,
+		`INSERT INTO loc_wiki_fish(loc,fish_key,fish_zh) VALUES
+			('sonar-test-loc','test_shallow','浅水小鱼'),
+			('sonar-test-loc','test_mid','中层鱼'),
+			('sonar-test-loc','test_bottom','底层大鱼')`,
+		`INSERT INTO loc_fish(loc,fish_key,name_zh,catches) VALUES
+			('sonar-test-loc','test_shallow','浅水小鱼',100),
+			('sonar-test-loc','test_mid','中层鱼',100),
+			('sonar-test-loc','test_bottom','底层大鱼',100)`,
+		`INSERT INTO species_weight(fish_key,min_g,max_g,trophy_g) VALUES
+			('test_shallow',20,700,300),
+			('test_mid',100,6000,4000),
+			('test_bottom',500,40000,25000)`,
+		`INSERT INTO fish_grade_lines(fish_key,qualified_g,trophy_g,blue_trophy_g) VALUES
+			('test_shallow',50,300,500),
+			('test_mid',500,4000,6000),
+			('test_bottom',3000,25000,35000)`,
+		`INSERT INTO fish_ecology(fish_key,layer_min,layer_pref,layer_max) VALUES
+			('test_shallow',0.05,0.18,0.35),
+			('test_mid',0.30,0.52,0.68),
+			('test_bottom',0.72,0.92,1.0)`,
+	}
+	for _, query := range seed {
+		if _, err := db.SQL.Exec(query); err != nil {
+			t.Fatalf("准备声呐鱼口夹具失败: %v", err)
+		}
+	}
+
+	grids, err := loadSonarGrids()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grid := grids["loc12_215"]
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	c := fishRollContext{
+		uid: 1000009, loc: "loc12_215", x: 2260, z: -460, hasPos: true, spot: 7,
+		rigType: 50, lureLayer: .82, lureAction: "marine_jig", now: now,
+		cache: newFishingRollCache(),
+		weather: fishingWeather{
+			known: true, kind: fishingWeatherClear, airTemp: 18, previousAirTemp: 17, wind: 3,
+		},
+	}
+	schools := srv.rosterSonarSchools(t.Context(), "loc12_215", grid, nil, c, rand.New(rand.NewSource(41)))
+	if len(schools) < 2 {
+		t.Fatalf("真实名册应生成多个鱼群，实得 %d", len(schools))
+	}
+	wantLayer := map[string]float64{
+		"test_shallow": .18,
+		"test_mid":     .52,
+		"test_bottom":  .92,
+	}
+	seen := map[string]bool{}
+	for _, school := range schools {
+		if want, ok := wantLayer[school.fishKey]; !ok {
+			t.Fatalf("出现了名册外的鱼种 %q", school.fishKey)
+		} else {
+			seen[school.fishKey] = true
+			if school.depthM <= 0 || school.depthJitterM <= 0 {
+				t.Fatalf("%s 深度无效: school=%+v", school.fishKey, school)
+			}
+			settle := srv.cachedSettleStatics(t.Context(), c, school.fishKey)
+			if school.lines.val == nil || school.lines.trophy == nil || school.lines.blue == nil ||
+				*school.lines.val != settle[0] || *school.lines.trophy != settle[1] || *school.lines.blue != settle[2] {
+				t.Fatalf("%s 声呐未使用结算档位线: school=%v settle=%v", school.fishKey, school.lines, settle)
+			}
+			// 没有 sonar_profile 时以钓点水深作水域总深；深度必须落在
+			// 0..总深内，并高于水面对应层。
+			if school.depthM < want*2 {
+				t.Fatalf("%s 深度 %.2f 与生态水层 %.2f 不符", school.fishKey, school.depthM, want)
+			}
+		}
+	}
+	if len(seen) < 2 {
+		t.Fatalf("鱼群没有按名册分散鱼种: %+v", seen)
+	}
+}
+
+func TestSonarSynthesisCreatesAdjacentSchoolCells(t *testing.T) {
+	obj, err := synthesizeSonar("loc12_01", &sonarProfile{
+		depthMin: 1, depthMax: 8, sizeMed: 2, sizeP90: 20,
+	}, rand.New(rand.NewSource(31)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	grid, err := loadSonarGrids()
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := grid["loc12_01"]
+	cols, rows := sonarGridDimensions(g)
+	cells := obj.Field(1).Val.Items
+	if len(cells) != cols*rows {
+		t.Fatalf("格数=%d, 期望 %d", len(cells), cols*rows)
+	}
+	nonEmpty := func(x, y int) bool {
+		cell := cells[y*cols+x]
+		return cell != nil && cell.Kind != proto.KindNull
+	}
+	adjacent := 0
+	for y := 0; y < rows; y++ {
+		for x := 0; x < cols; x++ {
+			if !nonEmpty(x, y) {
+				continue
+			}
+			if x+1 < cols && nonEmpty(x+1, y) {
+				adjacent++
+			}
+			if y+1 < rows && nonEmpty(x, y+1) {
+				adjacent++
+			}
+		}
+	}
+	if adjacent < 8 {
+		t.Fatalf("连续鱼群格不足: 相邻非空格对=%d", adjacent)
+	}
+}
+
+func TestSonarSynthesisKeepsSchoolDepthBandWithoutProfile(t *testing.T) {
+	school := sonarSchool{
+		centerX: 5, centerY: 5, radiusX: 2, radiusY: 2,
+		depthM: 80, depthJitterM: 1, fishKey: "test",
+	}
+	obj, err := synthesizeSonarSchools("loc12_215", nil, []sonarSchool{school}, rand.New(rand.NewSource(7)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells := obj.Field(1).Val.Items
+	var depths []float64
+	for _, cell := range cells {
+		if cell == nil || cell.Kind == proto.KindNull || cell.Field(0).Val == nil {
+			continue
+		}
+		for _, echo := range cell.Field(0).Val.Items {
+			if echo == nil || echo.Field(1).Num == nil {
+				continue
+			}
+			depths = append(depths, float64(proto.F32FromBits(uint32(*echo.Field(1).Num))))
+		}
+	}
+	if len(depths) < 2 {
+		t.Fatalf("回声数量不足: %v", depths)
+	}
+	minDepth, maxDepth := depths[0], depths[0]
+	for _, depth := range depths {
+		if depth < minDepth {
+			minDepth = depth
+		}
+		if depth > maxDepth {
+			maxDepth = depth
+		}
+	}
+	if maxDepth-minDepth > 2.1 {
+		t.Fatalf("同一鱼群深度带不连续: min=%.2f max=%.2f depths=%v", minDepth, maxDepth, depths)
 	}
 }
 
 func TestSonarHandlerReturnsEmbeddedGrid(t *testing.T) {
 	srv, _ := newRigTestServer(t)
-	// 默认 sonar_echo=0 只回空网格（客户端不认识 15004 会断线），这里显式打开
+	// 默认 sonar_echo=0 只回空网格，这里显式打开
 	// 回声以验证网格生成逻辑本身。
 	if err := srv.DB.TunableSet(context.Background(), "sonar_echo", "1", "test"); err != nil {
 		t.Fatal(err)
@@ -215,7 +434,7 @@ func TestSonarHandlerReturnsEmbeddedGrid(t *testing.T) {
 		t.Fatalf("1/10 f0=%q", got)
 	}
 	cells := decoded.Field(1).Val
-	if cells == nil || cells.ArgCodeStr() != sonarCellArgCode || cells.ArgCount() != 522 {
+	if cells == nil || cells.Kind != proto.KindArgs || cells.ArgCodeStr() != sonarCellArgCode || cells.ArgCount() != 522 {
 		t.Fatalf("1/10 应回 loc12_01 的 522 格: %#v", cells)
 	}
 	if reason := srv.dispatch.checkRegisteredResponse(1, 10, body, srv.Table()); reason != "" {
