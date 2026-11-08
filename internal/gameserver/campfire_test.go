@@ -27,7 +27,8 @@ func TestCampfireStartReturnsActiveFireAndPersists(t *testing.T) {
 	if err != nil || dec.Class != "ihaaofcmopp" {
 		t.Fatalf("3/11 应回 802 ihaaofcmopp，实得 %v err=%v", dec, err)
 	}
-	clientNow := sessionGameMinuteAt(sess, time.Now())
+	// 到期分钟与 307.f13.f0 同时间线（世界总游戏分钟）。
+	clientNow := float64(worldTotalGameMin(time.Now()))
 	wantExpiry := clientNow + float64(defaultCampfireDurationMin)
 	gotExpiry := float64(dec.Fields[0].U32())
 	if math.Abs(gotExpiry-wantExpiry) > 2 {
@@ -73,5 +74,29 @@ func TestCampfireStartReturnsActiveFireAndPersists(t *testing.T) {
 	state2, err := db.GetCampfireState(t.Context(), sess.Userid)
 	if err != nil || state2 == nil || state2.ExpiresFT != expiry {
 		t.Fatalf("重复点火不应改变到期时间: first=%d second=%+v err=%v", expiry, state2, err)
+	}
+}
+
+// 篝火点火材料：消耗 1 木柴 + 1 火柴，应答 f1/f2 携带扣减后的物品实例。
+func TestCampfireConsumesMaterials(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	const uid = int64(1000001)
+	if _, err := db.SQL.Exec(`INSERT INTO item_def(numeric_id,item_id,category,attrs_json)
+		VALUES(920001,'woodstack',42,'{}'),(920002,'matches',42,'{}')`); err != nil {
+		t.Fatal(err)
+	}
+	wood := drinkUseTestItem(t, srv, "woodstack", 5, 0)
+	matches := drinkUseTestItem(t, srv, "matches", 50, 0)
+	sess := newProbeSess(srv)
+	ctx := &Ctx{Sess: sess, Main: 3, Sub: 11, CallID: 70, ExpectResponse: true,
+		Log: logging.Discard(), replyCapture: &ctxReplyCapture{}}
+	body, handled := hCampfireStart(ctx)
+	if !handled || len(body) == 0 {
+		t.Fatalf("3/11 应答: handled=%v body=%d", handled, len(body))
+	}
+	drinkUseTestQty(t, srv, wood.GUID, 4, 0)
+	drinkUseTestQty(t, srv, matches.GUID, 49, 0)
+	if len(ctx.afterResponse) == 0 {
+		t.Fatal("材料变更后应有背包推送")
 	}
 }
