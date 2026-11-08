@@ -46,6 +46,13 @@ const (
 	tunableSunEnergyRegenMult   = "condition_sun_energy_regen_mult"
 	tunableGearEnergyRegenCap   = "condition_gear_energy_regen_cap"
 	tunableGearEnergyMaxCap     = "condition_gear_energy_max_cap"
+
+	// 健康（f4）动态：饥寒压力掉血、压力消失后自愈。
+	tunableHealthDecayPerHour     = "condition_health_decay_per_hour"
+	tunableHealthRegenPerHour     = "condition_health_regen_per_hour"
+	tunableHealthHungerThreshold  = "condition_health_hunger_threshold"
+	tunableHealthComfortThreshold = "condition_health_comfort_threshold"
+	tunableMedicineHealthRestore  = "condition_medicine_health_restore"
 )
 
 // 缺省标定值：
@@ -80,6 +87,14 @@ const (
 	// 装备被动加成封顶。
 	defGearEnergyRegenCap = 0.5
 	defGearEnergyMaxCap   = 0.15
+
+	// 健康（f4）动态。全部为自设计标定值：官服没有任何"健康下降/恢复"
+	// 样本，取值只保证"饿到快见底、冻到很不舒服才开始掉，且掉得比恢复慢"。
+	defHealthDecayPerHour     = 0.10
+	defHealthRegenPerHour     = 0.05
+	defHealthHungerThreshold  = 0.10
+	defHealthComfortThreshold = 0.30
+	defMedicineHealthRestore  = 0.50
 )
 
 // conditionWriteBackDelta：读路径推进后，变化量低于该阈值不写回，
@@ -115,6 +130,13 @@ type conditionParams struct {
 	SunEnergyRegenMult   float64
 	GearEnergyRegenCap   float64
 	GearEnergyMaxCap     float64
+
+	// 健康（f4）动态。
+	HealthDecayPerHour     float64
+	HealthRegenPerHour     float64
+	HealthHungerThreshold  float64
+	HealthComfortThreshold float64
+	MedicineHealthRestore  float64
 }
 
 func (s *Server) conditionParams() conditionParams {
@@ -142,6 +164,12 @@ func (s *Server) conditionParams() conditionParams {
 		SunEnergyRegenMult:   s.tunableF(tunableSunEnergyRegenMult, defSunEnergyRegenMult),
 		GearEnergyRegenCap:   s.tunableF(tunableGearEnergyRegenCap, defGearEnergyRegenCap),
 		GearEnergyMaxCap:     s.tunableF(tunableGearEnergyMaxCap, defGearEnergyMaxCap),
+
+		HealthDecayPerHour:     s.tunableF(tunableHealthDecayPerHour, defHealthDecayPerHour),
+		HealthRegenPerHour:     s.tunableF(tunableHealthRegenPerHour, defHealthRegenPerHour),
+		HealthHungerThreshold:  s.tunableF(tunableHealthHungerThreshold, defHealthHungerThreshold),
+		HealthComfortThreshold: s.tunableF(tunableHealthComfortThreshold, defHealthComfortThreshold),
+		MedicineHealthRestore:  s.tunableF(tunableMedicineHealthRestore, defMedicineHealthRestore),
 	}
 }
 
@@ -185,7 +213,8 @@ type conditionEnv struct {
 //     封顶 energy_max；晒太阳时乘以加成倍率；离线同样停恢复。
 //   - 舒适度向环境均衡点漂移：1 − 降雨惩罚 − 寒冷惩罚 + 篝火加成 + 晒阳加成，
 //     速率 ComfortDriftPerHour。
-//   - luck_penalty 无动态写入者，原样透传。
+//   - 健康（f4，HUD 显示 1-f4）按饥寒压力掉血：饱食度低于阈值、舒适度低于阈值
+//     各算一个压力源，压力源越多掉得越快；两个压力源都消失后按自愈速率回升。
 func advancePlayerCondition(cur store.PlayerCondition, now float64, p conditionParams, env conditionEnv) store.PlayerCondition {
 	out := cur
 	out.UpdatedTS = now
@@ -219,6 +248,21 @@ func advancePlayerCondition(cur store.PlayerCondition, now float64, p conditionP
 	equilibrium = clampFloat(equilibrium, 0, 1)
 	drift := p.ComfortDriftPerHour * elapsedH
 	out.Comfort = clampFloat(out.Comfort+clampFloat(equilibrium-out.Comfort, -drift, drift), 0, 1)
+
+	// 健康：饥寒各算一个压力源，压力期线性掉血、无压力时线性自愈。
+	// 门槛用推进后的饱食度/舒适度判定，与同一拍下发的 f1/f3 自洽。
+	stress := 0
+	if out.Secondary < p.HealthHungerThreshold {
+		stress++
+	}
+	if out.Comfort < p.HealthComfortThreshold {
+		stress++
+	}
+	delta := -p.HealthRegenPerHour * elapsedH
+	if stress > 0 {
+		delta = p.HealthDecayPerHour * float64(stress) * elapsedH
+	}
+	out.LuckPenalty = clampFloat(cur.LuckPenalty+delta, 0, 1)
 	return out
 }
 
@@ -280,7 +324,8 @@ func (s *Server) currentPlayerConditionP(ctx context.Context, uid int64, p condi
 	next := advancePlayerCondition(*cur, now, p, env)
 	if math.Abs(next.Primary-cur.Primary) > conditionWriteBackDelta ||
 		math.Abs(next.Secondary-cur.Secondary) > conditionWriteBackDelta ||
-		math.Abs(next.Comfort-cur.Comfort) > conditionWriteBackDelta {
+		math.Abs(next.Comfort-cur.Comfort) > conditionWriteBackDelta ||
+		math.Abs(next.LuckPenalty-cur.LuckPenalty) > conditionWriteBackDelta {
 		// 写回失败不阻断下发：本次返回推进值，下次读取再补写。
 		if err := s.DB.UpsertPlayerCondition(ctx, next); err != nil {
 			s.log.Warn("玩家状态写回失败", "uid", uid, "err", err)
@@ -449,7 +494,8 @@ func (s *Server) heldRodGUID(uid int64) string {
 
 // applyConsumableRestoreTx 在经济事务内应用食品/热饮的即时状态恢复。
 // 分类映射见 consumableRestoreForItem：咖啡→精力、茶→舒适度、
-// 可可→饱食+少量精力、其余食品→饱食度。恢复量全部为 tunables 标定值。
+// 可可→饱食+少量精力、药品→健康（f4 下降）、其余食品→饱食度。
+// 恢复量全部为 tunables 标定值。
 func applyConsumableRestoreTx(ctx context.Context, tx *sql.Tx, uid int64, kind string, p conditionParams, now time.Time) error {
 	cur, err := store.EnsurePlayerConditionTx(ctx, tx, uid)
 	if err != nil {
@@ -464,6 +510,9 @@ func applyConsumableRestoreTx(ctx context.Context, tx *sql.Tx, uid int64, kind s
 	case "cocoa":
 		next.Secondary = clampFloat(next.Secondary+p.CocoaHungerRestore, 0, 1)
 		next.Primary = clampFloat(next.Primary+p.CocoaEnergyRestore, 0, p.EnergyMax)
+	case "medicine":
+		// 健康是 f4 的反向刻度：治疗后 f4 下降（HUD 的 1-f4 回升）。
+		next.LuckPenalty = clampFloat(next.LuckPenalty-p.MedicineHealthRestore, 0, 1)
 	default: // "food"
 		next.Secondary = clampFloat(next.Secondary+p.FoodHungerRestore, 0, 1)
 	}

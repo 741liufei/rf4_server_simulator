@@ -39,6 +39,12 @@ func testConditionParams() conditionParams {
 		SunEnergyRegenMult:   1.25,
 		GearEnergyRegenCap:   0.5,
 		GearEnergyMaxCap:     0.15,
+
+		HealthDecayPerHour:     0.10,
+		HealthRegenPerHour:     0.05,
+		HealthHungerThreshold:  0.10,
+		HealthComfortThreshold: 0.30,
+		MedicineHealthRestore:  0.50,
 	}
 }
 
@@ -53,8 +59,9 @@ func TestAdvancePlayerConditionHandComputed(t *testing.T) {
 	if math.Abs(next.Primary-(0.10+0.5*0.91*0.5)) > 1e-9 {
 		t.Fatalf("精力手算不符: %v", next.Primary)
 	}
-	if next.Comfort != cur.Comfort || next.LuckPenalty != cur.LuckPenalty {
-		t.Fatal("comfort/luck_penalty 应原样透传")
+	// 舒适度无环境输入时不动；健康无饥寒压力时已在 0（满血），自愈被地板钳住。
+	if next.Comfort != cur.Comfort || next.LuckPenalty != 0 {
+		t.Fatalf("舒适度应透传、健康应停在地板 0: comfort=%v luck=%v", next.Comfort, next.LuckPenalty)
 	}
 }
 
