@@ -301,6 +301,8 @@ func (s *Server) fishingKeep(ctx *Ctx) ([]byte, bool) {
 		}
 		st.mu.Unlock()
 		s.notifyFishKept(ctx.Sess, &kept)
+		// 钓获礼包：入护成功后按概率当场开箱（异步，避免拖慢入护回包）。
+		s.scheduleLootBox(ctx.Sess, &kept)
 		out := proto.Args(proto.S("61"))
 		if keptInNet {
 			out.Items = append(out.Items, s.buildPending25(&kept, st, keepLevel))
