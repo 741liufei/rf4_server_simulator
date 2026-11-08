@@ -9,6 +9,28 @@ import (
 	"rf4server/internal/proto"
 )
 
+// TestFishLandedKVText 上鱼播报 KV 文案：键1 为中文鱼名、键2 为重量克，
+// 档位前缀由客户端本地化模板补（达标 kind3 无前缀）。
+func TestFishLandedKVText(t *testing.T) {
+	srv, db := newDetachTestServer(t)
+	if _, err := db.SQL.Exec(`INSERT INTO loc_wiki_fish(loc,fish_key,fish_zh)
+		VALUES('broadcast-test','g_tench','丁鱵')`); err != nil {
+		t.Fatal(err)
+	}
+	sess := newProbeSess(srv)
+	b, err := proto.EncodeValue(srv.fishLandedKV(&RolledFish{Species: "g_tench", WeightG: 425}), sess.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte("丁鱵")) || bytes.Contains(b, []byte("g_tench")) {
+		t.Fatalf("键1 应为中文鱼名而非鱼种 key: %x", b)
+	}
+	// 重量 425g 原样进键2（客户端按克/公斤显示）。
+	if !bytes.Contains(b, []byte{0xa9, 0x01, 0x00, 0x00}) {
+		t.Fatalf("键2 重量应为 425 克: %x", b)
+	}
+}
+
 // TestFishTVShape30MatchesProduction 回归：面板 kv_shape=30 的编码字节必须与
 // 生产 fishTVKv 完全一致（typed 数组 "135"）。否则面板探测的结果代表不了
 // 线上行为——旧实现把 Items 重包成 KindKVList，编码器落到硬编码的
