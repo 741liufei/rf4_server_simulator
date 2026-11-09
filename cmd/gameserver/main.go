@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
@@ -108,9 +109,12 @@ func main() {
 			select {
 			case <-ctx.Done():
 				close(srvStop)
+				// 停服即清空在线名单，避免管理后台继续显示已下线的玩家。
+				_ = db.KVSet(context.Background(), "stats:online_uids", "")
 				return
 			case <-t.C:
 				_ = db.KVSet(ctx, "stats:sessions", fmt.Sprintf("%d", srv.SessionCount()))
+				_ = db.KVSet(ctx, "stats:online_uids", onlineUIDsValue(srv))
 			}
 		}
 	}()
@@ -132,4 +136,22 @@ func main() {
 	defer cancel()
 	_ = obs.Shutdown(shutdownCtx)
 	log.Info("gameserver 已退出")
+}
+
+// onlineUIDsSnapshot 是 stats:online_uids 的带发布时间快照。时间戳和管理端
+// 共同提供过期保护，避免 gameserver 异常退出后陈旧名单长期显示在线。
+type onlineUIDsSnapshot struct {
+	UpdatedAt int64   `json:"updated_at"`
+	UIDs      []int64 `json:"uids"`
+}
+
+func onlineUIDsValue(srv *gameserver.Server) string {
+	data, err := json.Marshal(onlineUIDsSnapshot{
+		UpdatedAt: time.Now().Unix(),
+		UIDs:      srv.OnlineUIDs(),
+	})
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }
