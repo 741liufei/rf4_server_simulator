@@ -319,7 +319,7 @@ func (s *Server) OnlineUIDs() []int64 {
 	out := make([]int64, 0, len(s.sessions))
 	seen := make(map[int64]bool, len(s.sessions))
 	for _, sess := range s.sessions {
-		if sess.Userid <= 0 || seen[sess.Userid] {
+		if sess == nil || sess.Closed() || sess.Userid <= 0 || seen[sess.Userid] {
 			continue
 		}
 		seen[sess.Userid] = true

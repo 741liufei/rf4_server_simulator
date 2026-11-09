@@ -14,7 +14,7 @@ import (
 	"rf4server/internal/logging"
 )
 
-// 玩家列表的在线灯来自 gameserver 发布的 stats:online_uids；键缺失或含脏值按离线处理。
+// 玩家列表的在线灯来自 gameserver 发布的带时间戳 stats:online_uids 快照；缺失、损坏或过期按离线处理。
 func TestPlayersListOnlineFlag(t *testing.T) {
 	db := testDB(t)
 	ctx := context.Background()
@@ -57,12 +57,35 @@ func TestPlayersListOnlineFlag(t *testing.T) {
 		t.Fatalf("未发布名单时应全部离线: %v", got)
 	}
 
-	// 名单含空格和非数字项时仍取其中的合法 UID。
+	writeSnapshot := func(updatedAt time.Time, uids ...int64) {
+		t.Helper()
+		raw, err := json.Marshal(onlineUIDsSnapshot{UpdatedAt: updatedAt.Unix(), UIDs: uids})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.KVSet(ctx, "stats:online_uids", string(raw)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// 新鲜快照中的合法 UID 应在线；非法 UID 忽略。
+	writeSnapshot(time.Now(), onlineUID, 0, -1)
+	if got := onlineByUID(); !got[onlineUID] || got[offlineUID] {
+		t.Fatalf("在线快照解析错误: %v", got)
+	}
+
+	// 非 JSON 或旧格式不再兼容，按全部离线处理。
 	if err := db.KVSet(ctx, "stats:online_uids", " 1000001 ,oops"); err != nil {
 		t.Fatal(err)
 	}
-	if got := onlineByUID(); !got[onlineUID] || got[offlineUID] {
-		t.Fatalf("在线名单解析错误: %v", got)
+	if got := onlineByUID(); got[onlineUID] || got[offlineUID] {
+		t.Fatalf("损坏快照应按全部离线: %v", got)
+	}
+
+	// 超过发布有效期的快照按全部离线处理，覆盖进程异常退出后残留旧名单的场景。
+	writeSnapshot(time.Now().Add(-onlineUIDsMaxAge-time.Second), onlineUID)
+	if got := onlineByUID(); got[onlineUID] || got[offlineUID] {
+		t.Fatalf("过期快照应按全部离线: %v", got)
 	}
 
 	// 空串表示无人在线。

@@ -5,13 +5,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"net"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -139,12 +138,20 @@ func main() {
 	log.Info("gameserver 已退出")
 }
 
-// onlineUIDsValue 把在线 UID 编码为逗号分隔串，供管理后台读取 stats:online_uids。
+// onlineUIDsSnapshot 是 stats:online_uids 的带发布时间快照。时间戳和管理端
+// 共同提供过期保护，避免 gameserver 异常退出后陈旧名单长期显示在线。
+type onlineUIDsSnapshot struct {
+	UpdatedAt int64   `json:"updated_at"`
+	UIDs      []int64 `json:"uids"`
+}
+
 func onlineUIDsValue(srv *gameserver.Server) string {
-	uids := srv.OnlineUIDs()
-	parts := make([]string, len(uids))
-	for i, uid := range uids {
-		parts[i] = strconv.FormatInt(uid, 10)
+	data, err := json.Marshal(onlineUIDsSnapshot{
+		UpdatedAt: time.Now().Unix(),
+		UIDs:      srv.OnlineUIDs(),
+	})
+	if err != nil {
+		return ""
 	}
-	return strings.Join(parts, ",")
+	return string(data)
 }
