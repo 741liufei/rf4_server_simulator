@@ -893,6 +893,9 @@ func (s *Server) execAdminCmd(cmd *AdminCommand) {
 		if err := s.reloadFishEcologyCache(s.dbCtx()); err != nil {
 			s.log.Warn("鱼种生态缓存刷新失败", "err", err)
 		}
+		if err := s.reloadHookBiteProfiles(s.dbCtx()); err != nil {
+			s.log.Warn("鱼钩型号咬口缓存刷新失败", "err", err)
+		}
 		s.log.Info("管理指令：运行参数已刷新")
 	case "fish_tv_test":
 		// 鱼汛通道探测：向指定玩家（0=全部在线会话）推送一条测试消息。

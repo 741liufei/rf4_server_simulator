@@ -56,6 +56,11 @@ func main() {
 	}
 	srv.SetDB(db)
 	log.Info("SQLite 已连接", "path", cfg.SQLite.Path, "static", cfg.SQLite.StaticPath)
+	if n, err := srv.SyncHookBiteProfiles(ctx); err != nil {
+		log.Warn("鱼钩型号咬口档案初始化失败", "profiles", n, "err", err)
+	} else {
+		log.Info("鱼钩型号咬口档案已同步", "profiles", n)
+	}
 	if err := srv.RepairItemPhysics(ctx); err != nil {
 		log.Error("物品物理状态修复失败", "err", err)
 		os.Exit(1)
