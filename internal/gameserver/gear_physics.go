@@ -98,6 +98,7 @@ type gearPhysicsSpec struct {
 	ReelCurrentDragKg   float64 // 当前摩擦档位下的制动力，线上 29（UI 30）锁轮时等于锁轮承力
 	LineStretch         float64
 	HookPresent         bool
+	HookItemID          string
 	HookStrengthKg      float64
 	HookLengthMM        float64
 	HookSize            int64
@@ -672,6 +673,7 @@ func (s *Server) loadGearSpecForRig(ctx context.Context, ids rigGearIDs, rodGUID
 		return spec
 	}
 	spec.HookPresent = true
+	spec.HookItemID = def.ItemID
 	spec.HookSize = itemDefInt(def, gearAttrHookSize)
 	spec.HookLengthMM = itemDefF32(def, gearAttrHookLen)
 	if durability < 0 {

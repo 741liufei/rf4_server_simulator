@@ -240,6 +240,7 @@ func (s *Server) applyBaitedHookSpec(ctx context.Context, group baitedHookSet, s
 		return false
 	}
 	spec.HookPresent = true
+	spec.HookItemID = def.ItemID
 	spec.HookSize = itemDefInt(def, gearAttrHookSize)
 	spec.HookLengthMM = itemDefF32(def, gearAttrHookLen)
 	spec.HookStrengthKg = itemDefF32(def, gearAttrMaxLoad) * clampFloat(durability, 0, 1)

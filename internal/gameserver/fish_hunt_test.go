@@ -116,7 +116,7 @@ func TestFishHuntBlueProbabilityIsHookIndependent(t *testing.T) {
 func TestLuckProtectedBlueBypassesHookQuality(t *testing.T) {
 	tiny := gearPhysicsSpec{HookPresent: true, HookSize: 0, HookLengthMM: 1.8}
 	f := &RolledFish{Grade: 4, WeightG: 500_000}
-	applyHookBiteQuality(f, tiny)
+	(&Server{}).applyHookBiteQuality(f, tiny)
 	if !f.LuckProtected || f.BiteQuality != "solid" || f.HookHoldP != 1 {
 		t.Fatalf("蓝冠天命鱼必须绕过钩型判定: %+v", f)
 	}

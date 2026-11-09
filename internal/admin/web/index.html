@@ -136,6 +136,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
       <button data-view="players" onclick="go('players')"><span class="ico"><svg viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3 3.4-4.5 6.5-4.5s5.7 1.5 6.5 4.5"/><circle cx="17" cy="9" r="2.5"/><path d="M17.5 15.6c2 .4 3.5 1.6 4 3.9"/></svg></span><span class="txt"><b>玩家管理</b><small>档案 · 资产 · 护鱼网 · 技能</small></span></button>
       <button data-view="stores" onclick="go('stores')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M21 8v12a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8"/><path d="M2 4h20v4H2z"/><path d="M10 12h4"/></svg></span><span class="txt"><b>商店与库存</b><small>改货架价格和库存</small></span></button>
       <button data-view="fish" onclick="go('fish')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M6.5 12c1.2-3.3 4.3-5.5 7.5-5.5 3.5 0 6 2.5 7 5.5-1 3-3.5 5.5-7 5.5-3.2 0-6.3-2.2-7.5-5.5Z"/><path d="M17.5 11v.01"/><path d="M6.5 12 3 9v6l3.5-3Z"/></svg></span><span class="txt"><b>钓场与鱼口</b><small>玩法开关 · 出什么鱼 · 咬钩快慢</small></span></button>
+      <button data-view="hooks" onclick="go('hooks')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M15 3v10a6 6 0 1 1-12 0V9"/><path d="M15 3l3 3-3 3"/></svg></span><span class="txt"><b>钩子手感</b><small>真实型号 · 入口容量 · 咬口概率</small></span></button>
       <button data-view="bait" onclick="go('bait')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3c3 4 5.5 7.4 5.5 10a5.5 5.5 0 0 1-11 0C6.5 10.4 9 7 12 3Z"/><path d="M9.8 13.5a2.2 2.2 0 0 0 2.2 2.2"/></svg></span><span class="txt"><b>鱼饵偏好</b><small>每种鱼爱吃的饵：规则 + 实证</small></span></button>
       <button data-view="mail" onclick="go('mail')"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg></span><span class="txt"><b>邮件</b><small>发消息和物品附件</small></span></button>
       <button data-view="params" onclick="go('params')"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1.5 14h5M9.5 8h5M17.5 16h5"/></svg></span><span class="txt"><b>游戏参数</b><small>玩法手感 · 经验结算倍率</small></span></button>
@@ -159,6 +160,7 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
     <section class="view" id="view-players"><div class="split"><div class="card player-list"><div class="toolbar"><input class="grow" id="playerSearch" placeholder="搜索 UID / 昵称" onkeydown="if(event.key==='Enter')loadPlayers()"><button class="btn sm" onclick="loadPlayers()">搜索</button><span class="legend"><span class="online-dot on"></span>在线<span class="online-dot off"></span>不在线</span></div><div id="playerList" style="margin-top:12px"></div></div><div class="card" id="playerDetail"><div class="empty">选择左侧玩家开始管理</div></div></div></section>
     <section class="view" id="view-stores"><div class="card"><div class="toolbar"><select id="storeSelect" class="grow" onchange="loadStoreItems()"></select><input id="storeSearch" placeholder="搜索商品 / 名称" onkeydown="if(event.key==='Enter')loadStoreItems()"><button class="btn" onclick="loadStoreItems()">查询</button></div><div id="storeSummary" class="muted" style="margin:12px 0"></div><div class="table-wrap" id="storeTable"></div></div></section>
     <section class="view" id="view-fish"><div class="card" id="fishRulesCard" style="margin-bottom:12px"><div class="rules-strip"><h2>鱼群规则</h2><label class="rule-item"><span>鱼群随机分布</span><input type="checkbox" class="switch" id="fishDistributionSwitch" disabled onchange="toggleFishRules('distribution',this)"></label><label class="rule-item"><span>鱼类吃饵偏好</span><input type="checkbox" class="switch" id="fishRulesSwitch" disabled onchange="toggleFishRules('bait',this)"></label><label class="rule-item"><span>天气与温度鱼口</span><input type="checkbox" class="switch" id="fishWeatherSwitch" disabled onchange="toggleFishRules('weather',this)"></label><label class="rule-item"><span>欢乐时光</span><input type="checkbox" class="switch" id="happyHourSwitch" disabled onchange="toggleFishRules('happy',this)"></label><small class="muted" id="rulesStatus"></small><button class="btn alt sm" id="rulesHelpBtn" aria-expanded="false" onclick="toggleRulesHelp()">说明 ⌄</button></div><div id="rulesHelp" hidden><p class="muted" style="margin:0 0 8px">各项独立保存；天气、饵料和分布规则默认关闭，欢乐时光默认开启。</p><div class="rule-help"><b>鱼群随机分布</b><span id="fishDistributionMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>鱼类吃饵偏好</b><span id="fishRulesMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>天气与温度鱼口</b><span id="fishWeatherMessage" role="status">正在读取开关。</span></div><div class="rule-help"><b>欢乐时光</b><span id="happyHourMessage" role="status">正在读取开关。</span></div></div></div><div class="grid fish-layout" style="grid-template-columns:270px minmax(0,1fr)"><div class="card"><div class="section-head"><h2>水域</h2></div><input id="fishSearch" placeholder="筛选水域" oninput="renderFishAreas()"><div id="fishAreas"></div></div><div class="card" id="fishEditor"><div class="empty">选择水域配置鱼口</div></div></div></section>
+    <section class="view" id="view-hooks"><div class="card"><div class="section-head"><div><h2>真实钩子型号档案</h2><small>物理数据来自 item_def；倍率和兜底值只影响咬口，不改钩子拉力</small></div></div><div class="toolbar"><input class="grow" id="hookSearch" placeholder="搜索 item_id / 厂牌，如 triple_20686、simmons" onkeydown="if(event.key==='Enter')loadHookProfiles()"><select id="hookSize"><option value="">全部尺寸</option></select><select id="hookFamily"><option value="">全部钩型族</option><option value="classic">Classic</option><option value="carp">Carp</option><option value="treble">Treble</option><option value="jighead">Jighead</option><option value="offset">Offset</option><option value="marine">Marine</option><option value="other">Other</option></select><button class="btn" onclick="loadHookProfiles()">查询</button></div><p class="muted" style="margin:10px 0">默认倍率 1.0、兜底值 0；修改后写入审计，最多 30 秒由主服热加载。入口容量按真实钩体长度计算。</p><div class="table-wrap" id="hookProfilesTable"><div class="empty">读取中…</div></div></div></section>
     <section class="view" id="view-bait"><div class="card"><div class="section-head"><div><h2>鱼饵偏好</h2><small id="baitSummary" class="muted">正在读取…</small></div></div><div class="toolbar"><input class="grow" id="baitSearch" placeholder="搜索鱼种 key / 中文名，如 pike、狗鱼" onkeydown="if(event.key==='Enter')loadBaitPrefs()"><input id="baitLoc" placeholder="水域（可选）" onkeydown="if(event.key==='Enter')loadBaitPrefs()"><select id="baitFilter" onchange="loadBaitPrefs()"><option value="">全部鱼种</option><option value="tier3">有 tier3 饵</option><option value="norule">规则表无条目</option><option value="rule">规则表有条目</option></select><button class="btn" onclick="loadBaitPrefs()">查询</button></div><p class="muted" style="margin:10px 0">规则来自编译进服务端的 fishing_bait_rules.txt（严格模式生效）；tier 来自 companion_bait_fish 实证（tier3 权重×8 / tier2 ×4 / 在列 ×2）；「证据」是实证条数。点击行展开全部饵。</p><div class="table-wrap" id="baitTable"></div></div></section>
     <section class="view" id="view-mail"><div class="mail-box"><div class="card"><div class="section-head"><h2>撰写邮件</h2><small>队列约 2 秒内由主服投递</small></div><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="field"><label>收件人 UID</label><input id="mailUid" type="number"></div><div class="field"><label>快捷载入玩家</label><input id="mailPlayerSearch" placeholder="搜索并回车" onkeydown="if(event.key==='Enter')findMailPlayer()"></div></div><div class="field" style="margin-top:12px"><label>邮件正文</label><textarea id="mailText" placeholder="写给玩家的消息…"></textarea></div><div class="section-head" style="margin-top:14px"><h2>附件</h2><button class="btn alt sm" onclick="addAttachment()">+ 添加附件</button></div><div id="attachments"></div><div class="actions"><button class="btn good" onclick="sendMail()">发送邮件</button><button class="btn alt" onclick="previewMail()">预览</button></div></div><div class="card"><div class="section-head"><h2>发送预览</h2></div><div id="mailPreview" class="empty">填写邮件后点击预览</div><div class="section-head" style="margin-top:20px"><h2>常用模板</h2></div><div class="actions"><button class="btn alt sm" onclick="mailTemplate('补偿')">补偿邮件</button><button class="btn alt sm" onclick="mailTemplate('活动奖励')">活动奖励</button><button class="btn alt sm" onclick="mailTemplate('测试')">测试邮件</button></div></div></div></section>
     <section class="view" id="view-params"><div class="card"><div class="section-head"><h2>游戏参数</h2><small>热更新：保存后最多 30 秒生效；随时可调回默认值，不损坏玩家存档</small></div><div id="paramsBody"></div></div></section>
@@ -172,8 +174,9 @@ body.notice-on #view-fish.on{height:max(600px,calc(100vh - 204px))}
 <script>
 let REFRESH_TIMER=null;
 let TOKEN=localStorage.getItem('rf4_admin_token')||'';
-let VIEW='dashboard',PLAYER=null,PLAYER_TAB='profile',FISH_AREA='',FISH_CFG=null,FISH_DIRTY=false,STORE_ITEMS=[];
+let VIEW='dashboard',PLAYER=null,PLAYER_TAB='profile',FISH_AREA='',FISH_CFG=null,FISH_DIRTY=false,STORE_ITEMS=[],HOOK_PROFILES=[],HOOK_EDIT_ID='';
 const $=s=>document.querySelector(s);
+for(let i=0;i<=33;i++)$('#hookSize').insertAdjacentHTML('beforeend',`<option value="${i}">${i}</option>`);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>Number(n||0).toLocaleString('zh-CN');
 const timeText=ts=>ts?new Date(Number(ts)*1000).toLocaleString('zh-CN'):'-';
@@ -237,7 +240,7 @@ async function boot(){
     const initial=location.hash.slice(1);go(titles[initial]?initial:'dashboard',true);if(!REFRESH_TIMER)REFRESH_TIMER=setInterval(()=>{if(!TOKEN)return;if(VIEW==='dashboard')loadDashboard(false).catch(()=>{});else if(VIEW==='players')loadPlayers(true).catch(()=>{})},8000);
   }catch(e){logout()}
 }
-const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],bait:['鱼饵偏好','每种鱼爱吃的饵料：规则表条目 + 饵效证据'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕'],release:['发布说明','发布包内的版本更新 · 修复内容'],about:['关于','项目说明 · README.md']};
+const titles={dashboard:['总览','服务器正常吗 · 谁在玩 · 最近改了什么'],players:['玩家管理','档案 · 资产 · 背包 · 护鱼网 · 技能'],stores:['商店与库存','覆盖货架价格与库存，即时生效'],fish:['钓场与鱼口','玩法开关 · 各水域出什么鱼 · 咬钩快慢'],hooks:['钩子手感','真实型号 · 入口容量 · 咬口概率'],bait:['鱼饵偏好','每种鱼爱吃的饵料：规则表条目 + 饵效证据'],mail:['邮件','给玩家发消息和物品附件'],params:['游戏参数','玩法手感与经验结算倍率，随时可调回默认'],audit:['审计日志','后台每次操作的留痕'],release:['发布说明','发布包内的版本更新 · 修复内容'],about:['关于','项目说明 · README.md']};
 function go(name,fromHash=false){
   if(!titles[name])name='dashboard';
   VIEW=name;document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('on',b.dataset.view===name));
@@ -248,7 +251,7 @@ function go(name,fromHash=false){
 }
 window.addEventListener('hashchange',()=>go(location.hash.slice(1),true));
 function refreshCurrent(){
-  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,bait:loadBaitPrefs,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
+  const jobs={dashboard:loadDashboard,players:()=>loadPlayers(false),stores:loadStores,fish:loadFishAreas,hooks:loadHookProfiles,bait:loadBaitPrefs,mail:()=>{},params:loadTunables,audit:loadAudit,release:loadReleaseNotes,about:loadAbout};
   (jobs[VIEW]||(()=>{}))().catch(e=>toast(e.message,'bad'));
 }
 // 发放物品会偶发造成玩家坏档，暂时关闭前端入口；后端接口保留。
@@ -821,6 +824,41 @@ async function resetFishConfig(){askConfirm('恢复默认鱼口','清除「'+FIS
 async function showAddFish(){showModal('添加鱼种到水域','搜索鱼库后添加到当前覆盖列表',`<input id="fishAddSearch" placeholder="中文名或 fish_key" oninput="debounce('fishAdd',searchFishPool)"><div class="results" id="fishAddResults"></div>`);searchFishPool()}
 async function searchFishPool(){const q=$('#fishAddSearch').value.trim();const list=await api('/api/fish/pool?q='+encodeURIComponent(q)+'&limit=80');$('#fishAddResults').innerHTML=list.map(x=>`<div class="result" data-key="${esc(x.fish_key)}" data-name="${esc(x.name_zh)}" onclick="addFishFromPool(this.dataset.key,this.dataset.name)"><div><b>${esc(x.name_zh)}</b><div class="muted mono">${esc(x.fish_key)}</div></div><span class="tag">${fmt(x.min_g)}-${fmt(x.max_g)}g</span></div>`).join('')||'<div class="empty">无结果</div>'}
 function addFishFromPool(key,name){syncFishRows();if(FISH_CFG.fish.some(f=>f.fish_key===key)){closeModal();return toast('该鱼种已在列表','bad')}FISH_CFG.fish.push({fish_key:key,name_zh:name,base_weight:0,weight:1,enabled:true,has_override:true});closeModal();renderFishRows();toast('已加入，记得保存')}
+
+async function loadHookProfiles(){
+  const q=encodeURIComponent(($('#hookSearch')?.value||'').trim());
+  const size=encodeURIComponent($('#hookSize')?.value||'');
+  const family=encodeURIComponent($('#hookFamily')?.value||'');
+  const data=await api(`/api/hooks/profiles?q=${q}&size=${size}&family=${family}&limit=500`);
+  HOOK_PROFILES=data.profiles||[];
+  renderHookProfiles(data.total||HOOK_PROFILES.length);
+}
+function renderHookProfiles(total){
+  const rows=HOOK_PROFILES.map(p=>`<tr>
+    <td><b class="mono">${esc(p.item_id)}</b><div class="muted">${esc(p.brand||'-')}</div></td>
+    <td>${esc(p.family)}</td><td>${p.size}</td><td>${Number(p.length_mm).toFixed(2)} mm</td>
+    <td>${Number(p.strength_kg).toFixed(2)} kg</td><td>${fmt(Math.round(p.entry_capacity_g))} g</td>
+    <td>${Number(p.solid_scale).toFixed(3)}</td><td>${Number(p.hold_scale).toFixed(3)}</td>
+    <td>${(Number(p.small_fish_floor)*100).toFixed(1)}%</td><td>${(Number(p.over_capacity_hold_floor)*100).toFixed(1)}%</td>
+    <td><button class="btn alt sm" onclick="editHookProfile('${esc(p.item_id)}')">调整</button></td></tr>`).join('');
+  $('#hookProfilesTable').innerHTML=`<div class="muted" style="margin-bottom:8px">匹配 ${fmt(total)} 个型号，当前显示 ${fmt(HOOK_PROFILES.length)} 个</div><table class="fish-table"><thead><tr><th>型号</th><th>钩型族</th><th>尺寸</th><th>长度</th><th>真实拉力</th><th>入口容量</th><th>咬口倍率</th><th>保持倍率</th><th>小鱼下限</th><th>超载保持下限</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="11" class="empty">没有匹配型号</td></tr>'}</tbody></table>`;
+}
+function editHookProfile(itemID){
+  const p=HOOK_PROFILES.find(x=>x.item_id===itemID);if(!p)return;
+  HOOK_EDIT_ID=itemID;
+  showModal('调整钩子咬口','真实物理数据只读；下面四项影响发鱼时的咬口与中钩保持率。',`<div class="form-grid" style="grid-template-columns:1fr 1fr">
+    <div class="field"><label>咬口倍率</label><input id="hookSolidScale" type="number" min="0" max="3" step="0.01" value="${p.solid_scale}"></div>
+    <div class="field"><label>保持率倍率</label><input id="hookHoldScale" type="number" min="0" max="3" step="0.01" value="${p.hold_scale}"></div>
+    <div class="field"><label>小鱼咬口下限（0~1）</label><input id="hookSmallFloor" type="number" min="0" max="1" step="0.01" value="${p.small_fish_floor}"></div>
+    <div class="field"><label>超载保持率下限（0~1）</label><input id="hookOverHold" type="number" min="0" max="1" step="0.01" value="${p.over_capacity_hold_floor}"></div></div>
+    <div class="actions"><button class="btn good" onclick="saveHookProfile()">保存</button><button class="btn alt" onclick="closeModal()">取消</button></div>`);
+}
+async function saveHookProfile(){
+  const read=id=>Number($('#'+id).value);
+  const body={item_id:HOOK_EDIT_ID,solid_scale:read('hookSolidScale'),hold_scale:read('hookHoldScale'),small_fish_floor:read('hookSmallFloor'),over_capacity_hold_floor:read('hookOverHold')};
+  if(![body.solid_scale,body.hold_scale].every(v=>v>=0&&v<=3)||![body.small_fish_floor,body.over_capacity_hold_floor].every(v=>v>=0&&v<=1))return toast('倍率 0~3，兜底概率 0~1','bad');
+  await api('/api/hooks/profiles',{method:'POST',body:JSON.stringify(body)});closeModal();toast('已保存，主服热加载中');await loadHookProfiles();
+}
 
 let MAIL_ATTACH=[];
 function addAttachment(){showModal('添加邮件附件','搜索物品目录',`<input id="attachSearch" placeholder="物品 ID / 名称" oninput="debounce('attachSearch',searchAttachItems)"><div class="results" id="attachResults"></div>`);searchAttachItems()}

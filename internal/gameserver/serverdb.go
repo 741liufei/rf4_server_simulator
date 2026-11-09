@@ -42,6 +42,9 @@ func (s *Server) attachDB(db *store.DB, log *slog.Logger) {
 	} else if n > 0 {
 		s.log.Info("鱼口技能效果初始化", "inserted", n)
 	}
+	if err := s.reloadHookBiteProfiles(context.Background()); err != nil {
+		s.log.Warn("鱼钩型号咬口缓存加载失败", "err", err)
+	}
 }
 
 // loadFightCurves 解析搏鱼曲线池，把 f0==100 的基础行放在首位。
