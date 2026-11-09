@@ -207,6 +207,16 @@ func TestFishMarketFlow(t *testing.T) {
 	if fishGUID == "" {
 		t.Fatal("27.f0 鱼 guid 缺失")
 	}
+	// Issue #314：这里验证鱼市/入护流程，不验证随机钩型保持率。固定当前
+	// pending 鱼为稳定中钩样本，避免 14/11 偶发进入 nibble 分支。
+	if st := srv.fishingStateForRod(uid, rodGUID); st != nil {
+		st.mu.Lock()
+		if st.Pending != nil {
+			st.Pending.BiteQuality = "solid"
+			st.Pending.HookHoldP = 1
+		}
+		st.mu.Unlock()
+	}
 	fc.SendRequest(203, 14, 11) // 刺中（fire-and-forget，无响应；推 4/22）
 
 	// 14/4 结算返回 801，但余额不变。
