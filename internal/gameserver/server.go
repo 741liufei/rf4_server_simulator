@@ -57,6 +57,7 @@ type Server struct {
 	fishStates             map[int64]map[string]*FishState
 	heldFishingRods        map[int64]string
 	fishMu                 sync.Mutex
+	overloadProtectionMu   sync.RWMutex // 在线开关与断件/负载判定同步
 	levelMap               map[int64]string
 	levelMu                sync.Mutex
 	fishEcologyMu          sync.RWMutex

@@ -70,6 +70,8 @@ type fightReelWear struct {
 	// 所以做成非导出字段，不进钓组状态的 JSON 快照。
 	lastLoadAt time.Time
 	loadProbe  fightLoadProbe
+	// Preserve the online switch boundary when rebuilding the strength cache.
+	protectionChangedAt time.Time
 }
 
 // reset 清空本竿账本（新的一杆）。
@@ -161,17 +163,14 @@ func (s *Server) reelCastBaseFactor(rigType int64) float64 {
 // 首条上报按 tunable 的兜底节拍起算：在那之前过了多久服务端无从得知。间隔为负
 // （时钟回拨）算 0 秒，超过上限只记上限，免得一条迟到上报把整段发热曲线一次烧完。
 func (w *fightReelWear) loadTickSecondsLocked(now time.Time, def, maxTick float64) float64 {
-	if w.lastLoadAt.IsZero() {
-		return def
+	tick := def
+	if !w.lastLoadAt.IsZero() {
+		tick = math.Max(0, math.Min(now.Sub(w.lastLoadAt).Seconds(), maxTick))
 	}
-	gap := now.Sub(w.lastLoadAt).Seconds()
-	if gap <= 0 {
-		return 0
+	if !w.protectionChangedAt.IsZero() {
+		tick = math.Min(tick, math.Max(0, now.Sub(w.protectionChangedAt).Seconds()))
 	}
-	if gap > maxTick {
-		return maxTick
-	}
-	return gap
+	return tick
 }
 
 // partCounts 把本竿账本折算成零件消耗事件：过载秒数与打滑次数直接沿用摩擦片那条账，
@@ -366,6 +365,13 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 		return
 	}
 	uid := ctx.Sess.Userid
+	s.overloadProtectionMu.RLock()
+	defer s.overloadProtectionMu.RUnlock()
+	protected, err := readOverloadProtection(ctx.Sess.pushCtx(), s.DB.SQL, uid)
+	if err != nil {
+		ctx.Log.Warn("读取满红不爆设置失败，忽略本次负载", "err", err)
+		return
+	}
 	st := s.fishingStateForRequest(ctx)
 	st.mu.Lock()
 	fish, gear, castActive, hooked, resolved, cached := st.Pending, st.GearGuid, st.CastActive, st.Hooked, st.Resolved, st.reelWear
@@ -374,7 +380,9 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 		return
 	}
 	if !cached.valid || cached.fishGUID != fish.FishGUID || cached.rodGUID != gear {
+		changedAt := cached.protectionChangedAt
 		cached = s.fightReelCache(s.dbCtx(), uid, gear, fish)
+		cached.protectionChangedAt = changedAt
 	}
 	if !cached.valid || cached.ratedKg <= 0 {
 		return
@@ -393,6 +401,11 @@ func (s *Server) recordFightReelLoad(ctx *Ctx) {
 	probeOn := s.tunableF("fight_load_probe", 1) != 0
 	tick = cached.loadTickSecondsLocked(now, tick, maxTick)
 	ticks, slipWear, burnWear, burnSecs, segSecs := s.fightReelTickWear(cached, tick)
+	if protected && cached.locked {
+		// Only suppress locked overload. Normal slip/use wear and previously
+		// incurred damage remain; keep sampling time so protected time is not billed.
+		burnWear, burnSecs, segSecs = 0, 0, 0
+	}
 
 	st.mu.Lock()
 	if st.Pending != fish || st.GearGuid != gear {

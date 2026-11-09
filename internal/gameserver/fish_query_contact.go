@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"rf4server/internal/proto"
-	"rf4server/internal/wiregen"
 )
 
 // The assistant is a virtual contact, not a player account or an administrator.
@@ -19,8 +18,8 @@ const fishQueryContactName = "查鱼助手"
 
 func hSocialMembers(ctx *Ctx) ([]byte, bool) {
 	s := ctx.Sess.Srv
-	ids := []uint32{uint32(fishQueryContactUID)}
-	seen := map[int64]bool{fishQueryContactUID: true}
+	ids := []uint32{uint32(fishQueryContactUID), uint32(gearAssistantUID)}
+	seen := map[int64]bool{fishQueryContactUID: true, gearAssistantUID: true}
 	s.mu.Lock()
 	for _, peer := range s.sessions {
 		if peer != nil && !peer.Closed() && peer.Userid > 0 && !seen[peer.Userid] {
@@ -29,22 +28,8 @@ func hSocialMembers(ctx *Ctx) ([]byte, bool) {
 		}
 	}
 	s.mu.Unlock()
-	sort.Slice(ids[1:], func(i, j int) bool { return ids[i+1] < ids[j+1] })
+	sort.Slice(ids[2:], func(i, j int) bool { return ids[i+2] < ids[j+2] })
 	return encodeSocialTree(ctx, proto.U32Arr(ids))
-}
-
-func fishQueryContactCard() *proto.Value {
-	return wiregen.MustMakeObj("dgbmlekfpbg", map[int]*proto.Value{
-		0: proto.U32(uint32(fishQueryContactUID)),
-		1: proto.StrVal(fishQueryContactName),
-		2: proto.Str(nil, 0x15),
-		3: proto.U32(0),
-		4: proto.U32(1),
-		5: proto.U32(0),
-		6: proto.Bool(true),
-		7: proto.U32(4),
-		8: proto.U32(0),
-	})
 }
 
 const fishQueryHelp = "发送：鱼名 [地图]\n例如：河鲈；河鲈 下通古斯卡河。\n鱼名支持拼音前缀，如“圆腹”或“yuanfu”；多种匹配直接取第一种。\n默认当前地图，最多推荐三组区域、鱼饵和钓法。仅支持已核对坐标的地图；按当前条件估算理论条/小时，不含客户端等待、非实际鱼获。\n查询一般很快；复杂地图请预留约3秒，结果通过个人消息返回。\n\n" +
@@ -200,11 +185,7 @@ func (s *Server) receiveFishQuery(ctx *Ctx, text string) ([]byte, bool) {
 		return nil, true
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(c, `INSERT INTO mail(uid,sender,kind,text,created_ts,read) VALUES(?,?,0,?,?,0)`, ctx.Sess.Userid, fishQueryContactUID, reply, float64(time.Now().Unix()))
-	var id int64
-	if err == nil {
-		id, err = res.LastInsertId()
-	}
+	id, err := insertContactReply(c, tx, ctx.Sess.Userid, fishQueryContactUID, reply)
 	if err == nil {
 		err = tx.Commit()
 	}
