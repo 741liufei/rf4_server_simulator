@@ -136,6 +136,12 @@ func (s *Server) RepairReelComponents(ctx context.Context) (int, error) {
 			continue
 		}
 		attrs := defAttrs(def)
+		fallbackParts := reelPartsNeedFallback(def)
+		if fallbackParts {
+			// 旧轮型没有嵌套六件时，借用同子类/同系列完整轮型的零件模板。
+			// 只补空槽，已有的合法改装件仍由下面的 selectedReelPart 分支保留。
+			attrs = s.reelMaterializationAttrs(ctx, def)
+		}
 		if attrs == nil {
 			continue
 		}
@@ -164,11 +170,11 @@ func (s *Server) RepairReelComponents(ctx context.Context) (int, error) {
 			case int64:
 				expectedCat = n
 			}
-			// 只重建已有零件槽：缺槽新增一旦用错 wire 类，客户端解码会抛
-			// InvalidCastException。电机槽（kind 81）已确认是
-			// kbpmmclfipg/1470，允许补建空槽；其余缺槽仍留空。
+			// 普通完整轮型只重建已有零件槽；缺槽新增一旦用错 wire 类，客户端解码
+			// 会抛 InvalidCastException。占位轮型没有核心六件，已由上面的完整
+			// 轮型模板确认 wire 类，允许补建核心零件槽；电机槽也继续允许补建。
 			if fields[idx].Val == nil || fields[idx].Val.Kind != proto.KindObj {
-				if expectedCat != 81 {
+				if expectedCat != 81 && !fallbackParts {
 					continue
 				}
 			}
