@@ -1776,8 +1776,20 @@ func (s *Server) scheduleBiteForHooked(sess *Session, st *FishState) {
 }
 
 func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked, resetCast bool) bool {
+	if sess == nil || st == nil {
+		return false
+	}
 	st.finishMu.Lock()
 	defer st.finishMu.Unlock()
+	st.mu.Lock()
+	gear := st.GearGuid
+	st.mu.Unlock()
+	if reelGUID := s.rigBrokenReelGUID(sess.pushCtx(), sess.Userid, gear); reelGUID != "" {
+		if s.log != nil {
+			s.log.Info("排咬钩被拒：渔线轮已损坏", "rod", shortGUID(gear), "reel", shortGUID(reelGUID))
+		}
+		return false
+	}
 	now := time.Now()
 	bonus := s.fishingBonus(sess.pushCtx(), sess.Userid, st.RigType, st.GearGuid)
 	st.mu.Lock()
@@ -2047,6 +2059,16 @@ func (s *Server) repushRodPendingTicket(uid int64, st *FishState, ticket fishing
 
 // pushPendingBite 只在隧道写成功后记为已推送，失败保留原鱼等待重推。
 func (s *Server) pushPendingBite(sess *Session, st *FishState, f *RolledFish, gear string, generation uint64) {
+	if sess == nil || st == nil || f == nil {
+		return
+	}
+	if reelGUID := s.rigBrokenReelGUID(sess.pushCtx(), sess.Userid, gear); reelGUID != "" {
+		if s.log != nil {
+			s.log.Info("14/14 被拒：渔线轮已损坏", "rod", shortGUID(gear),
+				"reel", shortGUID(reelGUID), "fish", shortGUID(f.FishGUID))
+		}
+		return
+	}
 	st.mu.Lock()
 	if generation != st.castGeneration || !st.CastActive || st.Resolved || st.Pending != f || st.GearGuid != gear || st.pushing != nil {
 		st.mu.Unlock()
