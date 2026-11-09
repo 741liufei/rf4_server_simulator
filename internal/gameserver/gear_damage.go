@@ -892,7 +892,7 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 }
 
 // damageReelSlip 处理"泄力打滑"：鱼力超过泄力档时，摩擦片打滑放线、发热磨损，
-// 制动力 csDragForce 线性衰减（基准 reelSlipWear=0.5%/次）→ 泄力失效。
+// 制动力 csDragForce 线性衰减（基准 reelSlipWear=0.01%/次）→ 泄力失效。
 // 摩擦片是"只能摩擦不能损坏"的消耗件，磨穿只泄力失效、不伤本体，换片即恢复。
 func (s *Server) damageReelSlip(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
 	return s.damageReelSlipWear(ctx, uid, rodGUID, reelGUID, reelSlipWear, nil)

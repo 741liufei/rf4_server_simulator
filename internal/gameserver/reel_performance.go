@@ -10,12 +10,37 @@ import (
 
 const reelDurabilityStep = 0.20
 
-// reelSlipWear 是每次泄力打滑对摩擦片的基准磨损量：泄力是消耗鱼体力的搏斗手段，
-// 打滑会让摩擦片发热、逐渐磨损（衰减 → 最大泄力下降），而不是一次性"损坏"。
-// 0.5% / 次是单次基准磨损，约 200 次打滑磨穿一整套摩擦片；实际单次还要乘
-// 超出泄力的比例与轮油系数。搏鱼结算不在这里逐次落库，而是整竿累计打滑与
-// 锁轮过载后一次写入（见 reel_fight_wear.go）。
-const reelSlipWear = 0.005
+// reelSlipWear 是旧直接磨损入口的基准值，等价于 29 档；生产搏鱼链路按
+// 当前 17/14 摩擦档位调用 reelSlipWearForSetting。正常低档位几乎不磨，
+// 只有玩家把泄力推到 25~29 才明显消耗摩擦片。
+const (
+	reelSlipWear    = 0.0001   // 29 档，0.01%/次
+	reelSlipWearLow = 0.000001 // 24 档及以下，0.0001%/次
+	reelSlipWearMax = 0.0001   // 29 档，0.01%/次
+)
+
+// reelSlipWearForSetting 把线上摩擦档位换算成单次打滑的摩擦片寿命损耗。
+// 线上 0~28 是 UI 1~29，29 是锁轮；锁轮另走发热曲线，这里的 29 值只作为
+// 曲线边界和诊断口径保留。
+func reelSlipWearForSetting(setting int64) float64 {
+	switch setting {
+	case 25:
+		return 0.000025 // 0.0025%
+	case 26:
+		return 0.00005 // 0.005%
+	case 27:
+		return 0.000075 // 0.0075%
+	case 28:
+		return 0.000095 // 0.0095%
+	case 29:
+		return reelSlipWearMax
+	default:
+		if setting < 25 {
+			return reelSlipWearLow
+		}
+		return reelSlipWearMax
+	}
+}
 
 const reelPartQualityAttr = "obifdihmcfn"
 

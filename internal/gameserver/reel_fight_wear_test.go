@@ -22,7 +22,7 @@ func newFightWearForTest(rated, drag, locked, pull, oilBurn, oilWear float64, lo
 	return fightReelWear{
 		valid: true, fishGUID: "fish0000000000000000000000000001",
 		rodGUID: "rod0000000000000000000000000000001", reelGUID: "reel000000000000000000000000000001",
-		locked: lockedState, dragKg: drag, lockedKg: locked, ratedKg: rated,
+		locked: lockedState, setting: 25, dragKg: drag, lockedKg: locked, ratedKg: rated,
 		oilWear: oilWear, oilBurn: oilBurn, pullKg: pull,
 	}
 }
@@ -35,19 +35,64 @@ func TestFightReelSlipOnlyWhenDragExceeded(t *testing.T) {
 	if ticks, slip, burn, _, _ := srv.fightReelTickWear(w, tick); ticks != 0 || slip != 0 || burn != 0 {
 		t.Fatalf("鱼力等于泄力不应磨损，实得 ticks=%d slip=%v burn=%v", ticks, slip, burn)
 	}
-	// 超泄力 1.5 倍：基准 0.5% 再乘超出比例。
+	// 超泄力只触发一次打滑；单次磨损固定为 0.01%，不按超出比例放大。
 	w = newFightWearForTest(7.7, 5, 9, 7.5, 1, 1, false)
 	ticks, slip, burn, _, _ := srv.fightReelTickWear(w, tick)
 	if ticks != 1 || burn != 0 {
 		t.Fatalf("超泄力应记一次打滑且不按曲线烧，实得 ticks=%d burn=%v", ticks, burn)
 	}
-	if want := reelSlipWear * 1.5; math.Abs(slip-want) > 1e-12 {
+	if want := reelSlipWearForSetting(25); math.Abs(slip-want) > 1e-12 {
 		t.Fatalf("单次打滑磨损应为 %.6f，实得 %.6f", want, slip)
 	}
-	// 超出比例封顶 2 倍：鱼再猛也不能一次磨穿一套片子。
+	// 鱼再猛也不能放大单次打滑磨损。
 	w = newFightWearForTest(7.7, 1, 9, 50, 1, 1, false)
-	if _, slip, _, _, _ := srv.fightReelTickWear(w, tick); math.Abs(slip-reelSlipWear*2) > 1e-12 {
-		t.Fatalf("打滑磨损应封顶 2 倍基准，实得 %.6f", slip)
+	if _, slip, _, _, _ := srv.fightReelTickWear(w, tick); math.Abs(slip-reelSlipWearForSetting(25)) > 1e-12 {
+		t.Fatalf("打滑磨损应固定为基准，实得 %.6f", slip)
+	}
+}
+
+func TestLongHugeFishSlipWearUsesDragSettingCurve(t *testing.T) {
+	srv := &Server{}
+	// 2026-11-09 实机：28.373kg 鲨鱼换算 46.53kgf，泄力档实际 19.04kg，
+	// 一条长搏斗累计 38 条 14/8。旧实现把超出比例再乘一次，摩擦片直接掉 34.2%。
+	w := newFightWearForTest(20.9, 19.04, 27.47, 46.53, 1, 0.9, false)
+	w.setting = 21
+	var total float64
+	for i := 0; i < 38; i++ {
+		ticks, slip, burn, _, _ := srv.fightReelTickWear(w, defaultReelLoadTickSeconds)
+		if ticks != 1 || burn != 0 {
+			t.Fatalf("第 %d 次应只记打滑，实得 ticks=%d burn=%v", i+1, ticks, burn)
+		}
+		total += slip
+	}
+	want := 38 * reelSlipWearLow * 0.9
+	if math.Abs(total-want) > 1e-12 {
+		t.Fatalf("38 次打滑应累计 %.4f，实得 %.4f", want, total)
+	}
+	if total > 0.005 {
+		t.Fatalf("38 次未锁轮打滑不应超过 0.5%%，实得 %.4f", total)
+	}
+}
+
+func TestFightReelSlipWearCurveByDragSetting(t *testing.T) {
+	srv := &Server{}
+	for _, tc := range []struct {
+		setting int64
+		want    float64
+	}{
+		{24, reelSlipWearLow},
+		{25, 0.000025},
+		{26, 0.00005},
+		{27, 0.000075},
+		{28, 0.000095},
+		{29, 0.0001},
+	} {
+		w := newFightWearForTest(7.7, 5, 9, 7.5, 1, 1, false)
+		w.setting = tc.setting
+		_, slip, _, _, _ := srv.fightReelTickWear(w, defaultReelLoadTickSeconds)
+		if math.Abs(slip-tc.want) > 1e-12 {
+			t.Fatalf("%d 档单次磨损=%v，期望 %v", tc.setting, slip, tc.want)
+		}
 	}
 }
 
@@ -128,7 +173,8 @@ func TestFightReelOilLowersWearAndExtendsBurnTime(t *testing.T) {
 	if !(best < normal && normal < worst) {
 		t.Fatalf("轮油应改变打滑磨损：最佳 %.6f 常规 %.6f 最差 %.6f", best, normal, worst)
 	}
-	if math.Abs(best-reelSlipWear*1.5*0.8) > 1e-12 || math.Abs(worst-reelSlipWear*1.5*1.2) > 1e-12 {
+	baseWear := reelSlipWearForSetting(25)
+	if math.Abs(best-baseWear*0.8) > 1e-12 || math.Abs(worst-baseWear*1.2) > 1e-12 {
 		t.Fatalf("轮油系数应被收进 0.8~1.2，实得 best=%.6f worst=%.6f", best, worst)
 	}
 	// 锁轮烧穿时长：油越好越长，油自身干涸则保护打折。

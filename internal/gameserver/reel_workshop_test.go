@@ -322,9 +322,10 @@ func TestReelSlipDegradesFrictionWasherByStep(t *testing.T) {
 		t.Fatal(err)
 	}
 	fresh, _ := db.GetItemByGUID(ctx, reel.GUID)
-	// 本体那一格是零件综合：磨掉 0.5% 摩擦片，外面最多随它的权重降 0.125%，
+	// 本体那一格是零件综合：磨掉单次基准的摩擦片，外面只随它的权重微降，
 	// 不会把本体一次性打掉；但它确实会动，不再是“磨件不伤本体”。
-	if fresh.Durability >= 1 || fresh.Durability < 1-reelBodyWeightWasher*reelSlipWear-1e-9 {
+	wantBody := 1 - reelBodyWeightWasher*reelSlipWear
+	if math.Abs(fresh.Durability-wantBody) > 1e-6 {
 		t.Fatalf("首次打滑后本体耐久=%f，应只随摩擦片权重微降", fresh.Durability)
 	}
 	after, perr := srv.syncReelPerformance(ctx, fresh)
@@ -333,7 +334,7 @@ func TestReelSlipDegradesFrictionWasherByStep(t *testing.T) {
 	}
 	want := before.BaseDragKg * (1 - reelSlipWear)
 	if math.Abs(after.BaseDragKg-want) > 0.01 {
-		t.Fatalf("摩擦片制动力应按 2%% 衰减：before=%v after=%v want=%v", before.BaseDragKg, after.BaseDragKg, want)
+		t.Fatalf("摩擦片制动力应按单次基准衰减：before=%v after=%v want=%v", before.BaseDragKg, after.BaseDragKg, want)
 	}
 }
 

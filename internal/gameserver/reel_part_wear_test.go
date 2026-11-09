@@ -2,7 +2,8 @@ package gameserver
 
 // 渔轮零件耐久消耗与本体耐久聚合：spec §5/§6/§7。
 // 摩擦片是烧件（只走泄力打滑与锁轮过载），其余五件是寿命件（随使用时间缓慢降），
-// 消耗速度刻意拉开 25 倍以上；本体那一格必须等于六件零件的加权综合。
+// 摩擦片由打滑与锁轮过载曲线主导，其余五件按使用时间缓慢消耗；
+// 本体那一格必须等于六件零件的加权综合。
 
 import (
 	"context"
@@ -36,10 +37,10 @@ func TestReelPartWearRatesMatchSpecCalibration(t *testing.T) {
 	if got := reelPartWearFor(reelPartCatWasher, 100, typical); got != 0 {
 		t.Fatalf("摩擦片不应参与每竿基准，实得 %v", got)
 	}
-	// 摩擦片比最慢的结构件快 25 倍以上：日常成本必须集中在它身上。
-	washerOneRod := 10 * reelSlipWear
-	if slowest := reelPartWearFor(reelPartCatSpool, 100, typical); washerOneRod/slowest < 25 {
-		t.Fatalf("摩擦片相对线杯只快 %.1f 倍，不够集中", washerOneRod/slowest)
+	// 低档位正常使用几乎不磨；29 档仍应明显快于结构件，形成高档泄力的成本。
+	washerOneRod := 10 * reelSlipWearForSetting(29)
+	if slowest := reelPartWearFor(reelPartCatSpool, 100, typical); washerOneRod/slowest < 4 {
+		t.Fatalf("29 档摩擦片相对线杯只快 %.1f 倍，高负荷成本不够明显", washerOneRod/slowest)
 	}
 	// 品质寿命系数：低档货明显更不耐用。
 	for quality, want := range map[float64]float64{0: 0.35, 15: 0.3625, 40: 0.55, 100: 1.0} {
