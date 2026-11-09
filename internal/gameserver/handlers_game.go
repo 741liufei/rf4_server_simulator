@@ -1370,7 +1370,7 @@ func finishNibbleHook(ctx *Ctx, st *FishState, pending *RolledFish, gear string,
 			ctx.Log.Warn("嘬饵扣饵失败", "fish", pending.FishGUID, "err", err)
 		}
 		// 14/11 的客户端语义是"鱼实体已进搏鱼态"，服务端单方面否决必须让客户端
-		// 知情：推送鱼离场（命令 14 非 2/14 子号 = 鱼离场分支，args[1]=鱼 GUID），
+		// 知情：推送鱼离场（14/15 = 鱼离场分支，args[1]=鱼 GUID），
 		// 客户端走与自然脱钩相同的离场状态机放鱼游走，否则它会一直搏到岸边凭空消失。
 		// 客户端尚未接受鱼实体（此前 f0=3/5 拒收）时这是一次无效查找，无副作用。
 		if bound := ctx.Sess.Push14_15(gear, pending.FishGUID); bound {

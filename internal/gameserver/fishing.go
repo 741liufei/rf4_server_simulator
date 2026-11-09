@@ -1733,7 +1733,7 @@ func (s *Session) Push14_14(f *RolledFish, hookGUID, gearGuid string) bool {
 // marineHookConfirm 海钓额外挂钩推送开关，tunables 键 marine_hook_confirm。
 // 真服成功抓包只有 14/14 -> 14/11 -> 14/8，没有 14/15 或中钩时的 4/22。
 // ⚠️ 客户端实证（gdpondeemjf.pagenilfpij，见 specs/changes/nibble-veto-fish-leave）：
-// 命令 14 的非 2/14 子号一律是"鱼离场"分支——开启本开关推送的 14/15 会把
+// 命令 14/15 是"鱼离场"分支——开启本开关推送的 14/15 会把
 // 刚上钩的海钓鱼直接放走，而不是"确认挂钩"。保持默认关闭。
 func (s *Session) marineHookConfirm() bool {
 	return s.Srv.tunableF("marine_hook_confirm", 0) != 0
@@ -1747,7 +1747,7 @@ func (s *Session) marineHookItemSync() bool {
 }
 
 // Push14_15 鱼离场推送。
-// 客户端契约：命令 14 的非 2/14 子号统一进"鱼离场"分支（gdpondeemjf 分支C），
+// 客户端契约：命令 14/15 进入"鱼离场"分支（gdpondeemjf 分支C），
 // args("524")[钓组 GUID, 鱼 GUID] 的 args[1] 被当鱼 GUID，把该鱼实体状态
 // 1(咬口)/2(搏鱼) 强制切到 4(离场)——与自然脱钩同一条状态机，随后客户端回
 // 14/12 f0=5 并清竿→鱼映射。消费方：嘬饵否决（finishNibbleHook）放鱼游走。

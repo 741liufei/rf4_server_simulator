@@ -290,8 +290,8 @@ func TestMarineNibbleDoesNotEnterHookedState(t *testing.T) {
 	}
 }
 
-// 嘬饵否决必须让客户端知情：否决时推送 14/15[竿,鱼]（客户端把命令 14 的
-// 非 2/14 子号统一当"鱼离场"，鱼走自然脱钩状态机游走）。否则客户端会蒙在
+// 嘬饵否决必须让客户端知情：否决时推送 14/15[竿,鱼]（客户端把 14/15
+// 当"鱼离场"，鱼走自然脱钩状态机游走）。否则客户端会蒙在
 // 鼓里继续搏鱼，拖到岸边收竿 14/4 落空，鱼凭空消失（2026-11-08 23:24/23:26 实证）。
 func TestNibbleVetoPushesFishLeave(t *testing.T) {
 	s, _ := newRigTestServer(t)

@@ -34,8 +34,8 @@ kirzah 河会话实证两次：dace 130g（23:24:48 否决 → 23:25:01 收竿�
   `Session.Push14_15(gear, pending.FishGUID)`；nibble 状态转移、扣饵、重排时序不变。
 - `hFishingLeft` 的 f0=3/5 分支：`st.Pending == nil` 时按良性回执早退（只记日志）；
   `Pending != nil` 的"拒收重推"语义原样保留。
-- `Push14_15`/`marineHookConfirm` 注释纠偏为客户端实证语义（14/15 = 鱼离场推送，
-  客户端把命令 14 的所有非 2/14 子号都路由到鱼离场分支）。
+- `Push14_15`/`marineHookConfirm` 注释纠偏为客户端实证语义（14/15 = 鱼离场推送；
+  命令 14 分发器还处理 2/14，其它未定义子号会报错）。
 - 数据与迁移：无表变更、无迁移。
 - 兼容：推送形状与既有 `Push14_15` 完全一致（契约校验已覆盖），客户端版本基线
   4.0.25034 不受影响；回滚 = revert 两处代码改动，无状态残留。
@@ -65,15 +65,15 @@ kirzah 河会话实证两次：dace 130g（23:24:48 否决 → 23:25:01 收竿�
 
 ## Further Notes
 
-- `[事实]` 客户端把命令 14 的非 2/14 子号统一路由到"鱼离场"分支：
+- `[事实]` 客户端命令 14 分发器显式处理子号 2、14、15；其中 14/15 进入"鱼离场"分支：
   `gdpondeemjf.pagenilfpij`（gdpondeemjf.cs:22-103），`iebkfdalalb.ncnnmbljdmd`
   取 `args[1]` 为鱼 GUID → `deghjmihlcf.aglphhgicmi` → `Fish.lennnlocboa()`
-  （Fish.cs:2046-2054，状态 1/2 → 4）。本次会话已人工复读核对。
+  （Fish.cs:2046-2054，状态 1/2 → 4）。本次会话已人工复读核对；其它子号会抛
+  `Unknown command`，不能概括为统一的离场语义。
 - `[事实]` 鱼进入离场状态机后回 14/12 f0=5 并清竿→鱼映射：
   `FishingSet.hmkikjmbnop`（FishingSet.cs:5733-5754）、`hnffdebalii.geoplfemoon`
   （hnffdebalii.cs:58-79）、`deghjmihlcf.hiahggbbadk`（deghjmihlcf.cs:1501-1516）。
 - `[事实]` 14/11 客户端语义"鱼实体进搏鱼态时发送"：docs/analysis-fishing-chain-2026-11-07.md:22。
-- `[推断]` 模拟器旧注释"14/15=海钓挂钩确认"为误诊：客户端只有一个命令 14 分发器，
-  海钓与非海钓同走分支C；`marine_hook_confirm` 实测验证不在本改动范围。
-- `[假设]` 分支C对"反编译 else 结构"的解读（其余所有子号共用该分支）基于 dump 中
-  不存在第四个分支体；上线后以实测 14/12 f0=5 回包确认。
+- `[事实]` 模拟器旧注释"14/15=海钓挂钩确认"为误诊：14/15 在统一命令 14 分发器中走
+  分支C，海钓与非海钓均适用；`marine_hook_confirm` 实测验证不在本改动范围。
+- `[未验证]` 仍需实机确认 14/15 后客户端回 14/12 f0=5 且新咬钩 timer 不受影响。
