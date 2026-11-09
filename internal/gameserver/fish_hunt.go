@@ -19,6 +19,7 @@ const (
 const (
 	fishHuntModeFreshwater = iota
 	fishHuntModeMarine
+	fishHuntModeLure
 )
 
 const (
@@ -221,6 +222,9 @@ func (s *Server) fishHuntReadiness(ctx context.Context, key string, c fishRollCo
 	if marineHuntContext(c) {
 		return s.fishMarineHuntReadiness(ctx, key, c, h)
 	}
+	if rigTypeLureFamily[c.rigType] {
+		return s.fishLureHuntReadiness(ctx, key, c, h)
+	}
 	return s.fishFreshwaterHuntReadiness(ctx, key, c, h)
 }
 
@@ -301,6 +305,61 @@ func (s *Server) fishMarineHuntReadiness(ctx context.Context, key string, c fish
 		out.Stage = fishHuntGather
 	}
 	return out
+}
+
+// fishLureHuntReadiness 是路亚族独立的大鱼狩猎进度。路亚不靠窝料把鱼
+// 聚过来，而是靠持续搜索、收线动作和拟饵与水层/鱼种的匹配建立机会。
+// 因此这里不读取 groundbaitSpotAt；窝料只继续影响非路亚钓法。
+func (s *Server) fishLureHuntReadiness(ctx context.Context, key string, c fishRollContext, h *fishHuntState) fishHuntReadiness {
+	out := fishHuntReadiness{Stage: fishHuntDaily}
+	if h == nil || s.DB == nil {
+		return out
+	}
+	if h.Mode != fishHuntModeLure {
+		h.ActiveSeconds, h.ValidBites, h.Pity = 0, 0, 0
+		h.BigMiss, h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0, 0
+	}
+	h.Mode = fishHuntModeLure
+	s.huntTouch(h)
+
+	out.P = .65*(1-math.Exp(-h.ActiveSeconds/720)) + .35*(1-math.Exp(-float64(h.ValidBites)/12))
+	out.P = groundbaitClamp(out.P, 0, 1)
+	env := s.fishBiteEnvironmentWeight(ctx, key, c)
+	eco := groundbaitClamp((env-.35)/1.65, 0, 1)
+	out.E = groundbaitClamp(.70*eco+.30*.55, 0, 1)
+	water := fishWaterConditionsFor(s.cachedFishEcology(ctx, c, key), c)
+	lure := groundbaitClamp((s.fishLureWeight(s.cachedFishEcology(ctx, c, key), c, water)-.45)/1.05, 0, 1)
+	action := lureHuntActionQuality(c)
+	out.G = groundbaitClamp(.70*lure+.20*action+.10*fishMotionConditionWeight(
+		s.cachedFishEcology(ctx, c, key), c, water), 0, 1)
+	out.A = groundbaitClamp(.28+.55*out.P+.12*lure+.05*action, 0, 1)
+	// 路亚的 Q 是“搜索质量”，不是窝料发窝质量：持续搜索、拟饵匹配和
+	// 环境适配共同决定是否进入聚鱼/巨物阶段。
+	out.Q = groundbaitClamp(.45*out.A+.25*out.E+.30*out.G, 0, 1)
+	out.Comp = h.CompFish > 0 && float64(time.Now().Unix()) <= h.CompUntil
+
+	switch {
+	case out.A < .30 || out.G < .18:
+		out.Stage = fishHuntDaily
+	case out.A >= .68 && out.Q >= .58:
+		out.Stage = fishHuntGiant
+	case out.A >= .50 && out.Q >= .42:
+		out.Stage = fishHuntActive
+	default:
+		out.Stage = fishHuntGather
+	}
+	return out
+}
+
+func lureHuntActionQuality(c fishRollContext) float64 {
+	if c.lureAction == "" {
+		return .45
+	}
+	if c.runtime != nil && c.runtime.lureKnown {
+		weight := lureActionTypeWeight(c.runtime.lure.Type, c.lureAction)
+		return groundbaitClamp((weight-.80)/.54, 0, 1)
+	}
+	return .55
 }
 
 // hookScore 把实际钩号与钩体长度合成为一个连续值；0=小钩，0.5=中钩，1=大钩。
@@ -395,6 +454,11 @@ func (s *Server) fishFreshwaterHuntReadiness(ctx context.Context, key string, c 
 	out := fishHuntReadiness{Stage: fishHuntDaily}
 	if h == nil || s.DB == nil || !s.groundbaitEnabled() {
 		return out
+	}
+	// 从路亚搜索切回窝料钓法时，不把路亚的搜索时长直接继承成窝料发窝度。
+	if h.Mode == fishHuntModeLure {
+		h.ActiveSeconds, h.ValidBites, h.Pity = 0, 0, 0
+		h.BigMiss, h.CompFish, h.CompGrade, h.CompUntil = 0, 0, 0, 0
 	}
 	h.Mode = fishHuntModeFreshwater
 	s.huntTouch(h)

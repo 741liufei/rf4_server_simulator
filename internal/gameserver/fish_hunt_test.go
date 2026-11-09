@@ -490,6 +490,78 @@ func TestFishHuntReadinessRequiresFishMouthMatch(t *testing.T) {
 	}
 }
 
+func TestLureHuntBuildsBigFishProgressWithoutGroundbait(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	const (
+		uid  = int64(1000009)
+		loc  = "lure-hunt-test"
+		spot = uint64(7)
+	)
+	c := fishRollContext{
+		uid: uid, loc: loc, x: 300, z: 300, hasPos: true, spot: spot,
+		rigType: 5, lureAction: "steady", lureLayer: .45,
+		now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), cache: newFishingRollCache(),
+		weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 20, previousAirTemp: 20, wind: 2},
+	}
+	h := &fishHuntState{
+		UID: uid, Loc: loc, Spot: spot, Mode: fishHuntModeLure,
+		ActiveSeconds: 1800, ValidBites: 30,
+	}
+	r := s.fishHuntReadiness(ctx, "perch", c, h)
+	if r.Stage != fishHuntGiant {
+		t.Fatalf("路亚持续搜索不应依赖窝料，stage=%s A=%.2f E=%.2f G=%.2f Q=%.2f",
+			fishHuntStageName(r.Stage), r.A, r.E, r.G, r.Q)
+	}
+	if h.Mode != fishHuntModeLure {
+		t.Fatalf("路亚应记录独立狩猎模式: %+v", h)
+	}
+}
+
+func TestLureHuntDoesNotStartAtGiantWithoutProgress(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	const (
+		uid  = int64(1000010)
+		loc  = "lure-hunt-fresh"
+		spot = uint64(7)
+	)
+	c := fishRollContext{
+		uid: uid, loc: loc, x: 300, z: 300, hasPos: true, spot: spot,
+		rigType: 5, lureAction: "steady", lureLayer: .45,
+		now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), cache: newFishingRollCache(),
+		weather: fishingWeather{known: true, kind: fishingWeatherClear, airTemp: 20, previousAirTemp: 20, wind: 2},
+	}
+	h := &fishHuntState{UID: uid, Loc: loc, Spot: spot, Mode: fishHuntModeLure}
+	r := s.fishHuntReadiness(ctx, "perch", c, h)
+	if r.Stage == fishHuntGiant {
+		t.Fatalf("刚换路亚不应直接进入巨物阶段: A=%.2f G=%.2f Q=%.2f", r.A, r.G, r.Q)
+	}
+}
+
+func TestSwitchingFromGroundbaitToLureResetsSharedProgress(t *testing.T) {
+	s, _ := newRigTestServer(t)
+	ctx := t.Context()
+	const (
+		uid  = int64(1000011)
+		loc  = "lure-mode-switch"
+		spot = uint64(7)
+	)
+	c := fishRollContext{
+		uid: uid, loc: loc, x: 300, z: 300, hasPos: true, spot: spot,
+		rigType: 5, lureAction: "steady", lureLayer: .45,
+		now: time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC), cache: newFishingRollCache(),
+	}
+	h := &fishHuntState{
+		UID: uid, Loc: loc, Spot: spot, Mode: fishHuntModeFreshwater,
+		ActiveSeconds: 1800, ValidBites: 30,
+	}
+	s.fishHuntReadiness(ctx, "perch", c, h)
+	if h.Mode != fishHuntModeLure || h.ActiveSeconds != 0 || h.ValidBites != 0 {
+		t.Fatalf("切到路亚时不能继承窝料发窝进度: %+v", h)
+	}
+}
+
 func TestMarineHuntUsesSonarZoneWithoutGroundbait(t *testing.T) {
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
