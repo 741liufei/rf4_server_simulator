@@ -5,6 +5,7 @@ package gameserver
 // - 熟练度：技能大类 4（捕获鱼饵）
 // - 产物：普通 item 行，复用现有可堆叠物品机制
 import (
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -147,11 +148,26 @@ func (s *Server) tryBaitDig(ctx *Ctx) ([]byte, bool) {
 		return s.replyBaitDigFailed(ctx, "饵数量写入失败: "+err.Error()), true
 	}
 
+	// 体力参数必须在开经济事务之后不再查库，故这里先取（tunableF 有 2 秒装载超时）。
+	condParams := s.conditionParamsForUID(cctx, ctx.Sess.Userid)
+	condCost := s.baitDigEnergyCost()
+
 	tx, err := beginEconomyTx(cctx, s.DB)
 	if err != nil {
 		return s.replyBaitDigFailed(ctx, "挖饵事务开启失败: "+err.Error()), true
 	}
 	defer func() { _ = tx.Rollback() }()
+	// 体力扣减与饵入包同事务：任一侧失败整体回滚，不会出现"白挖"或"白扣"。
+	// conditionParams/消耗量必须在 beginEconomyTx 之前取好（见 player_condition_energy.go）。
+	spent, err := spendEnergyTx(cctx, tx, ctx.Sess.Userid, condParams, condCost)
+	if err != nil {
+		if errors.Is(err, errEnergyNotEnough) {
+			ctx.Log.Info("9/3 挖饵被拒：精力不足", "tool", tool.ItemID,
+				"cost", condCost, "enabled", condParams.Enabled)
+			return s.replyBaitDigFailed(ctx, "精力不足以挖饵"), true
+		}
+		return s.replyBaitDigFailed(ctx, "挖饵精力结算失败: "+err.Error()), true
+	}
 	row, merged, err := grantPreparedItemTx(cctx, tx, prepared, true)
 	if err != nil {
 		return s.replyBaitDigFailed(ctx, "饵入包失败: "+err.Error()), true
@@ -190,11 +206,16 @@ func (s *Server) tryBaitDig(ctx *Ctx) ([]byte, bool) {
 		return nil, true
 	}
 	ctx.Log.Info("9/3 挖饵", "tool", tool.ItemID, "bait", baitKey, "qty", qty,
-		"stack", stackCountFromRow(row), "mastery", fmt.Sprintf("%.1f->%.1f", mastery, after))
+		"stack", stackCountFromRow(row), "mastery", fmt.Sprintf("%.1f->%.1f", mastery, after),
+		"energy_spent", spent)
 	ctx.AfterResponse(func() {
 		ctx.Sess.Push2_4SkillTree("挖饵 " + baitKey)
 		ctx.Sess.Push(4, 22, proto.Args(proto.S("61"), tree))
 	})
+	if spent > 0 {
+		// 体力条不在 4/22 里，扣完立刻补推一条 2/2，否则要等下一拍保活才看得见。
+		ctx.AfterResponse(func() { pushKeepalive(ctx.Sess) })
+	}
 	s.evaluateAchievements(ctx, achievementEvent{Kind: evBaitDug, BaitKey: baitKey})
 	return body, true
 }

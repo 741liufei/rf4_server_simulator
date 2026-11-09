@@ -1125,12 +1125,28 @@ func (s *Server) digBaitWithShovel(ctx *Ctx, shovel *store.Item) ([]byte, bool) 
 		prepared = append(prepared, it)
 	}
 
+	// 体力参数必须在开经济事务之前取好（tunableF 首次装载有 2 秒查询超时）。
+	condParams := s.conditionParamsForUID(cctx, ctx.Sess.Userid)
+	condCost := s.baitDigEnergyCost()
+
 	tx, err := beginEconomyTx(cctx, s.DB)
 	if err != nil {
 		ctx.Log.Warn("9/3 挖饵开启事务失败", "err", err)
 		return s.replyCraftResult(ctx, false, nil, nil, nil)
 	}
 	defer func() { _ = tx.Rollback() }()
+
+	// 与饵入包同事务：体力不足直接回滚，不会出现"给了饵没扣体力"。
+	spent, err := spendEnergyTx(cctx, tx, ctx.Sess.Userid, condParams, condCost)
+	if err != nil {
+		if errors.Is(err, errEnergyNotEnough) {
+			ctx.Log.Info("9/3 铲子挖饵被拒：精力不足", "shovel", shortGUID(shovel.GUID),
+				"cost", condCost, "enabled", condParams.Enabled)
+		} else {
+			ctx.Log.Warn("9/3 挖饵精力结算失败", "err", err)
+		}
+		return s.replyCraftResult(ctx, false, nil, nil, nil)
+	}
 
 	granted := make([]*store.Item, 0, len(prepared))
 	parts := make([]string, 0, len(loot))
@@ -1174,7 +1190,11 @@ func (s *Server) digBaitWithShovel(ctx *Ctx, shovel *store.Item) ([]byte, bool) 
 	})
 	skillTree := s.buildSingleSkill312(cctx, ctx.Sess.Userid, baitCatchSkillCat)
 	ctx.Log.Info("9/3 铲子挖饵", "shovel", shortGUID(shovel.GUID), "types", len(loot),
-		"items", strings.Join(parts, ","), "skill_gain", skillGain)
+		"items", strings.Join(parts, ","), "skill_gain", skillGain, "energy_spent", spent)
+	if spent > 0 {
+		// 体力条不在 9/3 应答里，扣完立刻补推一条 2/2。
+		ctx.AfterResponse(func() { pushKeepalive(ctx.Sess) })
+	}
 	return s.replyCraftResultWithSkill(ctx, true, produced, produced, nil, progress, skillTree)
 }
 

@@ -52,14 +52,18 @@ func drinkRuleForItem(itemID string) (drinkRule, bool) {
 	return drinkRuleForCategory(category)
 }
 
-// consumableRestoreForItem 食品/热饮的恢复分类（4/8 饮用通道）：
-// 咖啡→精力、茶→舒适度、可可→饱食+少量精力、其余食品→饱食度。
+// consumableRestoreForItem 食品/热饮/药品的恢复分类（4/8 使用通道）：
+// 咖啡→精力、茶→舒适度、可可→饱食+少量精力、药品→健康、其余食品→饱食度。
 // 分类映射来自维护者实测经验与官方游戏提示（热茶提高舒适度等），
 // 见 specs/changes/player-condition-core Further Notes；恢复量为 tunables
 // 标定值，非官服常量。白名单只收可直接食用的成品；烹饪材料
 // （面粉/糖/油/盐/调料/生米面/香精等）与酒类（走经验加成规则）不进表。
 func consumableRestoreForItem(itemID string) (string, bool) {
 	switch itemID {
+	// 药品：静态库里品类 26 且 fopbhlmkcpe=3 的只有 Sorbimax 一种
+	//（`pill_pack`，154 食物 / 92 饮品 / 1 药品），按品类标记收录而非按名称猜。
+	case "pill_pack":
+		return "medicine", true
 	// 咖啡：现磨杯/罐装/瓶装/保温瓶。
 	case "big_coffee", "big_coffee_can", "big_coffee_can25", "big_coffee_can26",
 		"big_coffee_can_g", "fcb_coffee_can", "fcb_coffee_can2", "brand_coffe",
