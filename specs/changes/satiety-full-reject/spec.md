@@ -19,7 +19,7 @@ Status: done
 
 - `internal/gameserver/drink_use.go` 新增常量 `foodSatietyFullThreshold = 0.995`：用略低于 1.0 的阈值，避免浮点累加尾差导致“永远差一点点”。
 - 检查点放在事务内、`consumeItemQtyTx` 之前，直接读 `player_condition.secondary`（该行不存在时按“未饱”处理，交给后续 `applyConsumableRestoreTx` 建行）。
-- 仅在 `isConsumable`（食品/热饮分类命中 `consumableRestoreForItem`）时生效；酒类（`isDrink`）不拦。
+- 仅在 `isConsumable`（4/8 通道中会恢复状态的食品、热饮、可可和药品）时生效；酒类（`isDrink`）不拦。
 - 拒绝走 `fail("你已经吃饱了")` 并额外 `pushSystemChat("你已经吃饱了，吃不下更多食物")`——客户端没有可用的 `kOperationResult_PlayerFull` 数值（IL2CPP metadata 被精简），只能用聊天通道给可见反馈。
 
 ## Testing Decisions

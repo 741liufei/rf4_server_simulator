@@ -117,7 +117,7 @@ func TestMedicineUseRestoresHealth(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.DB.UpsertPlayerCondition(ctx0, store.PlayerCondition{
-		UID: uid, Primary: 0.85, Secondary: 1.0, Comfort: 1.0, LuckPenalty: 0.60,
+		UID: uid, Primary: 0.85, Secondary: 0.50, Comfort: 1.0, LuckPenalty: 0.60,
 		UpdatedTS: float64(time.Now().Unix()) + 3600,
 	}); err != nil {
 		t.Fatal(err)
@@ -136,7 +136,7 @@ func TestMedicineUseRestoresHealth(t *testing.T) {
 	if math.Abs(row.LuckPenalty-0.10) > 1e-9 {
 		t.Fatalf("药品应回健康 0.60-0.50: %v", row.LuckPenalty)
 	}
-	if row.Primary != 0.85 || row.Secondary != 1.0 || row.Comfort != 1.0 {
+	if row.Primary != 0.85 || row.Secondary != 0.50 || row.Comfort != 1.0 {
 		t.Fatalf("药品不应改动其它状态条: %+v", row)
 	}
 	if len(ctx.afterResponse) == 0 {
@@ -154,7 +154,7 @@ func TestMedicineUseHealthFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := s.DB.UpsertPlayerCondition(ctx0, store.PlayerCondition{
-		UID: uid, Primary: 0.85, Secondary: 1.0, Comfort: 1.0, LuckPenalty: 0.10,
+		UID: uid, Primary: 0.85, Secondary: 0.50, Comfort: 1.0, LuckPenalty: 0.10,
 		UpdatedTS: float64(time.Now().Unix()) + 3600,
 	}); err != nil {
 		t.Fatal(err)
