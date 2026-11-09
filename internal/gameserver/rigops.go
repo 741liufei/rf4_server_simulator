@@ -300,7 +300,12 @@ func (s *Server) dedupeRigComponents(ctx context.Context, uid int64, parentGUID 
 }
 
 // extraIsTargetIndex 判断组件当前 Extra 是否已是钓组模板声明的合法槽位索引。
+// 海钓钩位的 1000+ 客户端槽位索引不属于模板，但同样是客户端认定的有效槽位，
+// 必须一并认作合法，否则 rigSetTarget 会把它当成无效索引走「找空闲序号」分支。
 func extraIsTargetIndex(category, extra, rigType int64) bool {
+	if category == catHook && extra >= 1000 {
+		return true
+	}
 	for _, idx := range slotIndicesFor(rigType, category) {
 		if extra == idx {
 			return true
@@ -430,6 +435,14 @@ func canonicalIndexForOrdinal(category, clientIndex, rigType, ordinal int64) int
 			return 351
 		}
 		return 350
+	}
+	// 客户端对海钓钩位使用独立的 1000+ 槽位命名空间（实机日志实测
+	// 1001/1005/1009）。它们不属于 rigSlotTemplates 里声明的 250/251/252，
+	// 但客户端按自己的索引渲染：改写成模板首索引会让客户端在自己的槽位上
+	// 找不到组件，整组判无效（槽位变灰、钩装不上）。这类索引必须原样保留。
+	// 只有钩品类出现该命名空间，其他品类仍走模板规范化。
+	if category == catHook && clientIndex >= 1000 {
+		return clientIndex
 	}
 	if rigType != 0 {
 		idxs := slotIndicesFor(rigType, category)
@@ -1544,6 +1557,11 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 			}
 		}
 	}
+	// 海钓钩位的 1000+ 客户端槽位索引是独立命名空间，不受模板声明的
+	// 槽位个数限制：模板只声明了 250 一个钩位，但倒钓臂展开后客户端会
+	// 用 1001/1005/1009 等索引装多个钩。若沿用 len(idxs) 当上限，
+	// 第二件就会被判「无空闲槽」而顶掉第一件（三个钩位都装不上）。
+	highIndexHook := slot == catHook && extra >= 1000
 	if extra != 0 {
 		// 同一规范索引已装：走替换，保留其序号与原组件 GUID。
 		for key, c := range comps {
@@ -1555,7 +1573,7 @@ func (s *Server) rigSetTarget(ctx context.Context, parentGUID string, slot int64
 			}
 		}
 		// 空闲槽位：写入未占用的序号，实际索引仍由 extra 决定。
-		if extraIsTargetIndex(slot, extra, rt) && count < limit {
+		if (highIndexHook || extraIsTargetIndex(slot, extra, rt)) && (highIndexHook || count < limit) {
 			return freeOrdinal(), ""
 		}
 	}
