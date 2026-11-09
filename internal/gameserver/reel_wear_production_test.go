@@ -64,7 +64,7 @@ func TestInvalidBreakReportLeavesReelUntouched(t *testing.T) {
 
 	// 本竿已经搏过一段：账上有打滑磨损，还没落库。
 	st.mu.Lock()
-	st.reelWear.markRodUsedLocked(rodGUID)
+	st.reelWear.markRodUsedLocked(rodGUID, 1)
 	st.reelWear.SlipWear = 0.005
 	st.reelWear.SlipTicks = 1
 	st.mu.Unlock()
