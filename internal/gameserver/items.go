@@ -345,6 +345,11 @@ func (s *Server) ItemToTree(ctx context.Context, it *store.Item) (*proto.Value, 
 // 只填充空槽，已有子对象的槽保持不变。
 func (s *Server) materializeInto(ctx context.Context, class string, def *store.ItemDef, obj *proto.Value, guid string, workmanship, durability float64) {
 	attrs := defAttrs(def)
+	if class == "dgjinoebdop" {
+		// 部分旧轮型只有顶层定义，没有嵌套六件；用同系列完整轮型做只读零件模板，
+		// 否则这些轮子会绕过摩擦片、轴承、齿轮和轮油磨损。
+		attrs = s.reelMaterializationAttrs(ctx, def)
+	}
 	if attrs == nil {
 		return
 	}
