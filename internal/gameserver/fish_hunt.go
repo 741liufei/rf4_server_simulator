@@ -358,7 +358,7 @@ func hookSolidHold(weightG int64, spec gearPhysicsSpec) (solid, hold float64) {
 	return
 }
 
-func applyHookBiteQuality(f *RolledFish, spec gearPhysicsSpec) {
+func (s *Server) applyHookBiteQuality(f *RolledFish, spec gearPhysicsSpec) {
 	if f == nil {
 		return
 	}
@@ -370,6 +370,9 @@ func applyHookBiteQuality(f *RolledFish, spec gearPhysicsSpec) {
 		return
 	}
 	solid, hold := hookSolidHold(f.WeightG, spec)
+	if p, ok := s.hookBiteProfileFor(spec.HookItemID); ok {
+		solid, hold = applyHookBiteProfile(f.WeightG, spec, p, solid, hold)
+	}
 	f.HookHoldP = hold
 	if rand.Float64() > solid {
 		f.BiteQuality = "nibble"

@@ -946,7 +946,7 @@ func (s *Server) rollFishFromDBWithRules(loc, bait string, gearCapKg float64, bo
 			f.HuntStage = huntReady.Stage
 			f.HuntStageKnown = true
 		}
-		applyHookBiteQuality(f, c.hook)
+		s.applyHookBiteQuality(f, c.hook)
 		if baitHit {
 			s.log.Info("roll_from_db 命中饵效", "鱼种", key, "重量", w, "tier", tiers[key])
 		}

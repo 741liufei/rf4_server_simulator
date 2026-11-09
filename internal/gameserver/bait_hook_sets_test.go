@@ -27,7 +27,8 @@ func TestBaitedHookSingleCombinationAndSelectedSpec(t *testing.T) {
 		t.Fatalf("single-hook combination = %+v", groups)
 	}
 	spec := gearPhysicsSpec{HookSize: 999}
-	if !s.applyBaitedHookSpec(t.Context(), groups[0], &spec) || !spec.HookPresent || spec.HookSize == 999 || spec.HookStrengthKg <= 0 {
+	if !s.applyBaitedHookSpec(t.Context(), groups[0], &spec) || !spec.HookPresent ||
+		spec.HookItemID != "c_hook_20712" || spec.HookSize == 999 || spec.HookStrengthKg <= 0 {
 		t.Fatalf("selected hook spec = %+v", spec)
 	}
 	if change, err := s.consumeBaitEvent(t.Context(), 1000001, rod, "single-combination", groups[0].baitGUIDs, false); err != nil || len(change.Removed) != 2 {
