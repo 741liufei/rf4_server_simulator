@@ -197,3 +197,40 @@ func TestSpendEnergyTxBoundary(t *testing.T) {
 		t.Fatalf("差一点点应返回 errEnergyNotEnough，实得 %v", err)
 	}
 }
+
+// 9/3 的两个数字完全相同的请求必须复用统一 dispatchRequest 回执：
+// 第二次只重放第一次的响应，不得再次扣精力或再次发饵。
+func TestBaitDigReplayThroughReceiptsDoesNotSpendTwice(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	const uid = int64(1000001)
+	tool, err := srv.CreateItem(t.Context(), uid, baitShovelItemID, "backpack", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.tunCache = map[string]float64{tunableBaitDigEnergyCost: 0.15}
+	srv.tunAt = time.Now()
+	seedConditionPrimary(t, srv, uid, 0.80)
+	beforeRows := countBackpackRows(t, srv, uid)
+
+	h := newReceiptTestSession(t, srv, 1, "1|2|1000001|baitdig-replay")
+	body, err := proto.EncodeValue(proto.Args524(proto.Guid(tool.GUID)), srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.send(9, 3, 501, body, 0x00)
+	first := waitReceiptResponse(t, h)
+	firstRows := countBackpackRows(t, srv, uid)
+	firstEnergy := readConditionPrimary(t, srv, uid)
+
+	h.send(9, 3, 501, body, 0x00)
+	second := waitReceiptResponse(t, h)
+	if string(second.Body) != string(first.Body) {
+		t.Fatalf("重放必须返回第一次的响应: first=%x second=%x", first.Body, second.Body)
+	}
+	if rows := countBackpackRows(t, srv, uid); rows != firstRows {
+		t.Fatalf("重放不得再发饵: first_rows=%d replay_rows=%d before=%d", firstRows, rows, beforeRows)
+	}
+	if energy := readConditionPrimary(t, srv, uid); energy < firstEnergy-1e-6 || energy > firstEnergy+1e-6 {
+		t.Fatalf("重放不得二次扣精力: first_energy=%v replay_energy=%v", firstEnergy, energy)
+	}
+}
