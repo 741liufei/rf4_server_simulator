@@ -421,6 +421,16 @@ func TestHookQualityPrefersDifferentFishSizes(t *testing.T) {
 	}
 }
 
+func TestHookHoldOnlyFailsAboveHookCapacity(t *testing.T) {
+	large := gearPhysicsSpec{HookPresent: true, HookSize: 28, HookLengthMM: 24}
+	if _, hold := hookSolidHold(100_000, large); hold != 1 {
+		t.Fatalf("钩容量内中钩后应固定保持率 1，实得 %.4f", hold)
+	}
+	if _, hold := hookSolidHold(200_000, large); hold >= 1 {
+		t.Fatalf("超过钩容量后保持率应下降，实得 %.4f", hold)
+	}
+}
+
 func TestFishHuntCircularGroundbaitRange(t *testing.T) {
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
