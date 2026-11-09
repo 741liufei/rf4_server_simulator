@@ -598,6 +598,13 @@ const (
 	defaultFishInitialStaminaRatio = verifiedInitialStaminaRatio
 )
 
+// newtonPerKgf 是 obj27#8 鱼拉力（牛）与公斤力的换算系数，由 verifiedForcePerGram
+// 同源导出。f8 的量纲是牛（官方样本严格 = 体重kg×g），而渔轮泄力/锁轮承力以公斤计；
+// 服务端任何把 f8 拉力与承力公斤数比较的结算都必须先除以它，否则拉力被放大 9.8 倍，
+// 小鱼也会把摩擦片当超载烧穿（实测 461g 鱼被磨损账记成 6.57kg 拉力）。
+// 口径见 specs/changes/reel-wear-pull-unit/spec.md。
+const newtonPerKgf = verifiedForcePerGram * 1000
+
 // lengthSeed 保存体长公式 k*w^p 的参数。
 var lengthSeed = map[string][2]float64{
 	"perch":   {0.021948, 0.40868},
@@ -1604,6 +1611,13 @@ func (s *Server) fishFightPullFor(f *RolledFish, profile fishFightProfile) float
 	return math.Max(0.5, math.Round(pull*profile.ForceScale*10000)/10000)
 }
 
+// fishFightPullKgfFor 把 27.f8 的鱼拉力（牛）换算成公斤力，供与渔轮泄力、锁轮承力
+// （公斤）比较的服务端结算使用。27.f8 下发给客户端必须保持牛，所以换算只发生在
+// 结算边界，不回改 fishFightPullFor。
+func (s *Server) fishFightPullKgfFor(f *RolledFish, profile fishFightProfile) float64 {
+	return s.fishFightPullFor(f, profile) / newtonPerKgf
+}
+
 func (s *Server) fishInitialStaminaRatio() float64 {
 	ratio := s.tunableF("fish_initial_stamina_ratio", defaultFishInitialStaminaRatio)
 	if ratio <= 0 {
@@ -1813,10 +1827,11 @@ func (s *Server) scheduleBiteState(sess *Session, st *FishState, preserveHooked,
 	st.RigSettled = false
 	st.TickSeen = false
 	// 上一竿的磨损账若还没落库（异常退出、断线等），先取走，解锁后补写。
-	pendingWear, hasPendingWear := st.reelWear.claimLocked()
-	st.reelWear.reset()
-	// 抛竿即算“下水使用”：这一竿即使没咬钩，轮内零件也要结算每竿基准与泡水。
-	st.reelWear.markRodUsedLocked(st.GearGuid)
+	// 只有 resetCast（真正换新的一竿）才重新扣每竿基准；嘬饵否决、鱼离场这类
+	// 同一竿续段的重入不带新基准，否则一次抛竿的基准会被扣两次。
+	// 基准按钓组折扣：路亚族抛投频率高，同样的"一竿"要便宜得多。
+	pendingWear, hasPendingWear := rollFightWearLedgerLocked(st, st.GearGuid, resetCast,
+		s.reelCastBaseFactor(st.RigType))
 	if resetCast || st.CastTs.IsZero() {
 		st.CastTs = now
 	}

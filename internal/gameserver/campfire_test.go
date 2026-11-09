@@ -41,7 +41,7 @@ func TestCampfireStartReturnsActiveFireAndPersists(t *testing.T) {
 	}
 	// 到期分钟与 307.f13.f0 同时间线（世界总游戏分钟）。
 	clientNow := float64(worldTotalGameMin(time.Now()))
-	wantExpiry := clientNow + float64(defaultCampfireDurationMin)
+	wantExpiry := clientNow + float64(defCampfireDurationGameMin)
 	gotExpiry := float64(dec.Fields[0].U32())
 	if math.Abs(gotExpiry-wantExpiry) > 2 {
 		t.Fatalf("篝火结束游戏分钟=%v，当前=%.2f，期望约=%.2f", gotExpiry, clientNow, wantExpiry)
@@ -62,12 +62,12 @@ func TestCampfireStartReturnsActiveFireAndPersists(t *testing.T) {
 	if err != nil || state == nil {
 		t.Fatalf("篝火状态未落库: %+v err=%v", state, err)
 	}
-	if state.Loc != "level_001_lake" || state.Spot != 222 || state.DurationMin != defaultCampfireDurationMin || state.ExpiresFT <= int64(proto.WindowsFiletimeNow()) {
+	if state.Loc != "level_001_lake" || state.Spot != 222 || state.DurationMin != defCampfireDurationGameMin || state.ExpiresFT <= int64(proto.WindowsFiletimeNow()) {
 		t.Fatalf("篝火落库状态不符: %+v", state)
 	}
 	remainingRealSec := float64(state.ExpiresFT-int64(proto.WindowsFiletimeNow())) / 10_000_000
-	if math.Abs(remainingRealSec-gameMinutesToRealDuration(defaultCampfireDurationMin).Seconds()) > 3 {
-		t.Fatalf("篝火现实剩余秒=%.2f，期望约=%.2f", remainingRealSec, gameMinutesToRealDuration(defaultCampfireDurationMin).Seconds())
+	if math.Abs(remainingRealSec-gameMinutesToRealDuration(defCampfireDurationGameMin).Seconds()) > 3 {
+		t.Fatalf("篝火现实剩余秒=%.2f，期望约=%.2f", remainingRealSec, gameMinutesToRealDuration(defCampfireDurationGameMin).Seconds())
 	}
 	expiry := state.ExpiresFT
 	firstClientExpiry := dec.Fields[0].U32()
@@ -90,6 +90,118 @@ func TestCampfireStartReturnsActiveFireAndPersists(t *testing.T) {
 	state2, err := db.GetCampfireState(t.Context(), sess.Userid)
 	if err != nil || state2 == nil || state2.ExpiresFT != expiry {
 		t.Fatalf("重复点火不应改变到期时间: first=%d second=%+v err=%v", expiry, state2, err)
+	}
+}
+
+// 燃烧时长走 tunable：改成 480 游戏分钟后，新点燃的篝火按 480 落库，
+// 802.f0 也按 480 回报（与 307.f13.f0 同一时间线）。
+func TestCampfireDurationTunable(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	srv.tunCache = map[string]float64{tunableCampfireDurationGameMin: 480}
+	srv.tunAt = time.Now()
+	sess := newProbeSess(srv)
+	seedCampfireMaterials(t, srv, 5, 5)
+
+	ctx := &Ctx{Sess: sess, Main: 3, Sub: 11, CallID: 74, ExpectResponse: true,
+		Log: logging.Discard(), replyCapture: &ctxReplyCapture{}}
+	body, handled := hCampfireStart(ctx)
+	if !handled || len(body) == 0 {
+		t.Fatalf("3/11 应答: handled=%v body=%d", handled, len(body))
+	}
+	dec, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientNow := float64(worldTotalGameMin(time.Now()))
+	if got, want := float64(dec.Fields[0].U32()), clientNow+480; math.Abs(got-want) > 2 {
+		t.Fatalf("802.f0=%v，期望约 %.2f（480 游戏分钟）", got, want)
+	}
+	state, err := db.GetCampfireState(t.Context(), sess.Userid)
+	if err != nil || state == nil || state.DurationMin != 480 {
+		t.Fatalf("篝火落库时长应为 480 游戏分钟: %+v err=%v", state, err)
+	}
+	remainingRealSec := float64(state.ExpiresFT-int64(proto.WindowsFiletimeNow())) / 10_000_000
+	if math.Abs(remainingRealSec-gameMinutesToRealDuration(480).Seconds()) > 3 {
+		t.Fatalf("篝火现实剩余秒=%.2f，期望约=%.2f", remainingRealSec,
+			gameMinutesToRealDuration(480).Seconds())
+	}
+}
+
+// 误填（0、负数、超过 1 游戏日）必须被钳制到合法区间，不能产生异常到期值。
+func TestCampfireDurationTunableClamped(t *testing.T) {
+	cases := []struct {
+		name string
+		in   float64
+		want int64
+	}{
+		{"zero", 0, minCampfireDurationGameMin},
+		{"negative", -30, minCampfireDurationGameMin},
+		{"too-large", 100000, maxCampfireDurationGameMin},
+		{"unset-falls-back-to-default", 0, defCampfireDurationGameMin},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newRigTestServer(t)
+			srv.tunCache = map[string]float64{tunableCampfireDurationGameMin: tc.in}
+			srv.tunAt = time.Now()
+			if tc.name == "unset-falls-back-to-default" {
+				srv.tunCache = map[string]float64{}
+			}
+			if got := srv.campfireDurationGameMin(); got != tc.want {
+				t.Fatalf("燃烧时长=%d，期望 %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// 运维把燃烧时长调短后，正在燃烧的旧篝火仍应被复用：玩家不能为一堆
+// 已经点着的火重复付材料。窗口上限必须按记录自身的 duration_min 判定。
+func TestCampfireReuseSurvivesDurationShrink(t *testing.T) {
+	srv, db := newRigTestServer(t)
+	srv.tunCache = map[string]float64{tunableCampfireDurationGameMin: 480}
+	srv.tunAt = time.Now()
+	sess := newProbeSess(srv)
+	woodGUID, matchGUID := seedCampfireMaterials(t, srv, 5, 5)
+
+	ctx := &Ctx{Sess: sess, Main: 3, Sub: 11, CallID: 75, ExpectResponse: true,
+		Log: logging.Discard(), replyCapture: &ctxReplyCapture{}}
+	body, handled := hCampfireStart(ctx)
+	if !handled || len(body) == 0 {
+		t.Fatalf("首次点火应成功: handled=%v body=%d", handled, len(body))
+	}
+	first, _, err := proto.DecodeValue(body, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := db.GetCampfireState(t.Context(), sess.Userid)
+	if err != nil || before == nil {
+		t.Fatalf("首次点火未落库: %+v err=%v", before, err)
+	}
+	drinkUseTestQty(t, srv, woodGUID, 4, 0)
+	drinkUseTestQty(t, srv, matchGUID, 4, 0)
+
+	// 调短到 60 游戏分钟后再点一次：仍在燃烧，必须复用且不扣材料。
+	srv.tunCache = map[string]float64{tunableCampfireDurationGameMin: 60}
+	srv.tunAt = time.Now()
+	ctx2 := &Ctx{Sess: sess, Main: 3, Sub: 11, CallID: 76, ExpectResponse: true,
+		Log: logging.Discard(), replyCapture: &ctxReplyCapture{}}
+	body2, handled := hCampfireStart(ctx2)
+	if !handled || len(body2) == 0 {
+		t.Fatalf("调短后重复点火应复用: handled=%v body=%d", handled, len(body2))
+	}
+	second, _, err := proto.DecodeValue(body2, 0, srv.Table())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Fields[0].U32() != first.Fields[0].U32() {
+		t.Fatalf("复用不应改变结束分钟: first=%d second=%d",
+			first.Fields[0].U32(), second.Fields[0].U32())
+	}
+	drinkUseTestQty(t, srv, woodGUID, 4, 0)
+	drinkUseTestQty(t, srv, matchGUID, 4, 0)
+	after, err := db.GetCampfireState(t.Context(), sess.Userid)
+	if err != nil || after == nil || after.ExpiresFT != before.ExpiresFT || after.DurationMin != 480 {
+		t.Fatalf("复用不应改写篝火状态: before=%+v after=%+v err=%v", before, after, err)
 	}
 }
 
