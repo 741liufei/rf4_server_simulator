@@ -10,6 +10,8 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -108,9 +110,12 @@ func main() {
 			select {
 			case <-ctx.Done():
 				close(srvStop)
+				// 停服即清空在线名单，避免管理后台继续显示已下线的玩家。
+				_ = db.KVSet(context.Background(), "stats:online_uids", "")
 				return
 			case <-t.C:
 				_ = db.KVSet(ctx, "stats:sessions", fmt.Sprintf("%d", srv.SessionCount()))
+				_ = db.KVSet(ctx, "stats:online_uids", onlineUIDsValue(srv))
 			}
 		}
 	}()
@@ -132,4 +137,14 @@ func main() {
 	defer cancel()
 	_ = obs.Shutdown(shutdownCtx)
 	log.Info("gameserver 已退出")
+}
+
+// onlineUIDsValue 把在线 UID 编码为逗号分隔串，供管理后台读取 stats:online_uids。
+func onlineUIDsValue(srv *gameserver.Server) string {
+	uids := srv.OnlineUIDs()
+	parts := make([]string, len(uids))
+	for i, uid := range uids {
+		parts[i] = strconv.FormatInt(uid, 10)
+	}
+	return strings.Join(parts, ",")
 }

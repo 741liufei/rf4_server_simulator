@@ -351,6 +351,7 @@ type playerRow struct {
 	Gold    int64   `json:"gold"`
 	Bank    int64   `json:"bank"`
 	Banned  bool    `json:"banned"`
+	Online  bool    `json:"online"`
 	Updated float64 `json:"updated_ts"`
 }
 
@@ -371,7 +372,27 @@ func (s *Server) handlePlayers(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 500, err.Error())
 		return
 	}
+	online := s.onlineUIDs(ctx)
+	for i := range rows {
+		rows[i].Online = online[rows[i].UID]
+	}
 	writeJSON(w, rows)
+}
+
+// onlineUIDs 读取 gameserver 每 5 秒发布的在线玩家 UID 集合；键缺失或格式错误时按全部离线处理。
+func (s *Server) onlineUIDs(ctx context.Context) map[int64]bool {
+	raw, ok, err := s.db.KVGet(ctx, "stats:online_uids")
+	if err != nil || !ok {
+		return nil
+	}
+	out := make(map[int64]bool, 8)
+	for _, field := range strings.Split(raw, ",") {
+		uid, err := strconv.ParseInt(strings.TrimSpace(field), 10, 64)
+		if err == nil && uid > 0 {
+			out[uid] = true
+		}
+	}
+	return out
 }
 
 func queryPlayers(ctx context.Context, db *store.DB, out *[]playerRow, q string, args ...any) error {
