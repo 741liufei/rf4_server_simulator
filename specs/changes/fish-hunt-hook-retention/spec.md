@@ -22,6 +22,7 @@ Status: done
 
 - `internal/gameserver/handlers_game.go`：14/9 与 14/11 共用 `hookRetentionFails` 和 `finishNibbleHook`；已经完成首次确认的同一尾鱼再次收到确认时只恢复必要状态，不重抽、不重扣饵。
 - `internal/gameserver/fish_hunt.go`：钩型偏置后同比缩放 `w4`，保持最终蓝冠概率；硬保底跳过钩型偏置，保持奖杯/蓝冠比例。
+- `internal/gameserver/fish_hunt.go`：鱼重未超过钩型入口容量时，首次中钩后的保持率固定为 1；只有鱼重超过入口容量才按超载程度降低保持率，避免正常鱼在已中钩后被随机保钩失败清掉。
 - `internal/gameserver/fish_hunt.go`：饵效倍率只在已选档位的重量上下界内移动，最终档位沿用阶段抽样结果，不再按放大后的重量二次判档；fallback 只应用一次倍率。
 - `internal/gameserver/fishing.go`、`fishing_persist.go`、`internal/store/repos_fishing_state.go`：待结算鱼持久化首次确认标记 `HookConfirmed` 与发鱼阶段 `HuntStage`/`HuntStageKnown`。这是现有钓鱼 JSON 快照内的兼容字段，不新增列。
 - `internal/gameserver/fish_hunt.go`：`recordHuntCatch` 只对聚鱼及以上阶段的普通鱼累计 Pity；每次有效结算调用 `consumeFishHuntCompensation` 递减 CompFish。
@@ -37,6 +38,7 @@ Status: done
 
 - 单元/行为测试：`internal/gameserver/fish_hunt_test.go` 验证蓝冠归一化概率、状态持久化、日常不累计 Pity、补偿逐尾消耗/超时失效。
 - Handler 行为测试：同一文件验证重复 14/11 不会清掉已中钩鱼，海钓 14/9 遇到 nibble 不会进入 Hooked。
+- 纯逻辑测试：钩容量内保持率为 1，超过容量后才小于 1，钉住“中钩后不再随机秒脱”的边界。
 - Handler 行为测试：验证未中钩的未知 14/12 不产生补偿，蓝冠 f0=7 不重推并清空中钩态；纯逻辑测试验证饵效倍率不越过当前档位边界。
 - 回归门禁：`go test ./... -count=1`、`go vet ./...`、`go build ./...`。
 - 期望值来自规则表与持久化后的实际计数；蓝冠测试比较 `w4/(w1+w2+w3+w4)`，不再只比较原始 `w4`。
