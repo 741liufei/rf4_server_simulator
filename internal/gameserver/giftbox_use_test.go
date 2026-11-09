@@ -70,6 +70,7 @@ var giftBoxFeederProContents = []string{
 // TestGiftBoxPurchaseStaysBoxed 礼盒购买只入库礼盒本体（3100），不展开内容物；
 // 饵料盒购买维持官服"购买即展开"（真实报文实证路径，不回退）。
 func TestGiftBoxPurchaseStaysBoxed(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4201)
@@ -135,6 +136,7 @@ func TestGiftBoxPurchaseStaysBoxed(t *testing.T) {
 // TestGiftBoxUseOpensBundle 4/8 使用礼盒：礼盒行删除、6 件内容物入库，
 // 响应 800 f0 携带内容物树、f2 携带礼盒 GUID。
 func TestGiftBoxUseOpensBundle(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4202)
@@ -225,6 +227,7 @@ func TestGiftBoxUseAbsoluteQuantityEntry(t *testing.T) {
 
 // TestGiftBoxUseRejectsOutsideBackpack 非背包容器中的礼盒拒绝拆开且不产生任何变更。
 func TestGiftBoxUseRejectsOutsideBackpack(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4203)
@@ -253,6 +256,7 @@ func TestGiftBoxUseRejectsOutsideBackpack(t *testing.T) {
 
 // TestGiftBoxUseFallsThroughForNormalItem 普通物品的 4/8 不被礼盒分支拦截，落回通用回显。
 func TestGiftBoxUseFallsThroughForNormalItem(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4204)
@@ -282,6 +286,7 @@ func TestGiftBoxUseFallsThroughForNormalItem(t *testing.T) {
 // TestGiftBoxMailAttachmentStaysBoxed 礼盒邮件附件领取后保留本体（按包数逐件）；
 // 饵料盒附件维持官服"领取即展开"。
 func TestGiftBoxMailAttachmentStaysBoxed(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4205)
@@ -316,6 +321,7 @@ func TestGiftBoxMailAttachmentStaysBoxed(t *testing.T) {
 // TestGiftBoxMailAttachmentWithBuyPriceStaysBoxed 覆盖与 #288 组合后的路径：
 // 商店购买会给礼盒写入 buy_price，邮件快照会携带该值；开盒礼盒仍应可领取。
 func TestGiftBoxMailAttachmentWithBuyPriceStaysBoxed(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4206)
@@ -348,6 +354,7 @@ func TestGiftBoxMailAttachmentWithBuyPriceStaysBoxed(t *testing.T) {
 
 // TestGiftBoxMailAttachmentQtyCap 防止损坏附件用超大 Qty 触发无界构造。
 func TestGiftBoxMailAttachmentQtyCap(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4207)
@@ -371,6 +378,7 @@ func TestGiftBoxMailAttachmentQtyCap(t *testing.T) {
 
 // TestGiftBoxUseRollsBackWhenDeleteSkipped 删除未真正发生时不得发放内容物。
 func TestGiftBoxUseRollsBackWhenDeleteSkipped(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4208)

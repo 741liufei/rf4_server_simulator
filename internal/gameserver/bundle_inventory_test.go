@@ -139,6 +139,7 @@ func assertBundleMailUnclaimed(t *testing.T, db *store.DB, uid, id int64) {
 }
 
 func TestBundleMailClaimExpandsAndDoesNotDuplicate(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	const uid = int64(4101)
 	id, err := db.MailInsert(context.Background(), uid, 0, 0, "test", []store.MailItem{{ItemID: testBundleID, Qty: 2}})
@@ -157,6 +158,7 @@ func TestBundleMailClaimExpandsAndDoesNotDuplicate(t *testing.T) {
 }
 
 func TestBundleMailClaimFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	const uid = int64(4102)
 	var ids []int64
@@ -187,6 +189,7 @@ func TestBundleMailClaimFailureRollsBack(t *testing.T) {
 }
 
 func TestBundleMailNonStackableContentsAreSeparateItems(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	seedEconomyItemDef(t, db, 990001, "test_tool_bundle", bundleCategory)
 	if _, err := db.SQL.Exec(`UPDATE item_def SET attrs_json=? WHERE item_id='test_tool_bundle'`,
@@ -217,6 +220,7 @@ func TestBundleMailNonStackableContentsAreSeparateItems(t *testing.T) {
 }
 
 func TestBundleMailLegacySnapshotExpands(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	const uid = int64(4110)
 	att := legacyBundleMailSnapshot(t, srv, uid-1)
@@ -244,6 +248,7 @@ func TestBundleMailLegacySnapshotExpands(t *testing.T) {
 }
 
 func TestBundleInvalidDefinitionsDoNotGrantItems(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, attrs, childAttrs string
 		packs                   int64
@@ -298,6 +303,7 @@ func TestBundleInvalidDefinitionsDoNotGrantItems(t *testing.T) {
 }
 
 func TestBundleMailRejectsPaidOrIncompleteSnapshot(t *testing.T) {
+	t.Parallel()
 	for _, incomplete := range []bool{false, true} {
 		t.Run(strconv.FormatBool(incomplete), func(t *testing.T) {
 			srv, db := newBundleTestServer(t)
@@ -331,6 +337,7 @@ func TestBundleMailRejectsPaidOrIncompleteSnapshot(t *testing.T) {
 }
 
 func TestBundleStorePurchaseAndFailureAreAtomic(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"success", "insert_failure", "invalid_definition"} {
 		t.Run(name, func(t *testing.T) {
 			srv, db := newBundleTestServer(t)
@@ -384,6 +391,7 @@ func TestBundleStorePurchaseAndFailureAreAtomic(t *testing.T) {
 }
 
 func TestBundleMailOverflowPreservesExistingStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid = int64(4114)
@@ -409,6 +417,7 @@ func TestBundleMailOverflowPreservesExistingStack(t *testing.T) {
 }
 
 func TestBundleUnsupportedContentsPreserveMail(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	seedEconomyItemDef(t, db, 990003, "test_unsupported_child", 999)
 	if _, err := db.SQL.Exec(`UPDATE item_def SET attrs_json=? WHERE item_id=?`,
@@ -431,6 +440,7 @@ func TestBundleUnsupportedContentsPreserveMail(t *testing.T) {
 }
 
 func TestBundleMetaQuantityAndMirrors(t *testing.T) {
+	t.Parallel()
 	for _, category := range []int64{19, 20, 45, 58} {
 		t.Run(strconv.FormatInt(category, 10), func(t *testing.T) {
 			srv, db := newBundleTestServer(t)

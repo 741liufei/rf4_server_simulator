@@ -27,7 +27,8 @@ func mountReelOnRod(t *testing.T, srv *Server, rodGUID, reelGUID string) {
 }
 
 func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 
@@ -46,21 +47,21 @@ func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
 		t.Fatalf("轮子应有摩擦片制动力: %+v err=%v", initial, perr)
 	}
 
-	// 泄力打滑磨的是摩擦片（基准 reelSlipWear=0.5%），本体耐久不变。
-	var worn bool
-	var last *gearBreakOutcome
-	for i := 0; i < 200; i++ {
-		outcome, derr := srv.damageReelSlip(ctx, uid, rod.GUID, reel.GUID)
-		if derr != nil {
-			t.Fatalf("第 %d 次打滑失败: %v", i+1, derr)
-		}
-		last = outcome
-		if outcome.FrictionWorn {
-			worn = true
-			break
-		}
+	// 泄力打滑磨的是摩擦片（基准 reelSlipWear=0.5%），本体耐久作为零件综合一起降。
+	// 预置到只差两次，仍走真实的连续磨损链。
+	seedFrictionWasherNearWorn(t, srv, ctx, reel.GUID)
+	first, derr := srv.damageReelSlip(ctx, uid, rod.GUID, reel.GUID)
+	if derr != nil {
+		t.Fatalf("第 1 次打滑失败: %v", derr)
 	}
-	if !worn {
+	if first.FrictionWorn {
+		t.Fatal("预置后第一次打滑不应提前磨穿")
+	}
+	last, derr := srv.damageReelSlip(ctx, uid, rod.GUID, reel.GUID)
+	if derr != nil {
+		t.Fatalf("第 2 次打滑失败: %v", derr)
+	}
+	if !last.FrictionWorn {
 		t.Fatal("连续打滑后摩擦片仍未磨穿")
 	}
 	if last == nil || last.ReelBroken {
@@ -89,7 +90,8 @@ func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
 }
 
 func TestBrokenReelBlocksCastRig(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
 

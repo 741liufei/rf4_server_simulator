@@ -121,6 +121,7 @@ func itemRemovalTreeHasGUID(tree *proto.Value, guid string) bool {
 }
 
 func TestItemRemoveStarterRodCanReloadProfile(t *testing.T) {
+	t.Parallel()
 	srv, db, sess, rod, line := starterRodRemovalSetup(t)
 	st := srv.stateFor(sess.Userid)
 	st.mu.Lock()
@@ -156,6 +157,7 @@ func TestItemRemoveStarterRodCanReloadProfile(t *testing.T) {
 }
 
 func TestEnsurePlayerRepairsPreviouslyDiscardedStarterRod(t *testing.T) {
+	t.Parallel()
 	_, db, sess, rod, line := starterRodRemovalSetup(t)
 	if err := db.DeleteItems(context.Background(), []string{rod}); err != nil {
 		t.Fatal(err)
@@ -183,6 +185,7 @@ func TestEnsurePlayerRepairsPreviouslyDiscardedStarterRod(t *testing.T) {
 }
 
 func TestItemRemoveRodFailureRollsBackInventoryAndFishingState(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"attachment", "fishing_state"} {
 		t.Run(stage, func(t *testing.T) {
 			assertItemRemoveRodFailureRollsBack(t, stage)
@@ -278,6 +281,7 @@ func assertItemRemoveRodFailureRollsBack(t *testing.T, stage string) {
 }
 
 func TestItemRemoveRepairPreservesValidRigAndOtherPlayer(t *testing.T) {
+	t.Parallel()
 	srv, db, sess, rod, line := starterRodRemovalSetup(t)
 	ctx := context.Background()
 	var healthyRod, healthyLine string
@@ -352,6 +356,7 @@ func TestItemRemoveRepairPreservesValidRigAndOtherPlayer(t *testing.T) {
 }
 
 func TestItemRemoveRepairKeepsFishReleaseOwnershipAndCache(t *testing.T) {
+	t.Parallel()
 	srv, db := newBundleTestServer(t)
 	ctx := context.Background()
 	const uid int64 = 7357

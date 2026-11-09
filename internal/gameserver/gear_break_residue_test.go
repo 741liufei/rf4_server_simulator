@@ -48,6 +48,7 @@ func stackQtyForTest(t *testing.T, srv *Server, guid string) int64 {
 // TestHookBreakDetachesBaitAndRefundsStack 锁定 P1-2：钩断后挂在钩上的饵
 // 不能再留在钓组上，拆分出的子饵要并回来源堆，并清掉补饵记录。
 func TestHookBreakDetachesBaitAndRefundsStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -108,9 +109,11 @@ func TestHookBreakDetachesBaitAndRefundsStack(t *testing.T) {
 	}
 }
 
-// TestRodBreakClearsBaitSettingsAndRefundsStack 锁定 P1-3：断竿清空钓组后
-// 不能再留下 rebait/bait_hook；拆分子饵并回来源堆。
-func TestRodBreakClearsBaitSettingsAndRefundsStack(t *testing.T) {
+// TestRodBreakClearsBaitSettingsAndLosesStack 锁定官服断竿口径：断竿后竿上
+// 钓组整体销毁，挂载子饵随之丢失，不能再留下 rebait/bait_hook；来源堆
+// 装配时已减 1，保持在 2 并推送刷新对齐客户端。
+func TestRodBreakClearsBaitSettingsAndLosesStack(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -152,10 +155,11 @@ func TestRodBreakClearsBaitSettingsAndRefundsStack(t *testing.T) {
 		t.Fatalf("应判断竿: %+v", outcome)
 	}
 	if row, _ := db.GetItemByGUID(ctx, mountedBait); row != nil {
-		t.Fatalf("断竿后挂载子饵应删除（并回来源堆），实得 %+v", row)
+		t.Fatalf("断竿后挂载子饵应丢失销毁，实得 %+v", row)
 	}
-	if got := stackQtyForTest(t, srv, bait.GUID); got != 3 {
-		t.Fatalf("来源饵堆应恢复到 3，实得 %d", got)
+	// 挂载时来源堆已减 1；子饵丢失后不再回补，所以是 2 而不是 3。
+	if got := stackQtyForTest(t, srv, bait.GUID); got != 2 {
+		t.Fatalf("断竿饵应丢失，来源饵堆应为 2，实得 %d", got)
 	}
 	if !containsGUID(outcome.StackRefreshGUIDs, bait.GUID) {
 		t.Fatalf("结果应刷新来源饵堆 %s: %+v", bait.GUID, outcome.StackRefreshGUIDs)
@@ -171,9 +175,11 @@ func TestRodBreakClearsBaitSettingsAndRefundsStack(t *testing.T) {
 	}
 }
 
-// TestReelBreakClearsBaitSettingsAndRefundsStack 锁定 P1-3：断轮同样要清
-// rebait/bait_hook，并把拆分子饵并回来源堆。
-func TestReelBreakClearsBaitSettingsAndRefundsStack(t *testing.T) {
+// TestReelBreakKeepsRigAndBaitSettings 锁定官服断轮口径：轮子耐久归零但仍
+// 挂在竿上，钓组（主线/钩/饵）原样保留，鱼仍咬钩；rebait/bait_hook 不能清，
+// 否则修好轮子后这套仍在钩上的饵会被重复补饵。
+func TestReelBreakKeepsRigAndBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -219,26 +225,31 @@ func TestReelBreakClearsBaitSettingsAndRefundsStack(t *testing.T) {
 	if row, _ := db.GetItemByGUID(ctx, reel.GUID); row == nil || row.Durability != 0 || row.RigGUID != rod.GUID {
 		t.Fatalf("断轮后轮子应留竿上且耐久为 0: %+v", row)
 	}
-	if row, _ := db.GetItemByGUID(ctx, mountedBait); row != nil {
-		t.Fatalf("断轮后挂载子饵应删除（并回来源堆），实得 %+v", row)
+	if !outcome.KeepFight {
+		t.Fatalf("断轮应保持搏鱼（鱼仍挂钩）: %+v", outcome)
 	}
-	if got := stackQtyForTest(t, srv, bait.GUID); got != 3 {
-		t.Fatalf("来源饵堆应恢复到 3，实得 %d", got)
+	if row, _ := db.GetItemByGUID(ctx, mountedBait); row == nil || row.RigGUID != rod.GUID {
+		t.Fatalf("断轮后挂载子饵应仍在钓组上，实得 %+v", row)
 	}
-	if !containsGUID(outcome.StackRefreshGUIDs, bait.GUID) {
-		t.Fatalf("结果应刷新来源饵堆 %s: %+v", bait.GUID, outcome.StackRefreshGUIDs)
+	// 子饵还在钓组上，来源堆维持装配时扣减后的 2，不需要回补。
+	if got := stackQtyForTest(t, srv, bait.GUID); got != 2 {
+		t.Fatalf("断轮来源饵堆应保持 2，实得 %d", got)
 	}
-	if got := rodSettingCount(t, srv, rod.GUID, "bait_hook:%"); got != 0 {
-		t.Fatalf("断轮后不应残留饵-钩映射，实得 %d 条", got)
+	if len(outcome.StackRefreshGUIDs) != 0 {
+		t.Fatalf("断轮不应产生来源堆刷新: %+v", outcome.StackRefreshGUIDs)
 	}
-	if got := rodSettingCount(t, srv, rod.GUID, "rebait:%"); got != 0 {
-		t.Fatalf("断轮后不应残留补饵请求，实得 %d 条", got)
+	if got := rodSettingCount(t, srv, rod.GUID, "bait_hook:%"); got != 1 {
+		t.Fatalf("断轮后饵-钩映射应保留，实得 %d 条", got)
+	}
+	if got := rodSettingCount(t, srv, rod.GUID, "rebait:%"); got != 1 {
+		t.Fatalf("断轮后补饵请求应保留，实得 %d 条", got)
 	}
 }
 
 // TestBaitBreakClearsItsBaitSettings 锁定 P1-2 的另一半：饵自身断裂时，
 // bait_hook 与 rebait 不能继续把这枚饵补回同一钩。
 func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)
@@ -276,8 +287,8 @@ func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
 	if !outcome.ComponentBroken || outcome.BrokenGUID != mountedBait {
 		t.Fatalf("应判饵断: %+v", outcome)
 	}
-	if row, _ := db.GetItemByGUID(ctx, mountedBait); row == nil || row.Durability != 0 {
-		t.Fatalf("断饵应保留为耐久 0 的背包物品: %+v", row)
+	if row, _ := db.GetItemByGUID(ctx, mountedBait); row != nil {
+		t.Fatalf("断饵后饵应丢失销毁，实得 %+v", row)
 	}
 	if got := rodSettingCount(t, srv, rod.GUID, "bait_hook:%"); got != 0 {
 		t.Fatalf("断饵后不应残留饵-钩映射，实得 %d 条", got)
@@ -288,6 +299,7 @@ func TestBaitBreakClearsItsBaitSettings(t *testing.T) {
 }
 
 func TestLineBreakClearsBaitSettings(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	ctx, uid, rod, line, hook := mountWeakLineRig(t, srv)
 	_, mountedBait := baitTestMount(t, srv, rod, "worm_01", 3, 350)

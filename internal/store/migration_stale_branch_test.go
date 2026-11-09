@@ -52,3 +52,78 @@ func TestMigrateKeepsUnrelatedBranchRowInPlace(t *testing.T) {
 	assertCount(t, db,
 		`SELECT COUNT(*) FROM schema_migrations WHERE name LIKE 'retired/%'`, 0)
 }
+
+func TestMigrateRenumbersFishHuntBranchMigration(t *testing.T) {
+	db := openCatchHistoryDBAtVersion(t, 45)
+	createLegacyFishHuntState(t, db)
+	if _, err := db.SQL.Exec(`INSERT INTO schema_migrations VALUES(46,'migrations/00046_fish_hunt.sql',0)`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("旧鱼猎迁移号挡住了主线 00046: %v", err)
+	}
+
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=46 AND name='migrations/00046_player_condition_comfort_luck.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=49 AND name='migrations/00049_fish_hunt.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE name='migrations/00046_fish_hunt.sql'`, 0)
+}
+
+func TestMigrateRenumbersMarineHuntBranchMigration(t *testing.T) {
+	db := openCatchHistoryDBAtVersion(t, 45)
+	createLegacyFishHuntState(t, db)
+	if _, err := db.SQL.Exec(`
+		ALTER TABLE fish_hunt_state ADD COLUMN hunt_mode INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE fish_hunt_state ADD COLUMN sea_zone INTEGER NOT NULL DEFAULT 0;
+		ALTER TABLE fish_hunt_state ADD COLUMN sea_zone_known INTEGER NOT NULL DEFAULT 0;
+	`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.SQL.Exec(`
+		INSERT INTO schema_migrations VALUES(46,'migrations/00046_fish_hunt.sql',0);
+		INSERT INTO schema_migrations VALUES(47,'migrations/00047_marine_hunt.sql',0);
+	`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := db.Migrate(); err != nil {
+		t.Fatalf("旧海图狩猎迁移号挡住了主线 00047: %v", err)
+	}
+
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=49 AND name='migrations/00049_fish_hunt.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE version=50 AND name='migrations/00050_marine_hunt.sql'`, 1)
+	assertCount(t, db,
+		`SELECT COUNT(*) FROM schema_migrations WHERE name IN ('migrations/00046_fish_hunt.sql','migrations/00047_marine_hunt.sql')`, 0)
+}
+
+func createLegacyFishHuntState(t *testing.T, db *DB) {
+	t.Helper()
+	if _, err := db.SQL.Exec(`
+		CREATE TABLE fish_hunt_state(
+			uid             INTEGER NOT NULL,
+			loc             TEXT    NOT NULL,
+			spot            INTEGER NOT NULL,
+			anchor_x        REAL    NOT NULL DEFAULT 0,
+			anchor_z        REAL    NOT NULL DEFAULT 0,
+			anchor_known    INTEGER NOT NULL DEFAULT 0,
+			active_seconds  REAL    NOT NULL DEFAULT 0,
+			valid_bites     INTEGER NOT NULL DEFAULT 0,
+			pity            INTEGER NOT NULL DEFAULT 0,
+			big_miss        INTEGER NOT NULL DEFAULT 0,
+			comp_fish       INTEGER NOT NULL DEFAULT 0,
+			comp_grade      INTEGER NOT NULL DEFAULT 0,
+			comp_until      REAL    NOT NULL DEFAULT 0,
+			last_catch_guid TEXT    NOT NULL DEFAULT '',
+			last_active_ts  REAL    NOT NULL DEFAULT 0,
+			updated_ts      REAL    NOT NULL DEFAULT 0,
+			PRIMARY KEY(uid, loc, spot)
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
+}

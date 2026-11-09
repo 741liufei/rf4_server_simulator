@@ -443,7 +443,7 @@ func (s *Server) fishingEndSettle(ctx *Ctx) ([]byte, bool) {
 		0:  f0,
 		1:  proto.U32(proto.F32Bits(float32(castProf.DistanceM))),
 		2:  proto.U32(f32Const801F2),
-		3:  build5003FromStates(qualChanges),
+		3:  build5003FromStates(qualChanges, s.buildSeason5012()),
 		4:  giftRows,
 		5:  proto.Null(),
 		6:  f6,

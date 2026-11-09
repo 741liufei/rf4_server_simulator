@@ -12,6 +12,7 @@ import (
 )
 
 func TestRodSetDepthRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -41,6 +42,7 @@ func TestRodSetDepthRejectsForeignRod(t *testing.T) {
 }
 
 func TestRodSetClipRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -65,6 +67,7 @@ func TestRodSetClipRejectsForeignRod(t *testing.T) {
 }
 
 func TestRodSetQuivertipRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -90,6 +93,7 @@ func TestRodSetQuivertipRejectsForeignRod(t *testing.T) {
 }
 
 func TestRodSetRigTypeRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)
@@ -115,6 +119,7 @@ func TestRodSetRigTypeRejectsForeignRod(t *testing.T) {
 }
 
 func TestRodBaitMountRejectsForeignRod(t *testing.T) {
+	t.Parallel()
 	srv, db := newRigTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, testUID, "feeder_10125_FD360", "backpack", 1)

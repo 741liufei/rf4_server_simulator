@@ -13,7 +13,8 @@ import (
 // 看到 item.container='house' 的物品，且容量非零。缺数据源时客户端房屋
 // 仓库 UI 永远为空，存放交互看上去"没反应"（物品实际已入库）。
 func TestHouseContainerInventory(t *testing.T) {
-	db := openItemTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "house"}}, logging.Discard(), nil)
 	srv.SetDB(db)
@@ -139,7 +140,8 @@ func TestHouseContainerInventory(t *testing.T) {
 // 房屋物品的树内容器枚举必须投影为 10：客户端物品管理器按该枚举把
 // 物品挂进对应容器字典，恒 0 时房屋仓库永远为空。
 func TestHouseItemTreeStorageKind(t *testing.T) {
-	db := openItemTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "house"}}, logging.Discard(), nil)
 	srv.SetDB(db)
@@ -179,7 +181,8 @@ func TestHouseItemTreeStorageKind(t *testing.T) {
 // 4/6 端到端：背包→房屋、房屋→背包时，DB 归属和 4/21/4/22
 // 增量树都必须同步更新。测试必须消费真实推送，不能只验证 ItemToTree。
 func TestHouseItemMoveEndToEnd(t *testing.T) {
-	srv, _ := newRigTestServer(t)
+	t.Parallel()
+	srv, _ := newStaticRigTestServer(t)
 	ctx := t.Context()
 	sess, peer := newTunnelProbe(t, srv)
 	pushes := handitemPushReader(t, peer)
@@ -235,7 +238,8 @@ func TestHouseItemMoveEndToEnd(t *testing.T) {
 // 房屋容量在事务内校验：已有 100 件时一次移动 2 件必须整体失败，
 // 不能出现第 101/102 件已落库或只移动了一部分。
 func TestHouseItemMoveCapacityRollsBack(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := t.Context()
 	sess := newProbeSess(srv)
 	for i := 0; i < houseContainerCapacity; i++ {
@@ -286,7 +290,8 @@ func TestHouseItemMoveCapacityRollsBack(t *testing.T) {
 // 同一 GUID 在请求中重复出现时只计一件；99 件已有物品加 1 件新物品
 // 应正好落在容量上限 100，而不是被重复计数后误判为超限。
 func TestHouseItemMoveDeduplicatesGUIDs(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := t.Context()
 	sess := newProbeSess(srv)
 	for i := 0; i < houseContainerCapacity-1; i++ {
@@ -316,7 +321,8 @@ func TestHouseItemMoveDeduplicatesGUIDs(t *testing.T) {
 
 // 容量校验必须与 4/1 展示的导入容量一致，不能固定写死 100。
 func TestHouseItemMoveHonorsImportedCapacity(t *testing.T) {
-	srv, db := newRigTestServer(t)
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
 	ctx := t.Context()
 	sess := newProbeSess(srv)
 	if err := db.KVSet(ctx, "native-import:1000001:inventory", `{"countsByKind":{"10":{"a":2,"b":0}}}`); err != nil {

@@ -15,6 +15,7 @@ import (
 
 // TestItemTreeSkeleton 打印 4/5 物品元素骨架，用于检查不同类别生成不同 wire 类。
 func TestItemTreeSkeleton(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
@@ -76,6 +77,7 @@ func skeletonOf(v *proto.Value) map[string]any {
 // TestItemHandlersFullChain 全链路探测：4/1 → 4/4 → 4/5 经处理器 + 编码全链路，
 // 打印响应体和解码骨架，用于检查回包形状。
 func TestItemHandlersFullChain(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
@@ -129,6 +131,7 @@ func probeArgsGuids(guids []string) *proto.Value {
 
 // TestItemDetailsEncodeError 定位 4/5 编码失败的具体物品与字段。
 func TestItemDetailsEncodeError(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
@@ -176,6 +179,7 @@ func TestItemDetailsEncodeError(t *testing.T) {
 
 // TestGjdmdcpoifhMismatch 探查 gjdmdcpoifh(101) 字段数不匹配的物品明细。
 func TestGjdmdcpoifhMismatch(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
@@ -198,6 +202,7 @@ func TestGjdmdcpoifhMismatch(t *testing.T) {
 
 // TestGjdmdcpoifhOps 打印 Go ops 表中 gjdmdcpoifh 的字段 ops 序列。
 func TestGjdmdcpoifhOps(t *testing.T) {
+	t.Parallel()
 	ops := wiregen.ClassOps["gjdmdcpoifh"]
 	t.Logf("gjdmdcpoifh ops(%d): %v", len(ops), ops)
 	ops2 := wiregen.ClassOps["blpddffbgjg"]
@@ -206,6 +211,7 @@ func TestGjdmdcpoifhOps(t *testing.T) {
 
 // TestGjdmdcpoifhCSMap 打印该类 cs 名→索引映射（重建 13 字段用）。
 func TestGjdmdcpoifhCSMap(t *testing.T) {
+	t.Parallel()
 	ops := wiregen.ClassOps["gjdmdcpoifh"]
 	for i, op := range ops {
 		cs := ""
@@ -221,6 +227,7 @@ func TestGjdmdcpoifhCSMap(t *testing.T) {
 
 // TestMapDefsClassesInOps 校验 dob 树 5 个类的 ops 数与 map_defs.json 一致。
 func TestMapDefsClassesInOps(t *testing.T) {
+	t.Parallel()
 	want := map[string]int{"bleinjfhebp": 5, "dobfogbcggd": 6, "kcpjalejcog": 1, "odnlikfnhnl": 10, "paboeegkcmj": 1}
 	for class, n := range want {
 		ops := wiregen.ClassOps[class]
@@ -234,6 +241,7 @@ func TestMapDefsClassesInOps(t *testing.T) {
 
 // TestSpawnClasses 打印 206 定位器与 205 dob 的 ops。
 func TestSpawnClasses(t *testing.T) {
+	t.Parallel()
 	t.Logf("cgbaffjpbkg ops: %v", wiregen.ClassOps["cgbaffjpbkg"])
 	t.Logf("dobfogbcggd ops: %v", wiregen.ClassOps["dobfogbcggd"])
 	t.Logf("bleinjfhebp ops: %v", wiregen.ClassOps["bleinjfhebp"])
@@ -242,6 +250,7 @@ func TestSpawnClasses(t *testing.T) {
 
 // TestSpawnLocatorBuild 验证 1/13 响应可编码、顶层为 206 且 dob 重锚生效。
 func TestSpawnLocatorBuild(t *testing.T) {
+	t.Parallel()
 	db := openMigratedTestDB(t)
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "probe"}}, logging.Discard(), nil)
 	srv.SetDB(db)
@@ -280,6 +289,7 @@ func TestSpawnLocatorBuild(t *testing.T) {
 
 // TestTimelineClassesOps 打印时间线新命令涉及的类 ops。
 func TestTimelineClassesOps(t *testing.T) {
+	t.Parallel()
 	for _, c := range []string{"acjaheimjge", "fopkeoppndn", "fkcmcjlagdh", "nkakjeigjla", "gbnhfllijoh", "godhiicbgng"} {
 		t.Logf("%s ops: %v", c, wiregen.ClassOps[c])
 	}
@@ -287,6 +297,7 @@ func TestTimelineClassesOps(t *testing.T) {
 
 // TestTimelineHandlersSmoke 时间线新处理器冒烟：全部可编码且形状正确。
 func TestTimelineHandlersSmoke(t *testing.T) {
+	t.Parallel()
 	sess := &Session{ID: 1, Userid: 1000001, Srv: NewServer(config.Game{Tunnel: config.Tunnel{PSK: "t"}}, logging.Discard(), nil), log: logging.Discard()}
 	cases := []struct {
 		name string
@@ -340,6 +351,10 @@ func TestTimelineHandlersSmoke(t *testing.T) {
 // TestAllHandlersDecode 在探针会话上调用每个已注册处理器，
 // 验证返回的响应体都能被协议层完整解码。
 func TestAllHandlersDecode(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short 模式跳过全 handler 解码扫描")
+	}
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "gate"}}, logging.Discard(), nil)
@@ -373,11 +388,13 @@ func TestAllHandlersDecode(t *testing.T) {
 
 // TestReceiptClassOps 打印 166 收据类 ops。
 func TestReceiptClassOps(t *testing.T) {
+	t.Parallel()
 	t.Logf("pcfflcdpjgk ops: %v tid=%d", wiregen.ClassOps["pcfflcdpjgk"], wiregen.ClassTypeID["pcfflcdpjgk"])
 }
 
 // TestNumericIDFieldMapping 核对物品数字 id 字段；iofbjlaadfg 是实际字段名。
 func TestNumericIDFieldMapping(t *testing.T) {
+	t.Parallel()
 	for _, cls := range []string{"gjdmdcpoifh", "blpddffbgjg", "kbnbcppjkaf", "aafdnnmleob", "cnolibojkao", "ohciikgjghe"} {
 		t.Logf("%-14s iofbjlaadfg@%d  dbjnbhhhhcn@%d", cls,
 			fieldIdxByCS(cls, "iofbjlaadfg"), fieldIdxByCS(cls, "dbjnbhhhhcn"))
@@ -386,6 +403,7 @@ func TestNumericIDFieldMapping(t *testing.T) {
 
 // TestCSNamesCanonical 验证常量表中的字段名都存在于对应物品类。
 func TestCSNamesCanonical(t *testing.T) {
+	t.Parallel()
 	for cls, want := range map[string][]string{
 		"gjdmdcpoifh": {csGUID, csNumericID, csWorkmanship, csDurability, csCreated, csUpdated, csStateEnum, csOrigin},
 		"blpddffbgjg": {csGUID, csNumericID, csOrigin},
@@ -402,6 +420,7 @@ func TestCSNamesCanonical(t *testing.T) {
 
 // TestCreateItemWellFormed 验证创建物品的 GUID、数字 id 和可编码结构。
 func TestCreateItemWellFormed(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "wf"}}, logging.Discard(), nil)
@@ -437,6 +456,7 @@ func TestCreateItemWellFormed(t *testing.T) {
 
 // TestProbeCreatedFields 打印 CreateItem 产出的字段 JSON，用于检查 GUID 和字段结构。
 func TestProbeCreatedFields(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "p"}}, logging.Discard(), nil)
 	srv.SetDB(db)
@@ -456,6 +476,7 @@ func TestProbeCreatedFields(t *testing.T) {
 // TestWorkshopToolsAreNotFishingLine 工坊工具和材料不能再落成钓线类。
 // 已经按钓线类买进背包的钳子，启动修复后改写成工具类并保留 guid。
 func TestWorkshopToolsAreNotFishingLine(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := NewServer(config.Game{Tunnel: config.Tunnel{PSK: "workshop"}}, logging.Discard(), nil)

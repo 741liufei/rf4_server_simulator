@@ -10,6 +10,7 @@ import (
 )
 
 func TestMailSnapshotRoundTripPreservesItemInstance(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	sender, recipient := int64(2301), int64(2302)
@@ -85,6 +86,7 @@ func TestMailSnapshotRoundTripPreservesItemInstance(t *testing.T) {
 }
 
 func TestMailAttachmentWithoutSnapshotFallsBackToDefinition(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	recipient := int64(2311)
@@ -131,6 +133,7 @@ func TestMailAttachmentWithoutSnapshotFallsBackToDefinition(t *testing.T) {
 }
 
 func TestMailSnapshotClaimFailureRollsBack(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	sender, recipient := int64(2321), int64(2322)
@@ -188,6 +191,7 @@ func TestMailSnapshotClaimFailureRollsBack(t *testing.T) {
 }
 
 func TestMailSnapshotCountableAttachmentReassignsGUID(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	sender, recipient := int64(2331), int64(2332)
@@ -228,6 +232,7 @@ func TestMailSnapshotCountableAttachmentReassignsGUID(t *testing.T) {
 }
 
 func TestMailTextAcceptAndAcceptAllMarkRead(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	uid := int64(2341)
@@ -275,6 +280,7 @@ func TestMailTextAcceptAndAcceptAllMarkRead(t *testing.T) {
 }
 
 func TestMailAttachmentRepeatedAcceptIsIdempotent(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	ctx := context.Background()
 	sender, recipient := int64(2351), int64(2352)

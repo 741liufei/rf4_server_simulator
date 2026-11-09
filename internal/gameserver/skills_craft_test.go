@@ -75,6 +75,7 @@ func craftObj8(recipe string, materials []craftSlot, qty uint64) *proto.Value {
 // TestSkillLearnFlow 验证技能学习、学习点数扣减、重置和全量重置。
 // 测试数据包含 cat1 的节点 502、504 和 514。
 func TestSkillLearnFlow(t *testing.T) {
+	t.Parallel()
 	db := openSkillCraftTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -224,6 +225,7 @@ func TestSkillLearnFlow(t *testing.T) {
 // TestSkillLearnAtLevel5SharedPoints 复现线上角色状态：5 级、无已投点。
 // 5 级累计 4 点；学习 514 应扣 1 点并把 313/701/1002 同步到同一等级。
 func TestSkillLearnAtLevel5SharedPoints(t *testing.T) {
+	t.Parallel()
 	db := openSkillCraftTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -292,6 +294,7 @@ func TestSkillLearnAtLevel5SharedPoints(t *testing.T) {
 // 当前静态数据：1/2/3/4/5/7/8/10/11 各有开放节点，可逐级练满；
 // 6 类没有 max_level>0 的节点，9 类熟练度 0 时全部锁定。
 func TestSkillLearnEveryCategoryWithAdminPoints(t *testing.T) {
+	t.Parallel()
 	db := openSkillCraftTestDB(t)
 	ctx := context.Background()
 	const uid = 1000001
@@ -430,6 +433,7 @@ func TestSkillLearnEveryCategoryWithAdminPoints(t *testing.T) {
 // 可解锁的节点应全部成功；要求 110% 的节点仍锁定（永久熟练度封顶 100，需竿加成到 110）。
 // 6 类没有 max_level>0 的节点，熟练度全满也不能加点。
 func TestSkillLearnAllNodesAtFullProficiency(t *testing.T) {
+	t.Parallel()
 	db := openSkillCraftTestDB(t)
 	ctx := context.Background()
 	const uid = 1000001
@@ -552,6 +556,7 @@ func TestSkillLearnAllNodesAtFullProficiency(t *testing.T) {
 // TestCraftFlow 制作闭环：材料齐 → 产出+消耗；材料缺 → 803(false)。
 // 附带 9/3 分解、9/4 询价、9/6 模板与路径 2（客户端材料槽）。
 func TestCraftFlow(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -777,6 +782,7 @@ func TestCraftFlow(t *testing.T) {
 // TestBaitCraftStacksAndMastery 验证连续制作鱼饵会合并到同一个背包堆，
 // 每次制作固定产出一包 30 个并增加 0.1% 捕获鱼饵熟练度。
 func TestBaitCraftStacksAndMastery(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -814,6 +820,7 @@ func TestBaitCraftStacksAndMastery(t *testing.T) {
 
 // TestBaitDigFlow 验证 9/3 使用铲子会产出鱼饵、合并背包堆并增加捕获鱼饵熟练度。
 func TestBaitDigFlow(t *testing.T) {
+	t.Parallel()
 	db := openItemTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -909,6 +916,7 @@ func (b *handlerBox) invoke(t *testing.T) ([]byte, bool) {
 
 // TestCraftSkillCatForRecipe 校验四类配方到技能大类的映射。
 func TestCraftSkillCatForRecipe(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		recipe string
 		want   int64
@@ -939,6 +947,7 @@ func TestCraftSkillCatForRecipe(t *testing.T) {
 //     145→74、香精 125→54、礼包 3103→193、9/6 需求对象 17→18——这些是
 //     主网已验证行为，不做无回归矩阵的全局变更。
 func TestListCodeForObjsMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		typeID uint32
 		want   string
@@ -974,6 +983,7 @@ func TestListCodeForObjsMatrix(t *testing.T) {
 // 原鱼同 guid）；鱼种不符与无有效鱼护引用都必须返回 (nil, 原因)——猫 71
 // 制作据此 803(false)，不再静默产空白板。
 func TestMountedFishTreeTx(t *testing.T) {
+	t.Parallel()
 	srv, db := newEconomyTxTestServer(t)
 	const uid int64 = 7361
 	entry, _ := seedImportedKeepnetFish(t, srv, uid, 21, false) // species=asp
@@ -1021,6 +1031,7 @@ func TestMountedFishTreeTx(t *testing.T) {
 // TestCraftFishBoardConsumesKeepnet 标本制作端到端：803 成功、产出板 f1 嵌
 // 25 类鱼对象（鱼种一致、guid 派生）、f8 携带被消耗的鱼护 guid、鱼护条目删除。
 func TestCraftFishBoardConsumesKeepnet(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -1092,6 +1103,7 @@ func TestCraftFishBoardConsumesKeepnet(t *testing.T) {
 // 803(f0=0)，且不留任何痕迹——不产板、不扣标本券、不动鱼护。此前该路径
 // 静默成功并生成空白板（craft_ops 挂鱼失败仅记日志）。
 func TestCraftFishBoardWithoutFishFails(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -1155,6 +1167,7 @@ func TestCraftFishBoardWithoutFishFails(t *testing.T) {
 
 // TestCraftProficiencyByRecipeFamily 校验四类技能按件概率增长、未命中与上限处理。
 func TestCraftProficiencyByRecipeFamily(t *testing.T) {
+	t.Parallel()
 	db := openMigratedTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -1214,6 +1227,7 @@ func TestCraftProficiencyByRecipeFamily(t *testing.T) {
 
 // TestCraftCookReplyCarriesSkillTree 校验烹调制作 803 回包携带 310 进度与 312 技能树。
 func TestCraftCookReplyCarriesSkillTree(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -1266,6 +1280,7 @@ func TestCraftCookReplyCarriesSkillTree(t *testing.T) {
 // TestCraftCountableProductsStack 验证可计件的制作产物会并入同一背包堆，
 // 而非计件产物（如 PVA 饵料板）仍保持独立实例。
 func TestCraftCountableProductsStack(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)
@@ -1353,6 +1368,7 @@ func TestCraftCountableProductsStack(t *testing.T) {
 // TestCraftResultCardUsesProducedQuantity 验证制作结果卡只带本次产出量：
 // 同一成品堆连续制作时 803.f1 不能下发整堆数量，f6 仍必须是整堆快照。
 func TestCraftResultCardUsesProducedQuantity(t *testing.T) {
+	t.Parallel()
 	db := openRecipeTestDB(t)
 	ctx := context.Background()
 	srv := newSkillsCraftServer(t, db)

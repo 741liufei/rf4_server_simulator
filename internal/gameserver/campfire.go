@@ -12,9 +12,35 @@ import (
 	"rf4server/internal/wiregen"
 )
 
-// defaultCampfireDurationMin 是游戏内分钟；24 倍速下 60 游戏分钟等于
-// 150 秒现实时间。
-const defaultCampfireDurationMin int64 = 60
+// tunableCampfireDurationGameMin 是燃烧时长的 tunable 键。单位是游戏内分钟；
+// 世界钟 24 倍速，1 游戏日（1440 游戏分钟）= 1 现实小时。
+const tunableCampfireDurationGameMin = "campfire_duration_game_min"
+
+// defCampfireDurationGameMin 保持机制引入时的既有值，使本改动在默认配置下
+// 行为逐字节不变；运维按需调长（如 480 游戏分钟 = 20 现实分钟）。
+const defCampfireDurationGameMin int64 = 60
+
+// 燃烧时长取值边界：至少 1 游戏分钟，至多 1 游戏日（1440 游戏分钟 = 1 现实小时），
+// 避免误填（如把现实秒当游戏分钟）产生数日燃烧的异常到期值。
+const (
+	minCampfireDurationGameMin int64 = 1
+	maxCampfireDurationGameMin int64 = 24 * 60
+)
+
+// campfireDurationGameMin 读取燃烧时长 tunable 并钳制到合法区间。
+func (s *Server) campfireDurationGameMin() int64 {
+	if s == nil {
+		return defCampfireDurationGameMin
+	}
+	v := int64(math.Round(s.tunableF(tunableCampfireDurationGameMin, float64(defCampfireDurationGameMin))))
+	if v < minCampfireDurationGameMin {
+		return minCampfireDurationGameMin
+	}
+	if v > maxCampfireDurationGameMin {
+		return maxCampfireDurationGameMin
+	}
+	return v
+}
 
 // fireMaterialItemIDs 点火材料系统 ID：每次点燃消耗 1 木柴 + 1 火柴
 // （客户端在发起点火前会按这两类材料做背包校验，服务端仍必须自行校验）。
@@ -36,11 +62,16 @@ func fireMaterialRowTx(ctx context.Context, tx *sql.Tx, uid int64, itemID string
 	return getItemTx(ctx, tx, guid)
 }
 
-// reusableCampfire 判断已有篝火是否仍在本次点燃的有效窗口内。
-// 窗口上限防止异常超长到期值被无成本续用。
-func reusableCampfire(state *store.CampfireState, nowFT, maxDurationFT int64) bool {
-	return state != nil && state.ExpiresFT > nowFT &&
-		state.ExpiresFT-nowFT <= maxDurationFT+5*10_000_000
+// reusableCampfire 判断已有篝火是否仍在"自己那次点燃"的有效窗口内。
+// 窗口上限取该记录自身的 duration_min，而不是当前 tunable 值：
+// 运维调短燃烧时长后，正在燃烧的旧篝火若按新上限判定会掉出窗口，
+// 导致玩家为一堆已经点着的火重复付材料。上限只用于拦异常的超长到期值。
+func reusableCampfire(state *store.CampfireState, nowFT int64) bool {
+	if state == nil || state.ExpiresFT <= nowFT {
+		return false
+	}
+	maxDurationFT := gameMinutesToRealDuration(state.DurationMin).Nanoseconds() / 100
+	return state.ExpiresFT-nowFT <= maxDurationFT+5*10_000_000
 }
 
 func campfireExpiryMinute(now time.Time, nowFT, expiry int64) uint32 {
@@ -94,7 +125,7 @@ func hCampfireStart(ctx *Ctx) ([]byte, bool) {
 	loc, spot := st.Loc, int64(st.Spot)
 	st.mu.Unlock()
 
-	duration := defaultCampfireDurationMin
+	duration := srv.campfireDurationGameMin()
 	maxDurationFT := gameMinutesToRealDuration(duration).Nanoseconds() / 100
 	defaultExpiry := nowFT + maxDurationFT
 
@@ -104,7 +135,7 @@ func hCampfireStart(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyFailure("System.InvalidOperationException", "篝火状态读取失败，请重试")
 		return nil, true
 	}
-	if reusableCampfire(existing, nowFT, maxDurationFT) {
+	if reusableCampfire(existing, nowFT) {
 		body, err := campfireResponseBody(ctx, now, nowFT, existing.ExpiresFT, nil, nil)
 		if err != nil {
 			return nil, false
@@ -129,7 +160,7 @@ func hCampfireStart(ctx *Ctx) ([]byte, bool) {
 		ctx.ReplyFailure("System.InvalidOperationException", "点火未完成，请重试")
 		return nil, true
 	}
-	if reusableCampfire(existing, nowFT, maxDurationFT) {
+	if reusableCampfire(existing, nowFT) {
 		_ = tx.Rollback()
 		body, err := campfireResponseBody(ctx, now, nowFT, existing.ExpiresFT, nil, nil)
 		if err != nil {

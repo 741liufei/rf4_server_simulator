@@ -8,6 +8,7 @@ import (
 )
 
 func TestCreateRodPersistsFactoryPartsAndF5(t *testing.T) {
+	t.Parallel()
 	srv, _ := newDetachTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, 1000001, "feeder_10126_FD390", "backpack", 1)
@@ -33,6 +34,7 @@ func TestCreateRodPersistsFactoryPartsAndF5(t *testing.T) {
 }
 
 func TestFactoryPartsStateFlagsMatchPartDefs(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	rod, err := srv.CreateItem(ctx, 1000001, "feeder_10126_FD390", "backpack", 1)
@@ -67,6 +69,7 @@ func TestFactoryPartsStateFlagsMatchPartDefs(t *testing.T) {
 }
 
 func TestCountableQuantityMatchesField(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	it, err := srv.CreateItem(ctx, 1000001, "worm_01", "backpack", 2)
@@ -89,6 +92,7 @@ func TestCountableQuantityMatchesField(t *testing.T) {
 }
 
 func TestNestedReelChildrenUseRigContainerEnum(t *testing.T) {
+	t.Parallel()
 	srv, _ := newDetachTestServer(t)
 	ctx := context.Background()
 	reel, err := srv.CreateItem(ctx, 1000001, "spin_5184", "backpack", 1)

@@ -10,7 +10,8 @@ import (
 )
 
 func TestCraftAllLeaderRecipesWithBothLineCategories(t *testing.T) {
-	db := openRecipeTestDB(t)
+	t.Parallel()
+	db := openStaticTestDB(t)
 	srv := newSkillsCraftServer(t, db)
 	ctx := context.Background()
 	rows, err := db.SQL.QueryContext(ctx, "SELECT recipe_id FROM recipe WHERE kind='leader' ORDER BY recipe_id")
@@ -31,6 +32,7 @@ func TestCraftAllLeaderRecipesWithBothLineCategories(t *testing.T) {
 	if len(recipeIDs) != 52 {
 		t.Fatalf("应覆盖 52 个引线配方，实际 %d", len(recipeIDs))
 	}
+	recipeIDs = sampleForShort(t, recipeIDs, 4)
 	uid := int64(2100000)
 	for _, recipeID := range recipeIDs {
 		for _, lineID := range []string{"mono_15065", "braid_15001", "br_leader_40077"} {

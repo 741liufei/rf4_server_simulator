@@ -41,3 +41,31 @@ test('params page groups preserve edits and upstream embedded API routing',async
  }finally{await browser.close();}
  console.log(JSON.stringify({cases:metrics.length,measurements:metrics}));
 });
+
+test('grant item entry is hidden in admin UI',async()=>{
+ const browser=await chromium.launch({headless:true,executablePath:process.env.RF4_TEST_BROWSER||path.join(process.env['ProgramFiles(x86)'],'Microsoft/Edge/Application/msedge.exe')});
+ try{
+  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  await context.addInitScript(()=>localStorage.setItem('rf4_admin_token','fixture'));
+  const page=await context.newPage();
+  await page.route('**/*',route=>{
+   const url=new URL(route.request().url());
+   if(url.pathname==='/')return route.fulfill({contentType:'text/html; charset=utf-8',body:html});
+   const key=url.pathname;
+   let data={};
+   if(key==='/api/me')data={username:'admin'};
+   else if(key==='/api/dashboard')data={sessions:1,players:1,items:1,mails:0,tunables:1,audits:0};
+   else if(key==='/api/audit')data=[];
+   else if(key==='/api/tunables')data={};
+   else if(key==='/api/players')data=[];
+   else if(key==='/api/players/detail')data={uid:1000001,name:'Tester',level:10,xp:0,silver:0,gold:0,bank:0,membership:0,membership_exp:0,items:[],keepnet:[],mail:[],item_count:0,keepnet_count:0,mail_count:0,banned:false};
+   return route.fulfill({contentType:'application/json',body:JSON.stringify(data)});
+  });
+  await page.goto('http://127.0.0.1:19214/#dashboard');
+  await page.locator('#qaGrid .qa').first().waitFor();
+  assert.equal(await page.evaluate(()=>eval('QUICK_ACTIONS').some(([id])=>id==='grant')),false);
+  await page.evaluate(()=>{PLAYER={uid:1000001,name:'Tester',level:10,xp:0,silver:0,gold:0,bank:0,membership:0,membership_exp:0,items:[],keepnet:[],mail:[],item_count:0,keepnet_count:0,mail_count:0,banned:false};PLAYER_TAB='items';renderPlayerDetail()});
+  assert.equal(await page.getByRole('button',{name:'+ 发放物品'}).count(),0);
+  assert.equal((await page.locator('#playerTabBody').innerText()).includes('发放物品'),false);
+ }finally{await browser.close();}
+});

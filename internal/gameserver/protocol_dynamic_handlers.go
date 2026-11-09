@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"rf4server/internal/proto"
 	"rf4server/internal/wiregen"
@@ -319,23 +320,32 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 				st.biteTimer.Stop()
 			}
 			pending := st.Pending
-			st.Pending = nil
-			st.CastActive = false
-			st.Hooked = false
-			st.Resolved = true
-			if !outcome.LineBroken && !outcome.ReelDamaged && !outcome.ComponentBroken {
-				st.GearGuid = ""
+			if outcome.KeepFight {
+				// 官服断轮：轮子坏了收不动线，但钓组与鱼都还在，搏鱼继续。
+				// 这里不能清 Pending/Hooked，否则客户端按跑鱼收尾、整轮直接结束；
+				// 后续等客户端断线(17/9)或玩家剪线(17/10)再收尾。
+			} else {
+				st.Pending = nil
+				st.CastActive = false
+				st.Hooked = false
+				st.Resolved = true
+				if !outcome.LineBroken && !outcome.ReelDamaged && !outcome.ComponentBroken {
+					st.GearGuid = ""
+				}
 			}
 			st.mu.Unlock()
-			if outcome.ReelDamaged {
-				// 轮子只是降一个耐久阶段，仍留在竿上；本次鱼按超载跑鱼处理。
+			switch {
+			case outcome.KeepFight:
+				// 鱼仍咬钩，不记跑鱼。
+			case outcome.ReelDamaged:
+				// 泄力打滑/摩擦片磨穿：鱼借线跑了。
 				srv.bumpFishingCounter(ctx.Sess.Userid, "escapes")
-			} else if outcome.LineBroken {
+			case outcome.LineBroken:
 				srv.bumpFishingCounter(ctx.Sess.Userid, "line_breaks")
-			} else if outcome.ComponentBroken {
+			case outcome.ComponentBroken:
 				// 钩/拟饵等终端件断裂：竿仍在手上，钓组摘除损坏件。
 				srv.bumpFishingCounter(ctx.Sess.Userid, "component_breaks")
-			} else {
+			default:
 				srv.bumpFishingCounter(ctx.Sess.Userid, "rod_breaks")
 			}
 			obj, berr := buildGearBreakResult(outcome)
@@ -364,9 +374,13 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 			}
 			reelBroken := outcome.ReelBroken
 			frictionWorn := outcome.FrictionWorn
+			keepFight := outcome.KeepFight
 			ctx.AfterResponse(func() {
 				ctx.Sess.Push4_22Items(syncGUIDs)
 				switch {
+				case keepFight:
+					// 官服断轮：鱼还咬着钩，只是收不动线。
+					ctx.Sess.pushSystemChat("渔线轮已损坏，无法收线；鱼仍在钩上，可剪线或等线被拉断")
 				case reelBroken:
 					// 轮子本体耐久归零，整体损坏。
 					ctx.Sess.pushSystemChat("渔线轮已损坏，请到工坊修理后再使用")
@@ -375,6 +389,10 @@ func hDynamicRodBreak(ctx *Ctx) ([]byte, bool) {
 					ctx.Sess.pushSystemChat("摩擦片磨穿、泄力失效，请到工坊更换摩擦片")
 				}
 			})
+			if keepFight {
+				// 鱼仍咬钩：不推跑鱼提示，搏鱼等 17/9/17/10 收尾。
+				return body, true
+			}
 			// 断件必丢鱼：11028 只表达装备损坏，另经聊天频道提示跑鱼。
 			reason := "断竿"
 			switch {
@@ -582,7 +600,8 @@ func hDynamicEquippedItems(ctx *Ctx) ([]byte, bool) {
 // 已配置水域生成 15004/15005 回声；未知或空水域返回空网格。
 func hDynamicSonar(ctx *Ctx) ([]byte, bool) {
 	key := argFirstStr(ctx.Tree)
-	obj, err := ctx.Sess.Srv.sonarResponse(ctx.Sess.pushCtx(), key)
+	c := sonarRollContext(ctx.Sess.Srv, ctx.Sess, key, time.Now())
+	obj, err := ctx.Sess.Srv.sonarResponse(ctx.Sess.pushCtx(), key, c)
 	if err != nil {
 		return nil, false
 	}
@@ -591,6 +610,37 @@ func hDynamicSonar(ctx *Ctx) ([]byte, bool) {
 		return nil, false
 	}
 	return body, true
+}
+
+func sonarRollContext(srv *Server, sess *Session, key string, now time.Time) fishRollContext {
+	c := fishRollContext{uid: sess.Userid, loc: key, now: now, cache: newFishingRollCache()}
+	if st := srv.fishingState(sess.Userid); st != nil {
+		st.mu.Lock()
+		c.spot = st.Spot
+		c.rigType = st.RigType
+		c.depthCM = st.effectiveBaitDepthCMLocked(now)
+		c.lureLayer = st.LureLayer
+		c.lureAction = st.LureAction
+		c.lureMask = st.LureMotionMask
+		c.lureSpeed = st.ReelSetting
+		c.skill = st.Bonus
+		if st.HasCastPos {
+			c.x, c.z, c.hasPos = st.CastPosX, st.CastPosZ, true
+		} else if st.HasPos {
+			c.x, c.z, c.hasPos = st.PosX, st.PosZ, true
+		}
+		c.onBoat, c.boatKnown = st.onBoatLocked(now.Unix())
+		gearGUID := st.GearGuid
+		st.mu.Unlock()
+		if gearGUID != "" && srv.DB != nil {
+			cctx := sess.pushCtx()
+			c.baits = srv.currentBaits(cctx, gearGUID)
+			c.hook = srv.loadGearSpecForRig(cctx, srv.rigGearIDs(cctx, sess.Userid, gearGUID), gearGUID)
+		}
+	}
+	c.weather = sess.weatherAt(key, now)
+	c.happyBite = sess.currentHappyHour().BiteBonus
+	return c
 }
 
 type handitemThrowConsume struct {

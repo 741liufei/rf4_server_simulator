@@ -275,6 +275,31 @@ func (s *Server) handleTunableList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, m)
 }
 
+// eventSwitchPeer 返回与指定活动开关互斥的另一个开关；非活动开关返回空串。
+func eventSwitchPeer(key string) string {
+	switch key {
+	case "event_newyear_enabled":
+		return "event_anniversary_enabled"
+	case "event_anniversary_enabled":
+		return "event_newyear_enabled"
+	}
+	return ""
+}
+
+// validateEventBranches 校验活动分支配置：逗号分隔的 9~20 整数，空串表示不下发。
+func validateEventBranches(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	for _, part := range strings.Split(value, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(part))
+		if err != nil || n < 9 || n > 20 {
+			return fmt.Errorf("活动分支只能是 9~20 的 ID，用逗号分隔")
+		}
+	}
+	return nil
+}
+
 func (s *Server) handleTunableSet(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Key   string `json:"key"`
@@ -284,15 +309,32 @@ func (s *Server) handleTunableSet(w http.ResponseWriter, r *http.Request) {
 		httpError(w, 400, "参数错误")
 		return
 	}
-	if (req.Key == "fish_ecology_enabled" || req.Key == "fish_bait_rules_enabled" || req.Key == "fish_distribution_enabled" || req.Key == "fish_weather_enabled" || req.Key == "happy_hour_enabled") && req.Value != "0" && req.Value != "1" {
-		httpError(w, 400, "鱼群开关只能为 0 或 1")
+	if (req.Key == "fish_ecology_enabled" || req.Key == "fish_bait_rules_enabled" || req.Key == "fish_distribution_enabled" || req.Key == "fish_weather_enabled" || req.Key == "happy_hour_enabled" || req.Key == "grade_ratio_enabled" || req.Key == "event_anniversary_enabled" || req.Key == "event_newyear_enabled") && req.Value != "0" && req.Value != "1" {
+		httpError(w, 400, "开关只能为 0 或 1")
 		return
+	}
+	if req.Key == "event_branches" {
+		if err := validateEventBranches(req.Value); err != nil {
+			httpError(w, 400, err.Error())
+			return
+		}
 	}
 	if err := s.db.TunableSet(r.Context(), req.Key, req.Value, adminOf(r)); err != nil {
 		httpError(w, 500, err.Error())
 		return
 	}
 	_ = s.db.AuditLogWrite(r.Context(), adminOf(r), "tunable", req.Key, req.Value)
+	// 两个限时活动互斥：开启任一个自动关闭另一个。5012 同时出现阶段 5/6 时
+	// 客户端只显示新年入口，周年面板会变成不可达。
+	if req.Value == "1" {
+		if peer := eventSwitchPeer(req.Key); peer != "" {
+			if err := s.db.TunableSet(r.Context(), peer, "0", adminOf(r)); err != nil {
+				httpError(w, 500, err.Error())
+				return
+			}
+			_ = s.db.AuditLogWrite(r.Context(), adminOf(r), "tunable", peer, "0")
+		}
+	}
 	// 通知主服立即刷新运行参数；后台也会按缓存周期生效。
 	_ = s.db.QueuePush(r.Context(), mustJSON(map[string]any{"op": "reload_tunables"}))
 	writeJSON(w, map[string]any{"ok": true})

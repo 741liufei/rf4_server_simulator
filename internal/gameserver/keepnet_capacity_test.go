@@ -8,6 +8,7 @@ import (
 )
 
 func TestKeepnetCapacitySnapshotAndMembership(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	ctx := context.Background()
 	const uid = int64(1000001)

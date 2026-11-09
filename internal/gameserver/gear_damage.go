@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
 	"sort"
 	"strings"
 
@@ -36,6 +35,7 @@ const (
 	damageEventReelOverload             = "reel_overload"
 	damageEventComponentBreak           = "component_break"
 	damageEventRepair                   = "repair"
+	damageEventLostOnRodBreak           = "lost_on_rod_break"
 )
 
 type gearBreakOutcome struct {
@@ -52,6 +52,9 @@ type gearBreakOutcome struct {
 	// 装配拆堆时服务端数量已减但客户端不知道，删除时需要一并刷新。
 	StackRefreshGUIDs []string
 	UpdatedTrees      []*proto.Value
+	// KeepFight 表示渔轮损坏但钓组与鱼保留：搏鱼继续，等客户端断线(17/9)
+	// 或剪线(17/10)收尾，不能按跑鱼处理。
+	KeepFight bool
 }
 
 type gearBreakDecision struct {
@@ -226,26 +229,6 @@ func setItemLengthField(row *store.Item, fields []proto.Field, length int64) boo
 	}
 	fields[idx].Num = ptrU64(uint64(length))
 	return true
-}
-
-// lineBreakLoss 返回本次断线损失的线长。
-// 客户端 17/9 只上报张力/冲量，没有断线长度字段；requested<=0 时按剩余长度的
-// 1..80% 随机扣减，保证不会把剩余长度扣成负数。
-func lineBreakLoss(remaining, requested int64) int64 {
-	if remaining <= 0 {
-		return 0
-	}
-	if requested > 0 {
-		if requested > remaining {
-			return remaining
-		}
-		return requested
-	}
-	maxLoss := remaining * 80 / 100
-	if maxLoss < 1 {
-		maxLoss = 1
-	}
-	return 1 + rand.Int63n(maxLoss)
 }
 
 func (s *Server) itemBrokenForMount(ctx context.Context, row *store.Item) bool {
@@ -658,8 +641,8 @@ func (s *Server) detachHookBaitsTx(ctx context.Context, tx *sql.Tx, uid int64, r
 	return removed, stackRefresh, nil
 }
 
-// breakComponentTx 处理终端件断裂：组件耐久归零、从钓组摘除并退回背包
-// （物品保留，可经工坊修理后重新装配），竿本体与承力线不受影响。
+// breakComponentTx 处理终端件断裂：钩/拟饵/饵/浮漂断裂即丢失销毁（官服口径），
+// 竿本体与承力线不受影响。拟饵出厂钩没有独立物品行，客户端看到的是拟饵没了。
 func (s *Server) breakComponentTx(ctx context.Context, uid int64, rodGUID, compGUID string, category int64) (*gearBreakOutcome, error) {
 	tx, err := s.DB.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -686,23 +669,7 @@ func (s *Server) breakComponentTx(ctx context.Context, uid int64, rodGUID, compG
 	if !mounted {
 		return nil, errors.New("断件不在该钓组中")
 	}
-	compFields, err := FieldsFromJSON(comp.FieldsJSON)
-	if err != nil {
-		return nil, err
-	}
 	before := comp.Durability
-	cIdx := fieldIdxByCS(comp.WireClass, csDurability)
-	if cIdx < 0 || !setWireFloat(compFields, comp.WireClass, cIdx, 0) {
-		return nil, errDurabilityField
-	}
-	comp.Durability = 0
-	comp.Container = "backpack"
-	comp.Slot = 0
-	comp.RigGUID = ""
-	clearRigFieldsForBackpack(compFields, comp.WireClass)
-	if err := updateItemFieldsTx(ctx, s.DB, tx, comp, compFields); err != nil {
-		return nil, err
-	}
 	// 投影可能先于 f5 存在；摘除投影不能依赖 f5 是否命中。
 	if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE rig_guid=? AND guid=?`, rodGUID, comp.GUID); err != nil {
 		return nil, err
@@ -745,9 +712,16 @@ func (s *Server) breakComponentTx(ctx context.Context, uid int64, rodGUID, compG
 			return nil, err
 		}
 	}
-	// 损坏组件退回背包（清空 rig_guid），与摘除同事务提交；否则组件滞留在
-	// rig 容器里，重登后既不在背包也不在钓组树。
-	if err := s.DB.DetachReturnToBackpackTx(ctx, tx, comp.GUID); err != nil {
+	// 官服口径：断件即丢失销毁，不再退背包（钩/拟饵/饵/浮漂都是消耗件）。
+	stackNumericIDs := map[int64]bool{}
+	stackSourceGUIDs := map[string]bool{}
+	if countableCategories[category] {
+		if srcGUID := splitSourceGUID(comp); len(srcGUID) == 32 {
+			stackSourceGUIDs[srcGUID] = true
+		}
+		stackNumericIDs[comp.NumericID] = true
+	}
+	if err := s.DB.DeleteItemCascadeTx(ctx, tx, comp.GUID); err != nil {
 		return nil, err
 	}
 	entry := store.ItemDamageLog{
@@ -758,11 +732,15 @@ func (s *Server) breakComponentTx(ctx context.Context, uid int64, rodGUID, compG
 	if err := store.AddItemDamageLog(ctx, tx, entry); err != nil {
 		return nil, err
 	}
-	stackRefresh = uniqueStrings(stackRefresh)
-	updated := append([]string{rodGUID, comp.GUID}, stackRefresh...)
+	removed = append(removed, comp.GUID)
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	// 子实例销毁后来源堆数量在装配时已减、客户端没收到推送，需要 4/22 对齐；
+	// 事务提交后再查（单连接测试库在事务内另开连接会死锁）。
+	stackRefresh = append(stackRefresh, s.backpackStackGUIDsForItems(ctx, uid, stackNumericIDs, stackSourceGUIDs)...)
+	stackRefresh = uniqueStrings(stackRefresh)
+	updated := append([]string{rodGUID}, stackRefresh...)
 	out := &gearBreakOutcome{
 		ComponentBroken: true, BreakPart: "component", BrokenGUID: comp.GUID,
 		RemovedGUIDs: removed, StackRefreshGUIDs: stackRefresh,
@@ -788,7 +766,13 @@ func (s *Server) resolveGearBreak(ctx context.Context, uid int64, rodGUID, repor
 	if lineGUID == "" {
 		lineGUID, _ = s.storedRigItemGUID(ctx, rod, csLine)
 	}
-	leaderGUID := s.rigComponentGuidOf(ctx, rodGUID, catWireLeader)
+	// 引线 GUID 与最弱环计算同源：rigGearIDs 已经把竿实例的钓组对象和
+	// rig_component 派生索引合并解析过（优先 15 前导线，回退 13 子线），
+	// 这里不能再只读实例字段，否则只在派生索引里有装配时断件又会漏掉引线。
+	leaderGUID := ids.LeaderGUID
+	if leaderGUID == "" {
+		leaderGUID = s.rigComponentGuidOf(ctx, rodGUID, catWireLeader)
+	}
 	if leaderGUID == "" {
 		leaderGUID = s.rigComponentGuidOf(ctx, rodGUID, gearCatLeader)
 	}
@@ -948,14 +932,17 @@ func (s *Server) damageReelSlipWear(ctx context.Context, uid int64, rodGUID, ree
 	}
 	updated := s.loadUpdatedTrees(ctx, []string{rodGUID, reelGUID})
 	return &gearBreakOutcome{
-		ReelDamaged: true, FrictionWorn: wornOut,
+		ReelDamaged: true, FrictionWorn: wornOut, KeepFight: true,
 		BreakPart: "reel", BrokenGUID: reelGUID, UpdatedTrees: updated,
 	}, nil
 }
 
 // damageReelLockOverload 处理"渔轮被拉坏"：客户端上报渔轮断件（或回退裁决判渔轮）时，
 // 官方表现是耐久直接归 0、轮子留在竿上但不可用，而不是分多档磨损。
-// 泄力打滑磨摩擦片是另一条独立通道，仍由 damageReelSlip 处理。
+// 官服断轮口径：钓组（主线/引线/钩/饵等）原样保留，鱼仍挂钩，只是无法收线；
+// 搏鱼继续，等客户端断线(17/9)按最弱环裁决或玩家剪线(17/10)收尾。
+// 再次抛投由 rigBrokenReelGUID 拦截；泄力打滑磨摩擦片是另一条独立通道，
+// 仍由 damageReelSlip 处理。
 func (s *Server) damageReelLockOverload(ctx context.Context, uid int64, rodGUID, reelGUID string) (*gearBreakOutcome, error) {
 	tx, err := s.DB.SQL.BeginTx(ctx, nil)
 	if err != nil {
@@ -985,83 +972,9 @@ func (s *Server) damageReelLockOverload(ctx context.Context, uid int64, rodGUID,
 		return nil, err
 	}
 
-	// 渔轮留在竿上（f4）但已损坏；主线、前导、拟饵等其余钓组组件摘回背包。
-	rodFields, err := FieldsFromJSON(rod.FieldsJSON)
-	if err != nil {
-		return nil, err
-	}
-	stored := protoFieldAt(rodFields, rod.WireClass, csRigObject)
-	compGUIDs := map[string]bool{}
-	if rows, qerr := tx.QueryContext(ctx,
-		`SELECT COALESCE(guid,'') FROM rig_component WHERE rig_guid=? AND guid<>?`, rodGUID, reelGUID); qerr == nil {
-		for rows.Next() {
-			var g string
-			if err := rows.Scan(&g); err == nil && g != "" {
-				compGUIDs[g] = true
-			}
-		}
-		_ = rows.Err()
-		_ = rows.Close()
-	}
-	for _, c := range rigCompsOf(stored) {
-		if c.GUID != "" && c.GUID != reelGUID {
-			compGUIDs[c.GUID] = true
-		}
-	}
-	if lineGUID, lerr := s.storedRigItemGUID(ctx, rod, csLine); lerr == nil && lineGUID != "" && lineGUID != reelGUID {
-		compGUIDs[lineGUID] = true
-	}
-	guids := make([]string, 0, len(compGUIDs))
-	for g := range compGUIDs {
-		guids = append(guids, g)
-	}
-	sort.Strings(guids)
-	var removed, stackRefresh []string
-	for _, g := range guids {
-		row, gerr := s.DB.GetItemByGUIDTx(ctx, tx, g)
-		if gerr != nil || row == nil {
-			continue
-		}
-		srcGUID, derr := s.detachOnBreakTx(ctx, tx, uid, rodGUID, row,
-			damageEventDetachedOnReelBreak, "reel_break", reelGUID)
-		if derr != nil {
-			return nil, derr
-		}
-		removed = append(removed, g)
-		if srcGUID != "" {
-			stackRefresh = append(stackRefresh, srcGUID)
-		}
-	}
-	// 钓组已整体清空：补饵请求和饵-钩映射必须一起清掉，否则修好轮子后
-	// 第一次抛竿会把饵挂回一条空钓组。
-	if err := clearRodBaitSettingsTx(ctx, tx, rodGUID); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE rig_guid=? AND guid<>?`, rodGUID, reelGUID); err != nil {
-		return nil, err
-	}
-	comps := rigCompsOf(stored)
-	for k := range comps {
-		delete(comps, k)
-	}
-	name, rigType, typeOK := rigIdentity(stored)
-	if !typeOK {
-		rigType = s.defaultRigTypeForRod(ctx, rod.ItemID)
-		name = rigNameForType(rigType)
-	}
-	depth := rigDepthOf(stored, defaultDepthFor(name, rigType))
-	if i := fieldIdxByCS(rod.WireClass, csRigObject); i >= 0 && i < len(rodFields) {
-		rodFields[i].Op = "VAL"
-		rodFields[i].Val = buildRig153WithClip(name, rigType, comps, depth, rigClipOf(stored))
-	}
-	if i := fieldIdxByCS(rod.WireClass, csLine); i >= 0 {
-		rodFields[i].Op = "OPTGUID"
-		rodFields[i].Hex = ""
-	}
-	if err := updateItemFieldsTx(ctx, s.DB, tx, rod, rodFields); err != nil {
-		return nil, err
-	}
-
+	// 官服断轮口径：轮子耐久归零、留在竿上；主线、前导、钩饵等钓组组件
+	// 原样保留，鱼也没跑，只是收不动线。后续由客户端断线(17/9)或剪线(17/10)
+	// 收尾，那时再按最弱环/清杯流程清理钓组。
 	if err := store.AddItemDamageLog(ctx, tx, store.ItemDamageLog{
 		UID: uid, ItemGUID: reel.GUID, ItemID: reel.ItemID, Event: damageEventReelOverload,
 		BeforeDurability: ptrFloat64(before), AfterDurability: ptrFloat64(0),
@@ -1086,13 +999,11 @@ func (s *Server) damageReelLockOverload(ctx context.Context, uid int64, rodGUID,
 			return nil, err
 		}
 	}
-	stackRefresh = uniqueStrings(stackRefresh)
-	updated := append([]string{rodGUID, reelGUID}, stackRefresh...)
+	updated := []string{rodGUID, reelGUID}
 	return &gearBreakOutcome{
-		ReelDamaged: true, ReelBroken: true,
-		BreakPart: "reel", BrokenGUID: reelGUID, RemovedGUIDs: removed,
-		StackRefreshGUIDs: stackRefresh,
-		UpdatedTrees:      s.loadUpdatedTrees(ctx, updated),
+		ReelDamaged: true, ReelBroken: true, KeepFight: true,
+		BreakPart: "reel", BrokenGUID: reelGUID,
+		UpdatedTrees: s.loadUpdatedTrees(ctx, updated),
 	}, nil
 }
 
@@ -1146,14 +1057,13 @@ func updateItemFieldsTx(ctx context.Context, db *store.DB, tx *sql.Tx, row *stor
 }
 
 // lineLossPolicy 描述一次主线/子线长度损失的来源与记账方式。
-// 断线（17/9）和剪线（17/10）共用同一套"扣主线长度 + 清掉主线以下终端件"的
-// 落库逻辑，区别只在扣多少米、以及写哪一类 damage log。
+// 断线（17/9）和剪线（17/10）共用同一套"清掉主线以下终端件"的
+// 落库逻辑：断主线=清杯整条丢失，断子线不动主线，剪线按上报米数扣。
 type lineLossPolicy struct {
-	// requestedM 本次要扣掉的米数；<=0 时由 randomWhenMissing 决定是随机扣还是不扣。
+	// requestedM 本次要扣掉的米数（仅剪线使用）。
 	requestedM int64
-	// randomWhenMissing 断线语义：客户端只上报张力不上报长度，按剩余长度 1..80% 随机扣。
-	// 剪线是玩家主动动作，上报多少扣多少，不能随机。
-	randomWhenMissing bool
+	// destroyLine 断主线语义：清杯后整条线丢失（17/9）；剪线只按米扣。
+	destroyLine bool
 	// eventLine 记录主线长度变化的事件名；eventLost 记录随线丢失的配件。
 	eventLine string
 	eventLost string
@@ -1184,11 +1094,10 @@ func (s *Server) rodLineLengthLeft(ctx context.Context, rodGUID string) int64 {
 
 func (s *Server) breakLineTx(ctx context.Context, uid int64, rodGUID, brokenGUID string, breakCategory int64) (*gearBreakOutcome, error) {
 	return s.lineLossTx(ctx, uid, rodGUID, brokenGUID, breakCategory, lineLossPolicy{
-		requestedM:        5,
-		randomWhenMissing: true,
-		eventLine:         damageEventLineBreak,
-		eventLost:         damageEventLostOnLineBreak,
-		reason:            "line_break",
+		destroyLine: true,
+		eventLine:   damageEventLineBreak,
+		eventLost:   damageEventLostOnLineBreak,
+		reason:      "line_break",
 	})
 }
 
@@ -1250,19 +1159,19 @@ func (s *Server) lineLossTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 			}
 			afterLength = beforeLength
 			if mainLineBreak {
-				// 断主线固定损失 5 米，剪线按客户端上报的放线米数扣；
-				// 断子线不走这个分支，不扣主线长度。
 				lossLength = policy.requestedM
-				if lossLength <= 0 && policy.randomWhenMissing {
-					lossLength = lineBreakLoss(beforeLength, 0)
+				if policy.destroyLine {
+					// 官服清杯口径：主线被拉断时整条丢失（含挂线配件）。
+					// afterLength=0 走下方"线耗尽删除"分支，f3 引用一并清理。
+					lossLength = beforeLength
 				}
 				if lossLength > beforeLength {
 					lossLength = beforeLength
 				}
-				afterLength = beforeLength - lossLength
-				if afterLength < 0 {
-					afterLength = 0
+				if lossLength < 0 {
+					lossLength = 0
 				}
+				afterLength = beforeLength - lossLength
 				if afterLength > 0 {
 					if !setItemLengthField(lineRow, lineFields, afterLength) {
 						return nil, errLineLengthField
@@ -1558,10 +1467,13 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		return nil, err
 	}
 
-	// 断竿只报废竿本体：耐久归零、不能取竿也不能抛投，竿上配件与主线全部
-	// 摘回背包且耐久不变，可以拆下来装到别的竿上。
-	// 离开的组件仍进 11028 的移除列表让客户端清掉 UI 状态；缺少移除列表时
-	// 客户端不清线组、鱼仍挂钩，整轮卡死在搏鱼状态，只能换竿逃生。
+	// 断竿只报废竿本体：耐久归零、不能取竿也不能抛投；竿子是"断了竿梢"，
+	// 竿本体和竿上的渔轮都保留（轮子没坏，仍挂在竿上），主线与挂线配件
+	// （引线/钩/饵/浮漂/铅坠等）全部丢失销毁。
+	// 销毁的组件进 11028 的移除列表让客户端清掉线组 UI；竿本体走 4/22 刷新
+	// （断竿树带损坏位）。移除列表不能省：客户端只按它清线组，缺了会继续
+	// 认为鱼还挂在钩上，搏鱼状态无法退出。
+	reelGUID, _ := s.storedRigItemGUID(ctx, rod, csReel)
 	var removed, stackRefresh []string
 	stored := protoFieldAt(fields, rod.WireClass, csRigObject)
 	compGUIDs := map[string]bool{}
@@ -1584,37 +1496,48 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 	if lineGUID, lerr := s.storedRigItemGUID(ctx, rod, csLine); lerr == nil && lineGUID != "" {
 		compGUIDs[lineGUID] = true
 	}
+	delete(compGUIDs, reelGUID)
 	guids := make([]string, 0, len(compGUIDs))
 	for g := range compGUIDs {
 		guids = append(guids, g)
 	}
 	sort.Strings(guids)
+	stackNumericIDs := map[int64]bool{}
+	stackSourceGUIDs := map[string]bool{}
 	for _, g := range guids {
 		row, gerr := s.DB.GetItemByGUIDTx(ctx, tx, g)
 		if gerr != nil || row == nil {
 			continue
 		}
-		// 组件不销毁：完好组件摘回背包；拆分子饵并回来源堆，避免背包里
-		// 出现同种饵两堆。来源堆会进入 4/22 刷新列表。
-		srcGUID, derr := s.detachOnBreakTx(ctx, tx, uid, rodGUID, row,
-			damageEventDetachedOnRodBreak, "rod_break", brokenGUID)
-		if derr != nil {
-			return nil, derr
+		// 官服口径：断竿时挂线配件全部丢失销毁（含拆分子饵），不再摘回背包。
+		if category, ok := effectiveCategoryTx(ctx, tx, row.ItemID); ok && countableCategories[category] {
+			if srcGUID := splitSourceGUID(row); len(srcGUID) == 32 {
+				stackSourceGUIDs[srcGUID] = true
+			}
+			stackNumericIDs[row.NumericID] = true
+		}
+		if err := s.DB.DeleteItemCascadeTx(ctx, tx, g); err != nil {
+			return nil, err
+		}
+		entry := store.ItemDamageLog{
+			UID: uid, ItemGUID: g, ItemID: row.ItemID, Event: damageEventLostOnRodBreak,
+			BeforeDurability: ptrFloat64(row.Durability), BrokenGUID: brokenGUID,
+			DetailJSON: damageDetailJSON(map[string]any{"rod_guid": rodGUID, "reason": "rod_break"}),
+		}
+		if err := store.AddItemDamageLog(ctx, tx, entry); err != nil {
+			return nil, err
 		}
 		removed = append(removed, g)
-		if srcGUID != "" {
-			stackRefresh = append(stackRefresh, srcGUID)
-		}
 	}
-	// 钓组已整体清空：补饵请求和饵-钩映射必须一起清掉，否则修好竿后
-	// 第一次抛竿会把饵挂回一条空钓组。
+	// 钓组已整体清空：补饵请求和饵-钩映射必须一起清掉，否则断竿后
+	// 第一次抛竿（换竿或换轮）会把饵挂回一条空钓组。
 	if err := clearRodBaitSettingsTx(ctx, tx, rodGUID); err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE rig_guid=?`, rodGUID); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rig_component WHERE rig_guid=? AND COALESCE(guid,'')<>?`, rodGUID, reelGUID); err != nil {
 		return nil, err
 	}
-	// 清空竿上的钓组存储与主线引用。
+	// 清空竿上的钓组存储与主线引用；渔轮引用（f4）保留——轮子仍挂在断竿上。
 	comps := rigCompsOf(stored)
 	for k := range comps {
 		delete(comps, k)
@@ -1633,10 +1556,7 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 		fields[i].Op = "OPTGUID"
 		fields[i].Hex = ""
 	}
-	if i := fieldIdxByCS(rod.WireClass, csReel); i >= 0 && i < len(fields) {
-		fields[i].Op = "OPTGUID"
-		fields[i].Hex = ""
-	}
+	// csReel（f4）不清：断竿后轮子仍挂在竿上。
 	if err := updateItemFieldsTx(ctx, s.DB, tx, rod, fields); err != nil {
 		return nil, err
 	}
@@ -1652,7 +1572,9 @@ func (s *Server) breakRodTx(ctx context.Context, uid int64, rodGUID, brokenGUID 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	stackRefresh = uniqueStrings(stackRefresh)
+	// 被销毁的拆分子饵：装配时来源堆数量已减但客户端没收到推送，
+	// 删除子实例后要把来源堆（含同物品号背包堆）一并刷新对齐数量。
+	stackRefresh = s.backpackStackGUIDsForItems(ctx, uid, stackNumericIDs, stackSourceGUIDs)
 	updated := append([]string{rodGUID}, stackRefresh...)
 	return &gearBreakOutcome{
 		LineBroken: false, BreakPart: "rod", BrokenGUID: brokenGUID, RemovedGUIDs: removed,

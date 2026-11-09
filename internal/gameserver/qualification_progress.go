@@ -60,11 +60,12 @@ func (s *Server) build5003(ctx context.Context, uid int64) *proto.Value {
 	if s.DB != nil {
 		states, _ = s.DB.QualificationStates(ctx, uid)
 	}
-	return build5003FromStates(states)
+	return build5003FromStates(states, s.buildSeason5012())
 }
 
 // build5003FromStates 用已读取的进度装配 5003；states 为 nil 时只发赛季块与空槽。
-func build5003FromStates(states map[int64]store.QualificationState) *proto.Value {
+// season 由 Server.buildSeason5012() 提供，无会话的调用方传默认赛季块。
+func build5003FromStates(states map[int64]store.QualificationState, season *proto.Value) *proto.Value {
 	fishArgs := proto.Args(proto.S("202"))
 	counterArgs := proto.Args(proto.S("201"))
 	seen := make(map[string]bool)
@@ -83,7 +84,7 @@ func build5003FromStates(states map[int64]store.QualificationState) *proto.Value
 		}
 	}
 	return wiregen.MustMakeObj("fopkeoppndn", map[int]*proto.Value{
-		0: build5012(),
+		0: season,
 		1: fishArgs,
 		2: counterArgs,
 	})

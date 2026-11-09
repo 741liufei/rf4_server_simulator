@@ -10,6 +10,7 @@ import (
 )
 
 func TestReleaseRejectsStaleFishGUID(t *testing.T) {
+	t.Parallel()
 	for _, withRod := range []bool{false, true} {
 		t.Run(map[bool]string{false: "fish_only", true: "rod_and_fish"}[withRod], func(t *testing.T) {
 			s, db := newRigTestServer(t)
@@ -44,6 +45,7 @@ func TestReleaseRejectsStaleFishGUID(t *testing.T) {
 // 升级礼物走背包直发（不走邮件）：9→10 结算收到官方 10 级礼物（蜉蝣幼虫×15）；
 // 同等级跨结算/放生/重放只发一次；金币不变；关闭 tunable 恢复旧行为（不发）。
 func TestCatchAndReleaseLevelUpGrantsOfficialGifts(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -188,6 +190,7 @@ func assertGiftRow(t *testing.T, v *proto.Value, wantLevel int64, wantItems int)
 
 // 收鱼结算路径：升级时 801.f4 携带 811 礼物行；重放结算回 null 不再携带。
 func TestSettlementResponseCarriesLevelGiftRow(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -232,6 +235,7 @@ func TestSettlementResponseCarriesLevelGiftRow(t *testing.T) {
 
 // 放生路径：升级时 807.f1 携带 811 礼物行（官方升级礼物主通道）；重放放生回 null。
 func TestReleaseResponseCarriesLevelGiftRow(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid
@@ -277,6 +281,7 @@ func TestReleaseResponseCarriesLevelGiftRow(t *testing.T) {
 
 // 11 级礼物按升到该级最后一尾鱼的钓法分套：纺车（路亚）→ Arrow S60L + Hydra Smart 2 25S。
 func TestLevel11GiftVariesByRigType(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	sess := newProbeSess(s)
 	uid := sess.Userid

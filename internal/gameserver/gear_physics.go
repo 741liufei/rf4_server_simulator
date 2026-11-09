@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"rf4server/internal/proto"
 	"rf4server/internal/store"
 )
 
@@ -72,6 +73,7 @@ type rigGearIDs struct {
 	ReelGUID            string
 	Line                string
 	Leader              string
+	LeaderGUID          string
 	Leadcore            string
 	LeadcoreGUID        string
 	Connector           string
@@ -242,6 +244,107 @@ func leaderStrengthKg(def *store.ItemDef) float64 {
 		}
 	}
 	return itemDefF32(def, gearAttrMaxLoad)
+}
+
+// craftedLeaderBaseStrengthKg 读取自制引线（leader_crafted_*）实例上的材料承力。
+//
+// leaderStrengthKg 只读定义：商店成品前导的定义里 mbnambppbom（内嵌线材）和
+// lbadjgllglo（连接件）自带数值，可以直接取；自制引线的线材与连接件是玩家
+// 制作时才选的，定义里这两个属性都是 null、顶层也没有 kngaaefkpka，
+// 读定义只能得到 0。客户端判定用的是引线实例上的 nlmnpekipjc
+// （制作时写好的最弱材料值），服务端却把整根引线当成"没有这个部件"跳过最弱环。
+// 这里按嵌套材料自己的定义取最弱值，不掺耐久与工艺，
+// 耐久由调用方按引线实例结算。
+func (s *Server) craftedLeaderBaseStrengthKg(ctx context.Context, leaderGUID string) float64 {
+	if s == nil || s.DB == nil || strings.TrimSpace(leaderGUID) == "" {
+		return 0
+	}
+	row, err := s.DB.GetItemByGUID(ctx, leaderGUID)
+	if err != nil || row == nil {
+		return 0
+	}
+	if cls, ok := categoryWireClass[gearCatLeader]; !ok || row.WireClass != cls.Class {
+		return 0
+	}
+	fields, err := FieldsFromJSON(row.FieldsJSON)
+	if err != nil {
+		return 0
+	}
+	return s.craftedLeaderBaseStrengthFromFields(ctx, row.WireClass, fields)
+}
+
+// craftedLeaderBaseStrengthFromFields 从引线对象的内嵌材料取最弱承力。
+// 材料在 f1 前导线、f2 连接件、f3 普通主线（减震引线）三个槽位上。
+//
+// 优先使用内嵌材料对象的 nlmnpekipjc：制作/修复路径已经把“实际材料额定拉力
+// × 材料自身耐久 × 材料工艺”写在这里。旧实现只按 numeric_id 回查定义，
+// 普通主线映射到前导线模型时会丢掉真实材料强度；重新乘材料耐久又容易与
+// 外层引线耐久叠加。只有旧存档缺少该字段时，才按材料定义与内嵌状态回算。
+func (s *Server) craftedLeaderBaseStrengthFromFields(
+	ctx context.Context,
+	class string,
+	fields []proto.Field,
+) float64 {
+	if s == nil || s.DB == nil || len(fields) == 0 {
+		return 0
+	}
+	best := 0.0
+	for _, key := range []string{gearAttrLeaderIn, gearAttrLeaderLock, craftedMainLineKey} {
+		idx := fieldIdxByCS(class, key)
+		if idx < 0 || idx >= len(fields) {
+			continue
+		}
+		obj := fields[idx].Val
+		if obj == nil || obj.Kind != proto.KindObj {
+			continue
+		}
+		strength, ok := wireFloatAt(obj, csStrength)
+		if !ok || strength <= 0 {
+			ni := fieldIdxByCS(obj.Class, csNumericID)
+			if ni < 0 || ni >= len(obj.Fields) || obj.Fields[ni].Num == nil {
+				continue
+			}
+			def, err := s.DB.GetItemDef(ctx, int64(u64Of(obj.Fields[ni].Num)))
+			if err != nil || def == nil {
+				continue
+			}
+			base := itemDefF32(def, gearAttrMaxLoad)
+			if base <= 0 {
+				continue
+			}
+			durability, ok := wireFloatAt(obj, csDurability)
+			if !ok {
+				durability = 1
+			}
+			workmanship, ok := wireFloatAt(obj, csWorkmanship)
+			if !ok {
+				workmanship = 1
+			}
+			strength = base * clampUnit(durability) * clampUnit(workmanship)
+		}
+		if strength > 0 && (best <= 0 || strength < best) {
+			best = strength
+		}
+	}
+	return best
+}
+
+// wireFloatAt 读取 wire 对象上的浮点字段，兼容 FLOAT/DOUBLE 与 U32 位型。
+func wireFloatAt(obj *proto.Value, key string) (float64, bool) {
+	if obj == nil || obj.Kind != proto.KindObj {
+		return 0, false
+	}
+	idx := fieldIdxByCS(obj.Class, key)
+	if idx < 0 || idx >= len(obj.Fields) {
+		return 0, false
+	}
+	if fieldIsFloat(obj.Class, idx) {
+		return obj.Fields[idx].Float, true
+	}
+	if fieldOpAt(obj.Class, idx) != "U32" || obj.Fields[idx].Num == nil {
+		return 0, false
+	}
+	return float64(proto.F32FromBits(uint32(u64Of(obj.Fields[idx].Num)))), true
 }
 
 func reelDragMaxKg(def *store.ItemDef) float64 {
@@ -519,7 +622,15 @@ func (s *Server) loadGearSpec(ctx context.Context, ids rigGearIDs) gearPhysicsSp
 	lineDef := load(ids.Line)
 	spec.LineStrengthKg = applyDurability(lineStrengthKg(lineDef), ids.LineDurability)
 	spec.LineStretch = lineStretch(lineDef)
-	spec.LeaderStrengthKg = applyDurability(leaderStrengthKg(load(ids.Leader)), ids.LeaderDurability)
+	// 自制引线（leader_crafted_*）的定义里内嵌线材与连接件都是 null：
+	// 材料是玩家制作时才选的，只有实例上才有。读定义会得到 0，
+	// 于是整根引线不进入最弱环，客户端按引线强度报 17/9、
+	// 服务端却把断件判到主线/鱼竿/渔轮上（爆错件）。
+	leaderKg := leaderStrengthKg(load(ids.Leader))
+	if leaderKg <= 0 {
+		leaderKg = s.craftedLeaderBaseStrengthKg(ctx, ids.LeaderGUID)
+	}
+	spec.LeaderStrengthKg = applyDurability(leaderKg, ids.LeaderDurability)
 	spec.LeadcoreStrengthKg = applyDurability(itemDefF32(load(ids.Leadcore), gearAttrMaxLoad), ids.LeadcoreDurability)
 	spec.ConnectorStrengthKg = applyDurability(itemDefF32(load(ids.Connector), gearAttrMaxLoad), ids.ConnectorDurability)
 	return spec
@@ -661,9 +772,11 @@ func (s *Server) rigGearIDs(ctx context.Context, uid int64, rodGUID string) rigG
 	out.ReelGUID = compGUIDs[gearCatReel]
 	out.Reel, out.ReelDurability = s.itemSystemIDDurabilityByGUID(ctx, out.ReelGUID)
 	out.Line, out.LineDurability = s.itemSystemIDDurabilityByGUID(ctx, compGUIDs[gearCatLine])
-	out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, compGUIDs[gearCatLeaderWire])
+	out.LeaderGUID = compGUIDs[gearCatLeaderWire]
+	out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, out.LeaderGUID)
 	if out.Leader == "" {
-		out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, compGUIDs[gearCatLeader])
+		out.LeaderGUID = compGUIDs[gearCatLeader]
+		out.Leader, out.LeaderDurability = s.itemSystemIDDurabilityByGUID(ctx, out.LeaderGUID)
 	}
 	// 铅芯前导与独立连接件是和前导/子线并列的终端承力件，各自有拉力，
 	// 不能混进"Leader"里算，否则最弱环会漏掉它们。

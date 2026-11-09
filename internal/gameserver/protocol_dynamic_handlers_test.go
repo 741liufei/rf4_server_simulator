@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 	"testing"
+	"time"
 
 	"rf4server/internal/config"
 	"rf4server/internal/logging"
@@ -18,7 +19,34 @@ func dynamicTestCtx(srv *Server, tree *proto.Value) *Ctx {
 	}
 }
 
+func TestSonarRollContextUsesBiteContextState(t *testing.T) {
+	srv, _ := newRigTestServer(t)
+	sess, _ := newTunnelProbe(t, srv)
+	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
+	st := srv.stateFor(sess.Userid)
+	st.mu.Lock()
+	st.HasPos, st.PosX, st.PosZ = true, 10, 20
+	st.HasCastPos, st.CastPosX, st.CastPosZ = true, 110, 220
+	st.Spot, st.RigType, st.DepthCM = 9, 50, 450
+	st.LureLayer, st.LureAction, st.LureMotionMask, st.ReelSetting = .9, "marine_jig", 0x400, 8
+	st.Bonus = fishingSkillBonus{BiteSpeed: 1.1, EcologyInterest: .22, TrophyLuck: .18}
+	st.mu.Unlock()
+
+	c := sonarRollContext(srv, sess, "loc12_215", now)
+	if !c.hasPos || c.x != 110 || c.z != 220 {
+		t.Fatalf("声呐应优先使用真实抛竿落点: %+v", c)
+	}
+	if c.spot != 9 || c.rigType != 50 || c.depthCM != 450 ||
+		c.lureLayer != .9 || c.lureAction != "marine_jig" || c.lureMask != 0x400 || c.lureSpeed != 8 {
+		t.Fatalf("声呐竿位上下文与真实咬口不一致: %+v", c)
+	}
+	if math.Abs(c.skill.TrophyLuck-.18) > 1e-9 || math.Abs(c.skill.EcologyInterest-.22) > 1e-9 {
+		t.Fatalf("声呐未继承当前技能加成: %+v", c.skill)
+	}
+}
+
 func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	for _, k := range []key2{{13, 5}, {13, 6}, {17, 9}, {17, 10}, {17, 11}, {3, 40}, {3, 41}, {1, 10}} {
@@ -44,10 +72,9 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 		if got := f0.StrOr(); got != "loc12_01" {
 			t.Fatalf("1/10 f0=%q, 期望 loc12_01", got)
 		}
-		if grid := dec.Field(1).Val; grid == nil || grid.Kind != proto.KindNull {
-			// 客户端 4.0.25034 不认识 15004，连空的 args(15004) 都会抛
-			// GetType not found 并断线，所以默认只回 f1=null。
-			t.Fatalf("1/10 f1 应为 null，实得 %#v", grid)
+		grid := dec.Field(1).Val
+		if grid == nil || grid.Kind != proto.KindArgs || grid.ArgCodeStr() != sonarCellArgCode || grid.ArgCount() != 0 {
+			t.Fatalf("1/10 f1 应为空 args(%s)，实得 %#v", sonarCellArgCode, grid)
 		}
 		if reason := srv.dispatch.checkRegisteredResponse(1, 10, body, srv.Table()); reason != "" {
 			t.Fatalf("1/10 合同守卫误拒: %s", reason)
@@ -131,6 +158,7 @@ func TestDynamicProtocolHandlersShapeAndEcho(t *testing.T) {
 }
 
 func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -282,6 +310,7 @@ func TestDynamicHanditemThrowConsumesLoadedStack(t *testing.T) {
 // 所以这一发的飞行距离只能由服务端下发的 805.f0 决定。
 // 缺省 0=沿用客户端值；给正值时 f0 覆盖为服务端距离，扣料仍是每发 1 份。
 func TestDynamicHanditemThrowDistanceForceOverridesClientDistance(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -335,6 +364,7 @@ func TestDynamicHanditemThrowDistanceForceOverridesClientDistance(t *testing.T) 
 // 投掷很可能又是 call=35。撞键会被幂等静默吞掉——饵照扣、窝一格没记
 // （实机 13:10 三发 call=35/36/37 就是这样一笔都没进账）。
 func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	setWeatherTestTunable(t, srv, "groundbait_enabled", "1")
@@ -390,6 +420,7 @@ func TestDynamicHanditemThrowLedgerSurvivesCallIDReuse(t *testing.T) {
 }
 
 func TestDynamicEquippedItemsUsesRigRows(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -423,6 +454,7 @@ func TestDynamicEquippedItemsUsesRigRows(t *testing.T) {
 // 这里钉三件事：开开关后 f2 前三位是「玩家沿抛竿方向前进 dist 米」的坐标；
 // 方向取玩家→上次抛竿落点；关掉开关原样退回体力姿态块。
 func TestDynamicHanditemThrowLandingOverridesPoseBlock(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	ctx := context.Background()
@@ -521,6 +553,7 @@ func TestDynamicHanditemThrowLandingOverridesPoseBlock(t *testing.T) {
 // TestDynamicHanditemThrowLandingCell 锁 handitem_throw_land_cell：
 // 开开关后窝账格子跟着真实落点走，不再是上次抛竿的落点格。
 func TestDynamicHanditemThrowLandingCell(t *testing.T) {
+	t.Parallel()
 	srv, _ := newRigTestServer(t)
 	registerDynamicProtocolHandlers(srv.dispatch)
 	setWeatherTestTunable(t, srv, "groundbait_enabled", "1")

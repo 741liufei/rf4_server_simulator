@@ -106,6 +106,7 @@ func drinkUseTestCount(t *testing.T, s *Server, query string, want int) {
 }
 
 func TestDrinkUseAtomicQuantityAndF13(t *testing.T) {
+	t.Parallel()
 	for _, f13 := range []uint64{0, 7} {
 		t.Run(fmt.Sprint(f13), func(t *testing.T) {
 			s := newDrinkUseTestServer(t)
@@ -140,6 +141,7 @@ func TestDrinkUseAtomicQuantityAndF13(t *testing.T) {
 }
 
 func TestDrinkUseRejectsUnavailableInventory(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"empty", "quantity-mismatch", "other-owner", "other-container", "other-storage", "wrong-class"} {
 		t.Run(scenario, func(t *testing.T) {
 			s := newDrinkUseTestServer(t)
@@ -182,6 +184,7 @@ func TestDrinkUseRejectsUnavailableInventory(t *testing.T) {
 }
 
 func TestDrinkUseReplayAfterExhaustionAndRestart(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "restart.db")
 	s := newDrinkUseTestServer(t, path)
 	row := drinkUseTestItem(t, s, "tungus_vodka", 1, 0)
@@ -239,6 +242,7 @@ func TestDrinkUseReplayAfterExhaustionAndRestart(t *testing.T) {
 }
 
 func TestDrinkUseDifferentCallsRefreshSameCategory(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	row := drinkUseTestItem(t, s, "tungus_vodka", 3, 0)
 	ctx := drinkUseTestCtx(t, s, 20, row.GUID, 0)
@@ -267,6 +271,7 @@ func TestDrinkUseDifferentCallsRefreshSameCategory(t *testing.T) {
 }
 
 func TestDrinkUseClosedSessionCannotConsumeOrRestartClock(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	row := drinkUseTestItem(t, s, "tungus_vodka", 3, 0)
 	first := drinkUseTestCtx(t, s, 25, row.GUID, 0)
@@ -296,6 +301,7 @@ func TestDrinkUseClosedSessionCannotConsumeOrRestartClock(t *testing.T) {
 }
 
 func TestDrinkUseRollsBackConsumptionEffectAndReceipt(t *testing.T) {
+	t.Parallel()
 	for _, stage := range []string{"effect", "receipt"} {
 		for _, qty := range []int64{1, 2} {
 			t.Run(fmt.Sprintf("%s/%d", stage, qty), func(t *testing.T) {
@@ -323,6 +329,7 @@ func TestDrinkUseRollsBackConsumptionEffectAndReceipt(t *testing.T) {
 }
 
 func TestDrinkUseLeavesOtherItemsAndMoveRouteUnchanged(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	// 面粉是烹饪材料，不在消耗品恢复白名单内，必须维持旧落回行为。
 	flour := drinkUseTestItem(t, s, "ff_wheat_flour", 4, 0)
@@ -355,6 +362,7 @@ func TestDrinkUseLeavesOtherItemsAndMoveRouteUnchanged(t *testing.T) {
 }
 
 func TestDrinkUseReceiptCleanup(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	if _, err := s.DB.SQL.Exec(`
 		INSERT INTO kv(k,v) VALUES
@@ -373,6 +381,7 @@ func TestDrinkUseReceiptCleanup(t *testing.T) {
 // TestConsumableRestoreClassification 消耗品恢复分类：三类热饮各归各位，
 // 食品进 food；烹饪材料、酒类（走经验规则）和未知物品不进白名单。
 func TestConsumableRestoreClassification(t *testing.T) {
+	t.Parallel()
 	for item, want := range map[string]string{
 		"big_coffee": "coffee", "thermos_coffee": "coffee", "brand_coffe": "coffee",
 		"ab_tea_can": "tea", "thermos_tea": "tea",
@@ -394,6 +403,7 @@ func TestConsumableRestoreClassification(t *testing.T) {
 // TestConsumableUseRestoresCondition 食品使用：扣 1 份、饱食度恢复、
 // 精力/舒适度不动、使用后补推 2/2（变更推送 + 2/2 共两个回调）。
 func TestConsumableUseRestoresCondition(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	ctx0 := t.Context()
 	const uid = int64(1000001)
@@ -427,6 +437,7 @@ func TestConsumableUseRestoresCondition(t *testing.T) {
 
 // TestDrinkRestoreCategories 三类热饮各回各条，互不串扰。
 func TestDrinkRestoreCategories(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	ctx0 := t.Context()
 	const uid = int64(1000001)
@@ -490,6 +501,7 @@ func TestDrinkRestoreCategories(t *testing.T) {
 
 // TestConsumableUseGateOffFallsThrough 总开关关闭：食品维持旧行为（不扣不恢复）。
 func TestConsumableUseGateOffFallsThrough(t *testing.T) {
+	t.Parallel()
 	s := newDrinkUseTestServer(t)
 	if _, err := s.DB.SQL.Exec(`INSERT INTO tunables(key,value) VALUES('player_condition_enabled','0')`); err != nil {
 		t.Fatal(err)

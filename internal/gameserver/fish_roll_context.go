@@ -33,6 +33,7 @@ type fishRollContext struct {
 	skill      fishingSkillBonus
 	spotEnv    fishSpotEnvironment
 	runtime    *fishRollRuntime
+	hook       gearPhysicsSpec
 }
 
 type fishRollRuntime struct {
@@ -47,6 +48,8 @@ type fishRollRuntime struct {
 	zoneKnown  bool
 	spotPref   map[string]float64
 	spotData   bool
+	// sonarSystemID 是海图声呐档案键（如 loc12_215）；内陆为空。
+	sonarSystemID string
 }
 
 func rollContext(contexts []fishRollContext) fishRollContext {

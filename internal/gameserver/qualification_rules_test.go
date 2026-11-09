@@ -1060,7 +1060,7 @@ func TestQualificationIncrementalDelivery(t *testing.T) {
 	}
 	counterIDs := func(states map[int64]store.QualificationState) map[uint32]bool {
 		t.Helper()
-		body, _ := proto.EncodeValue(build5003FromStates(states), wiregen.Table())
+		body, _ := proto.EncodeValue(build5003FromStates(states, build5012([]uint32{0}, seasonEndFiletime(0))), wiregen.Table())
 		root, _, err := proto.DecodeValue(body, 0, wiregen.Table())
 		if err != nil {
 			t.Fatal(err)

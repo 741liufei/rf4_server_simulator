@@ -8,6 +8,7 @@ import (
 )
 
 func TestShortcutInvalidRequestsReturnFailure(t *testing.T) {
+	t.Parallel()
 	srv, db := newDetachTestServer(t)
 	for _, tc := range []struct {
 		name    string

@@ -72,6 +72,7 @@ func decodeWrappedBytes(t *testing.T, v *proto.Value) *proto.Value {
 }
 
 func TestAchievementsAndFishTrophiesAreDynamic(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 42)
 	registerAchievementHandlers(env.srv.dispatch)
 	ctx := context.Background()
@@ -142,6 +143,7 @@ func TestAchievementsAndFishTrophiesAreDynamic(t *testing.T) {
 }
 
 func TestSocialHandlersUseRequestedUIDAndWater(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 100)
 	registerSocialHandlers(env.srv.dispatch)
 	ctx := context.Background()
@@ -166,6 +168,21 @@ func TestSocialHandlersUseRequestedUIDAndWater(t *testing.T) {
 	if card.Class != "dgbmlekfpbg" || *card.Fields[0].Num != 200 ||
 		card.Fields[1].Str == nil || *card.Fields[1].Str != "target-player" || *card.Fields[4].Num != 37 {
 		t.Fatalf("24/19 card=%+v", card)
+	}
+	// 24/19.f5 与 307.f16 同字段：按稀有鱼种去重，而不是按稀有渔获条数。
+	if err := env.db.CatchLogInsert(ctx, 200, "level_a", 1, "rare_a", "稀有 A", 900, 0.3, "keep", "worm", 3, 10, 20, "level_a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.db.CatchLogInsert(ctx, 200, "level_a", 1, "rare_a", "稀有 A", 950, 0.31, "keep", "worm", 3, 10, 20, "level_a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := env.db.CatchLogInsert(ctx, 200, "level_a", 1, "rare_b", "稀有 B", 1200, 0.35, "release", "worm", 4, 10, 20, "level_a"); err != nil {
+		t.Fatal(err)
+	}
+	v = env.invoke(t, 24, 19, proto.Args524(proto.U32(200)))
+	card = decodeWrappedBytes(t, v)
+	if got := u32Of(card.Fields[5].Num); got != 2 {
+		t.Fatalf("24/19.f5 should count 2 rare species, got %d", got)
 	}
 
 	if err := env.db.CatchLogInsert(ctx, 100, "level_a", 1, "c.roach", "蟑螂", 400, 0.2, "keep", "worm", 1, 5, 10, "level_a"); err != nil {
@@ -211,6 +228,7 @@ func mustHex(t *testing.T, h string) []byte {
 }
 
 func TestCompetitionHandlerLifecycleAndResults(t *testing.T) {
+	t.Parallel()
 	env := newDLineTestEnv(t, 1)
 	registerCompetitionHandlers(env.srv.dispatch)
 	ctx := context.Background()

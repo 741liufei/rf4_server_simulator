@@ -95,6 +95,12 @@ test('fishing rule switches save independently, reload and fit supported sizes a
     const state=values[rule.key]==='1'?'0':'1';await page.locator('#'+rule.prefix+'Switch').click();await page.waitForFunction(({prefix,state})=>{const e=document.getElementById(prefix+'Switch');return !e.disabled&&e.checked===(state==='1');},{prefix:rule.prefix,state});assert.deepEqual(values,{...before,[rule.key]:state});
    }
    failRead=true;await page.reload({waitUntil:'networkidle'});for(const rule of rules)assert.equal(await page.locator('#'+rule.prefix+'Switch').isDisabled(),true);assert.match(await page.locator('#rulesStatus').textContent(),/读取失败/);failRead=false;
+   await page.goto(`http://127.0.0.1:${server.address().port}/admin/#params`,{waitUntil:'networkidle'});
+   await page.locator('#tun_event_newyear_enabled').waitFor();
+   assert.match(await page.locator('#tun_event_newyear_enabled').textContent(),/新年任务：开/);
+   assert.match(await page.locator('#tun_event_anniversary_enabled').textContent(),/周年活动：关/);
+   assert.equal(values.event_newyear_enabled,undefined,'reading the default event switch must not save a value');
+   assert.equal(values.event_anniversary_enabled,undefined,'reading the default event switch must not save a value');
    assert.deepEqual(errors,[]);await context.close();
   }
   console.log(JSON.stringify({renderedCases:metrics.length,measurements:metrics,scrollAndActionChecks:buttonMetrics.length,buttons:rules.map(rule=>{const rows=buttonMetrics.filter(x=>x.prefix===rule.prefix);return{prefix:rule.prefix,minWidth:Math.min(...rows.map(x=>x.width)),maxWidth:Math.max(...rows.map(x=>x.width)),minHeight:Math.min(...rows.map(x=>x.height)),maxHeight:Math.max(...rows.map(x=>x.height)),fonts:[...new Set(rows.map(x=>x.font))]};})}));

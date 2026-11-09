@@ -44,6 +44,7 @@ func baitTestRod(t *testing.T, s *Server) string {
 }
 
 func TestBaitConsumptionReserveReplayEmptyAndRestart(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
 	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
@@ -113,6 +114,7 @@ func TestBaitConsumptionReserveReplayEmptyAndRestart(t *testing.T) {
 }
 
 func TestBaitConsumptionCombinationAndRollback(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
 	_, a := baitTestMount(t, s, rod, "worm_01", 1, 350)
@@ -155,6 +157,7 @@ func TestBaitConsumptionCombinationAndRollback(t *testing.T) {
 }
 
 func TestBaitConsumptionReusableAndAllStaticTypes(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rows, err := db.SQL.Query(`SELECT numeric_id,item_id,category,attrs_json FROM item_def WHERE category IN (17,27)`)
 	if err != nil {
@@ -200,6 +203,7 @@ func TestBaitConsumptionReusableAndAllStaticTypes(t *testing.T) {
 }
 
 func TestBaitConsumptionCastSuppliesAndForeignRig(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
 	_, food := baitTestMount(t, s, rod, "worm_01", 1, 350)
@@ -233,6 +237,7 @@ func TestBaitConsumptionCastSuppliesAndForeignRig(t *testing.T) {
 }
 
 func TestBaitConsumptionLastReservedUnitReturnsAndZeroIsEmpty(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
 	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
@@ -268,6 +273,7 @@ func TestBaitConsumptionLastReservedUnitReturnsAndZeroIsEmpty(t *testing.T) {
 }
 
 func TestBaitConsumptionThroughBiteAndReplay(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	rod := baitTestRod(t, s)
 	// 补饵以钓组仍有钩为前提；无钩钓组的补饵请求按无效处理。
@@ -340,6 +346,7 @@ func TestBaitConsumptionThroughBiteAndReplay(t *testing.T) {
 }
 
 func TestMarineBaitConsumptionReloadsAllSlotsInOrder(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	const uid int64 = 1000001
@@ -380,6 +387,7 @@ func TestMarineBaitConsumptionReloadsAllSlotsInOrder(t *testing.T) {
 // TestMountBaitRefreshesSourceStackForClient 锁定：计件饵挂载拆出子实例后，
 // 来源背包栈的新数量必须能刷新到客户端（回包后再发一次移除+重加）。
 func TestMountBaitRefreshesSourceStackForClient(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -411,6 +419,7 @@ func TestMountBaitRefreshesSourceStackForClient(t *testing.T) {
 // TestDetachBaitRefreshesSourceStackForClient 锁定：拆下拆分子实例把数量退回来源堆后，
 // 必须在回包后先移除来源栈再重新加入，否则客户端背包数量不会 +1。
 func TestDetachBaitRefreshesSourceStackForClient(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -438,6 +447,7 @@ func TestDetachBaitRefreshesSourceStackForClient(t *testing.T) {
 // TestBaitReloadRefreshesSourceStackForClient 锁定：自动补饵后必须把来源栈同时放进
 // 移除段，客户端才会丢弃本地旧栈并使用新数量；只推更新段时背包计数不会刷新。
 func TestBaitReloadRefreshesSourceStackForClient(t *testing.T) {
+	t.Parallel()
 	s, _ := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -466,6 +476,7 @@ func TestBaitReloadRefreshesSourceStackForClient(t *testing.T) {
 // 再往没有钩的钓组上挂饵（线上事故：断线丢掉钩和浮漂，14/4 仍补挂一份苍蝇，
 // 玩家看到钓组“损坏后鱼饵还在”）。
 func TestBaitReloadSkipsWhenSelectedHookIsGone(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -501,6 +512,7 @@ func TestBaitReloadSkipsWhenSelectedHookIsGone(t *testing.T) {
 
 // 旧格式 rebait 记录（直接存 item_id，没有 hook 字段）在钩离组后同样不能补饵。
 func TestBaitReloadSkipsLegacyRebaitWhenHookIsGone(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -533,6 +545,7 @@ func TestBaitReloadSkipsLegacyRebaitWhenHookIsGone(t *testing.T) {
 
 // 单钩钓组的旧格式记录可以推断出唯一钩，补饵后要补写 bait_hook 映射。
 func TestBaitReloadInfersLegacyRebaitHookOnSingleHookRig(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)
@@ -568,6 +581,7 @@ func TestBaitReloadInfersLegacyRebaitHookOnSingleHookRig(t *testing.T) {
 
 // 多钩钓组的旧格式记录无法确定挂哪只钩，按无法安全补饵处理。
 func TestBaitReloadSkipsLegacyRebaitOnMultiHookRig(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod, err := s.CreateItem(ctx, 1000001, "boatr_10222_SBH80_100", "backpack", 1)
@@ -616,6 +630,7 @@ func rodSettingCountForBait(t *testing.T, db *store.DB, rod, pattern string) int
 // 立即补挂同种库存。若把补饵拖到下一次 14/1/14/2，客户端会停在空钩状态，玩家
 // 必须先手动换饵才能抛竿（手杆上鱼一条后鱼饵消失）。
 func TestBaitRefillsWhenFishIsLanded(t *testing.T) {
+	t.Parallel()
 	s, db := newRigTestServer(t)
 	ctx := t.Context()
 	rod := baitTestRod(t, s)

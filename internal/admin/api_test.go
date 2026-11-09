@@ -184,3 +184,108 @@ func TestAdminAPI(t *testing.T) {
 	default:
 	}
 }
+
+// 两个限时活动开关互斥：开启任一个会自动关闭另一个，普通参数与 0/1 校验不受影响。
+func TestEventSwitchesMutuallyExclusive(t *testing.T) {
+	db := testDB(t)
+	defer db.Close()
+	_ = db.EnsureAdmin(context.Background(), "admin", "admin123")
+	srv := NewServer(config.Admin{HTTPAddr: "127.0.0.1:0", JWTSecret: "test"}, db, logging.Discard(), WebFS())
+	if _, err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	base := "http://" + srv.Addr()
+	client := &http.Client{Timeout: 5 * time.Second}
+	post := func(path, token, body string) int {
+		r, _ := http.NewRequest("POST", base+path, strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := client.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	r, _ := http.NewRequest("POST", base+"/api/login", strings.NewReader(`{"username":"admin","password":"admin123"}`))
+	r.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lr struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&lr)
+	_ = resp.Body.Close()
+	token := lr.Token
+
+	set := func(key, value string) {
+		body := `{"key":"` + key + `","value":"` + value + `"}`
+		if code := post("/api/tunables", token, body); code != 200 {
+			t.Fatalf("设置 %s=%s 返回 %d", key, value, code)
+		}
+	}
+	get := func(key string) string {
+		v, _, _ := db.TunableGet(context.Background(), key)
+		return v
+	}
+
+	set("event_anniversary_enabled", "1")
+	set("event_newyear_enabled", "1")
+	if got := get("event_newyear_enabled"); got != "1" {
+		t.Fatalf("新年开关应为 1，实得 %q", got)
+	}
+	if got := get("event_anniversary_enabled"); got != "0" {
+		t.Fatalf("开启新年后周年应自动关闭，实得 %q", got)
+	}
+
+	set("event_anniversary_enabled", "1")
+	if got := get("event_anniversary_enabled"); got != "1" {
+		t.Fatalf("周年开关应为 1，实得 %q", got)
+	}
+	if got := get("event_newyear_enabled"); got != "0" {
+		t.Fatalf("开启周年后新年应自动关闭，实得 %q", got)
+	}
+
+	// 关闭自己不应影响另一个开关
+	set("event_anniversary_enabled", "0")
+	set("event_newyear_enabled", "1")
+	set("event_anniversary_enabled", "0")
+	if got := get("event_newyear_enabled"); got != "1" {
+		t.Fatalf("关闭周年不应动新年开关，实得 %q", got)
+	}
+
+	// 普通玩法开关不受互斥影响，0/1 校验仍生效
+	set("happy_hour_enabled", "1")
+	if got := get("happy_hour_enabled"); got != "1" {
+		t.Fatalf("普通开关应为 1，实得 %q", got)
+	}
+	if code := post("/api/tunables", token, `{"key":"event_newyear_enabled","value":"7"}`); code != 400 {
+		t.Fatalf("活动开关非法值应 400，实得 %d", code)
+	}
+	if code := post("/api/tunables", token, `{"key":"event_branches","value":"8,21"}`); code != 400 {
+		t.Fatalf("非法分支配置应 400，实得 %d", code)
+	}
+	if code := post("/api/tunables", token, `{"key":"event_branches","value":"17,18"}`); code != 200 {
+		t.Fatalf("合法分支配置应 200，实得 %d", code)
+	}
+}
+
+// 活动分支配置只接受 9~20 的逗号分隔整数，空串表示不下发。
+func TestValidateEventBranches(t *testing.T) {
+	for _, v := range []string{"", "  ", "9", "17,18", " 19 , 20 ",
+		"9,10,11,12,13,14,15,16,17,18,19,20"} {
+		if err := validateEventBranches(v); err != nil {
+			t.Fatalf("%q 应合法: %v", v, err)
+		}
+	}
+	for _, v := range []string{"8", "21", "abc", "17,abc", "17,,18", "9;10", "-1"} {
+		if err := validateEventBranches(v); err == nil {
+			t.Fatalf("%q 应被拒绝", v)
+		}
+	}
+}
