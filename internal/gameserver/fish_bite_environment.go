@@ -70,7 +70,11 @@ func (s *Server) prepareFishRollRuntime(ctx context.Context, c *fishRollContext,
 	if c.runtime == nil {
 		c.runtime = &fishRollRuntime{}
 	}
-	if !c.spotEnv.Known {
+	if c.query != nil && c.query.regional {
+		// A regional estimate deliberately excludes point-specific depth,
+		// substrate, structure and current. Production rolls keep them all.
+		c.spotEnv = fishSpotEnvironment{}
+	} else if !c.spotEnv.Known {
 		c.spotEnv = fishSpotEnvironmentFor(c)
 	}
 	if !c.runtime.levelChecked {

@@ -165,6 +165,9 @@ func hMailSendMessage(ctx *Ctx) ([]byte, bool) {
 	if len(texts) > 0 {
 		text = texts[0]
 	}
+	if toUID == fishQueryContactUID {
+		return srv.receiveFishQuery(ctx, text)
+	}
 	if toUID > 0 && toUID != ctx.Sess.Userid {
 		cctx := ctx.Sess.pushCtx()
 		tx, err := beginEconomyTx(cctx, srv.DB)
@@ -345,7 +348,7 @@ func hMailSendItem(ctx *Ctx) ([]byte, bool) {
 	if len(ints) > 1 {
 		count = int64(ints[1])
 	}
-	if toUID <= 0 || toUID == uid || guids[0] == "" {
+	if toUID <= 0 || toUID == uid || toUID == fishQueryContactUID || guids[0] == "" {
 		body, _ := proto.EncodeValue(out, ctx.Sess.Table())
 		return body, true
 	}

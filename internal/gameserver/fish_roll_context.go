@@ -34,6 +34,7 @@ type fishRollContext struct {
 	spotEnv    fishSpotEnvironment
 	runtime    *fishRollRuntime
 	hook       gearPhysicsSpec
+	query      *fishQueryCapture
 }
 
 type fishRollRuntime struct {

@@ -10,6 +10,8 @@ import (
 )
 
 func registerSocialHandlers(d *Dispatch) {
+	d.Register(24, 4, hSocialMembers)
+	d.RegisterResponseContract(24, 4, ResponseContractRule{Kind: proto.KindU32Arr})
 	d.Register(24, 18, hSocialUserProfile)
 	d.Register(24, 19, hSocialUserCard)
 	d.Register(24, 21, hSocialAbsoluteRecords)
@@ -69,6 +71,13 @@ func hSocialUserProfile(ctx *Ctx) ([]byte, bool) {
 
 func hSocialUserCard(ctx *Ctx) ([]byte, bool) {
 	uid := firstRequestUID(ctx)
+	if uid == fishQueryContactUID {
+		outer, err := bytesWrappedObject(fishQueryContactCard(), ctx.Sess.Table())
+		if err != nil {
+			return nil, false
+		}
+		return encodeSocialTree(ctx, outer)
+	}
 	var p *store.Profile
 	names := ""
 	level := int64(1)
