@@ -97,6 +97,8 @@ func NewServer(cfg config.Admin, db *store.DB, log logger, webFS fs.FS) *Server 
 	mux.HandleFunc("POST /api/fish/config", auth(s.handleFishConfigSave))
 	mux.HandleFunc("POST /api/fish/config/reset", auth(s.handleFishConfigReset))
 	mux.HandleFunc("GET /api/fish/pool", auth(s.handleFishPool))
+	mux.HandleFunc("GET /api/hooks/profiles", auth(s.handleHookProfiles))
+	mux.HandleFunc("POST /api/hooks/profiles", auth(s.handleHookProfileSave))
 	mux.HandleFunc("GET /api/bait/prefs", auth(s.handleBaitPrefs))
 	mux.HandleFunc("POST /api/mail/send", auth(s.handleMailSend))
 	mux.HandleFunc("GET /api/audit", auth(s.handleAudit))
