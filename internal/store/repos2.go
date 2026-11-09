@@ -195,6 +195,30 @@ func (d *DB) KeepnetInsert(ctx context.Context, e *KeepnetEntry) error {
 	return err
 }
 
+// KeepnetListTx KeepnetList 的事务版：制作扣料需要在同一事务内
+// "列出-匹配-消费"鱼护条目时使用（鱼护渔获当制作材料）。
+func (d *DB) KeepnetListTx(ctx context.Context, tx *sql.Tx, uid int64) ([]*KeepnetEntry, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT echo_guid, uid, COALESCE(species,''), COALESCE(name_zh,''), weight_g, length_m,
+		       cat, COALESCE(keep_loc,''), COALESCE(keep_spot,0), COALESCE(keep_bait,''),
+		       COALESCE(keep_level,''), COALESCE(ts,0)
+		FROM keepnet_items WHERE uid=? ORDER BY ts`, uid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*KeepnetEntry
+	for rows.Next() {
+		e := &KeepnetEntry{}
+		if err := rows.Scan(&e.EchoGUID, &e.UID, &e.Species, &e.NameZh, &e.WeightG, &e.LengthM,
+			&e.Cat, &e.KeepLoc, &e.KeepSpot, &e.KeepBait, &e.KeepLevel, &e.TS); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // KeepnetGet 按 echo_guid 取。
 func (d *DB) KeepnetGet(ctx context.Context, uid int64, echoGUID string) (*KeepnetEntry, error) {
 	row := d.SQL.QueryRowContext(ctx, `
