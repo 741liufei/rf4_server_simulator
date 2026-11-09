@@ -8,6 +8,7 @@ package gameserver
 import (
 	"context"
 	"testing"
+	"time"
 
 	"rf4server/internal/logging"
 	"rf4server/internal/proto"
@@ -47,7 +48,7 @@ func TestReelSlipWearsFrictionWasherOut(t *testing.T) {
 		t.Fatalf("轮子应有摩擦片制动力: %+v err=%v", initial, perr)
 	}
 
-	// 泄力打滑磨的是摩擦片（基准 reelSlipWear=0.5%），本体耐久作为零件综合一起降。
+	// 泄力打滑磨的是摩擦片（基准 reelSlipWear=0.01%），本体耐久作为零件综合一起降。
 	// 预置到只差两次，仍走真实的连续磨损链。
 	seedFrictionWasherNearWorn(t, srv, ctx, reel.GUID)
 	first, derr := srv.damageReelSlip(ctx, uid, rod.GUID, reel.GUID)
@@ -127,5 +128,94 @@ func TestBrokenReelBlocksCastRig(t *testing.T) {
 	// 别人的竿不认。
 	if got := srv.rigBrokenReelGUID(ctx, int64(1000002), rod.GUID); got != "" {
 		t.Fatalf("非本人竿不应判为损坏，实得 %q", got)
+	}
+}
+
+func TestBrokenReelBlocksBiteScheduling(t *testing.T) {
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatalf("造竿失败: %v", err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "bclp_5004", "backpack", 1)
+	if err != nil {
+		t.Fatalf("造轮失败: %v", err)
+	}
+	mountReelOnRod(t, srv, rod.GUID, reel.GUID)
+	if err := db.SetItemDurability(ctx, reel.GUID, 0); err != nil {
+		t.Fatalf("写耐久失败: %v", err)
+	}
+
+	sess := newProbeSess(srv)
+	sess.Userid = uid
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.GearGuid = rod.GUID
+	st.mu.Unlock()
+	if srv.scheduleBiteState(sess, st, false, true) {
+		t.Fatal("损坏渔轮不应继续排咬钩")
+	}
+	st.mu.Lock()
+	armed := st.biteTimer != nil
+	st.mu.Unlock()
+	if armed {
+		t.Fatal("损坏渔轮不应留下咬钩定时器")
+	}
+}
+
+func TestBrokenReelBlocksPendingBitePush(t *testing.T) {
+	t.Parallel()
+	srv, db := newStaticRigTestServer(t)
+	ctx := context.Background()
+	const uid = int64(1000001)
+
+	rod, err := srv.CreateItem(ctx, uid, "feeder_10125_FD360", "backpack", 1)
+	if err != nil {
+		t.Fatalf("造竿失败: %v", err)
+	}
+	reel, err := srv.CreateItem(ctx, uid, "bclp_5004", "backpack", 1)
+	if err != nil {
+		t.Fatalf("造轮失败: %v", err)
+	}
+	mountReelOnRod(t, srv, rod.GUID, reel.GUID)
+	if err := db.SetItemDurability(ctx, reel.GUID, 0); err != nil {
+		t.Fatalf("写耐久失败: %v", err)
+	}
+
+	sess, peer := newTunnelProbe(t, srv)
+	sess.Userid = uid
+	srv.mu.Lock()
+	srv.sessions[sess.ID] = sess
+	srv.mu.Unlock()
+	t.Cleanup(func() {
+		srv.mu.Lock()
+		delete(srv.sessions, sess.ID)
+		srv.mu.Unlock()
+	})
+
+	fish := &RolledFish{
+		FishGUID: "11111111111111111111111111111111",
+		Species:  "ruffe",
+		WeightG:  100,
+	}
+	st := srv.stateFor(uid)
+	st.mu.Lock()
+	st.GearGuid = rod.GUID
+	st.CastActive = true
+	st.Pending = fish
+	st.castGeneration = 1
+	generation := st.castGeneration
+	st.mu.Unlock()
+
+	pushed := receiveTestPush(peer, 14, 14)
+	srv.pushPendingBite(sess, st, fish, rod.GUID, generation)
+	select {
+	case env := <-pushed:
+		t.Fatalf("损坏渔轮不应再推送 14/14，实得 %+v", env)
+	case <-time.After(300 * time.Millisecond):
 	}
 }
